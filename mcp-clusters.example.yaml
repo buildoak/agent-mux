@@ -1,0 +1,50 @@
+# agent-mux MCP Clusters Configuration
+#
+# Define named groups of MCP servers that can be enabled via --mcp-cluster.
+# Place this file at:
+#   ./mcp-clusters.yaml           (project-local, highest priority)
+#   ~/.config/agent-mux/mcp-clusters.yaml  (user-global fallback)
+#
+# Usage:
+#   agent-mux --engine codex --mcp-cluster browser "Navigate to example.com"
+#   agent-mux --engine claude --mcp-cluster knowledge "Search KB for auth docs"
+#   agent-mux --engine codex --mcp-cluster all "Full access task"
+
+clusters:
+  # Browser automation cluster
+  browser:
+    description: "Browser automation — Playwright + visual verification"
+    servers:
+      agent-browser:
+        command: node
+        args:
+          - /path/to/agent-browser-mcp/server.mjs
+      spectacles:
+        command: node
+        args:
+          - /path/to/spectacles/dist/server.js
+        cwd: /path/to/spectacles
+
+  # Knowledge base cluster
+  knowledge:
+    description: "Knowledge base — docs search, chat history, tech mentions"
+    servers:
+      docs-search:
+        command: python
+        args:
+          - /path/to/docs-mcp/server.py
+      chat-history:
+        command: python
+        args:
+          - /path/to/chats-mcp/server.py
+
+  # Web research cluster
+  research:
+    description: "Web search — Exa semantic search"
+    servers:
+      exa:
+        command: bunx
+        args:
+          - exa-mcp-server
+        env:
+          EXA_API_KEY: "your-api-key-here"

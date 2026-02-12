@@ -1,0 +1,8 @@
+node_modules/
+bun.lock
+dist/
+*.tgz
+.DS_Store
+
+# MCP cluster config may contain API keys and secrets
+mcp-clusters.yaml

@@ -1,0 +1,39 @@
+{
+  "name": "agent-mux",
+  "version": "2.0.0",
+  "description": "One CLI to spawn Codex, Claude Code, or OpenCode agents. Unified output. Proper timeouts. Activity tracking.",
+  "type": "module",
+  "bin": {
+    "agent-mux": "./src/agent.ts"
+  },
+  "scripts": {
+    "agent": "bun run src/agent.ts"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "^0.98.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "@opencode-ai/sdk": "^1.1.61",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9"
+  },
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "keywords": [
+    "codex",
+    "claude",
+    "opencode",
+    "ai-agent",
+    "cli",
+    "subagent",
+    "mux",
+    "multiplexer"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/buildoak/agent-mux.git"
+  }
+}
