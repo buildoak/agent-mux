@@ -303,7 +303,7 @@ describe("CodexEngine — config transformation", () => {
 });
 
 describe("CodexEngine — MCP server override logic", () => {
-  test("disables all known servers by default", async () => {
+  test("no MCP override when no clusters requested", async () => {
     mockEvents = [
       {
         type: "item.completed",
@@ -315,11 +315,10 @@ describe("CodexEngine — MCP server override logic", () => {
     const engine = new CodexEngine();
     await engine.run(makeConfig(), makeCallbacks());
 
-    const mcpConfig = (captured.codexOptions as Record<string, Record<string, unknown>>)?.config?.mcp_servers as Record<string, unknown>;
-    expect(mcpConfig).toBeDefined();
-    // Known servers from mock: server-a, server-b — both should be disabled
-    expect(mcpConfig["server-a"]).toEqual({ enabled: false });
-    expect(mcpConfig["server-b"]).toEqual({ enabled: false });
+    // When no clusters are requested, config should be undefined
+    // to let the user's config.toml load as-is
+    const codexConfig = (captured.codexOptions as Record<string, unknown>)?.config;
+    expect(codexConfig).toBeUndefined();
   });
 
   test("enables requested MCP servers from clusters", async () => {
@@ -345,8 +344,8 @@ describe("CodexEngine — MCP server override logic", () => {
     const mcpConfig = (captured.codexOptions as Record<string, Record<string, unknown>>)?.config?.mcp_servers as Record<string, Record<string, unknown>>;
     expect(mcpConfig["server-a"].enabled).toBe(true);
     expect(mcpConfig["server-a"].command).toBe("npx");
-    // server-b should still be disabled
-    expect(mcpConfig["server-b"]).toEqual({ enabled: false });
+    // server-b should be disabled with dummy transport to satisfy Codex SDK validation
+    expect(mcpConfig["server-b"]).toEqual({ enabled: false, command: "true", args: [] });
   });
 });
 

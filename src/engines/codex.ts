@@ -68,24 +68,33 @@ export class CodexEngine implements EngineAdapter {
     const addDirs = (config.engineOptions.addDirs as string[]) || [];
 
     // Build MCP config overrides
-    // Strategy: disable ALL known servers from config, then enable only requested clusters
+    // Strategy: when clusters are requested, disable non-requested cluster servers
+    // and enable only the requested ones. When no clusters are requested, don't
+    // inject any MCP overrides — let the user's config.toml load as-is.
     type CodexConfig = NonNullable<CodexOptions["config"]>;
     const mcpOverride: CodexConfig = {};
+    const hasClusters = Object.keys(config.mcpServers).length > 0;
 
-    // First: disable all known MCP servers (overrides config.toml auto-loading)
-    for (const name of getAllServerNames()) {
-      mcpOverride[name] = { enabled: false };
-    }
+    if (hasClusters) {
+      const enabledNames = new Set(Object.keys(config.mcpServers));
 
-    // Then: enable only servers from requested clusters
-    if (Object.keys(config.mcpServers).length > 0) {
+      // Disable cluster-defined servers that are NOT in the requested set.
+      // We must include a dummy command so Codex SDK validation doesn't fail
+      // on servers that only exist in mcp-clusters.yaml (not in config.toml).
+      for (const name of getAllServerNames()) {
+        if (!enabledNames.has(name)) {
+          mcpOverride[name] = { enabled: false, command: "true", args: [] };
+        }
+      }
+
+      // Enable the requested cluster servers with full config
       for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
         mcpOverride[name] = { enabled: true, ...serverConfig } as CodexConfig;
       }
     }
 
     const codexOptions: CodexOptions = {
-      config: { mcp_servers: mcpOverride },
+      config: hasClusters ? { mcp_servers: mcpOverride } : undefined,
     };
 
     const codex = new Codex(codexOptions);
