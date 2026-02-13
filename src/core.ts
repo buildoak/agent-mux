@@ -11,6 +11,9 @@
  */
 
 import { parseArgs } from "node:util";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveClusters, listClusters } from "./mcp-clusters.ts";
 import type { McpServerConfig } from "./mcp-clusters.ts";
 import type {
@@ -62,6 +65,7 @@ Common Options:
       --mcp-cluster <name>   Enable MCP cluster (repeatable)
   -b, --browser              Sugar for --mcp-cluster browser
   -f, --full                 Full access mode
+  -V, --version              Show version
   -h, --help                 Show this help
 
 MCP Clusters:
@@ -103,6 +107,7 @@ OpenCode Model Presets:
 type ParseResult =
   | { kind: "ok"; config: ParsedConfig }
   | { kind: "help"; engine?: EngineName }
+  | { kind: "version" }
   | { kind: "invalid"; error: string; engine?: EngineName };
 
 export function parseCliArgs(): ParseResult {
@@ -121,6 +126,7 @@ export function parseCliArgs(): ParseResult {
         browser: { type: "boolean", short: "b" },
         full: { type: "boolean", short: "f" },
         help: { type: "boolean", short: "h" },
+        version: { type: "boolean", short: "V" },
         // Codex-specific
         sandbox: { type: "string" },
         reasoning: { type: "string", short: "r" },
@@ -136,6 +142,11 @@ export function parseCliArgs(): ParseResult {
         agent: { type: "string" },
       },
     });
+
+    // --version: handle before any engine-specific parsing
+    if (values.version) {
+      return { kind: "version" };
+    }
 
     const engineStr = values.engine as string | undefined;
 
@@ -345,6 +356,23 @@ class ActivityCollector {
   }
 }
 
+// --- Version ---
+
+let _cachedVersion: string | null = null;
+
+export function getVersion(): string {
+  if (_cachedVersion) return _cachedVersion;
+  try {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = resolve(__dirname, "..", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    _cachedVersion = pkg.version || "unknown";
+  } catch {
+    _cachedVersion = "unknown";
+  }
+  return _cachedVersion!;
+}
+
 // --- Output ---
 
 function writeOutput(result: Output): never {
@@ -352,30 +380,76 @@ function writeOutput(result: Output): never {
   process.exit(result.success ? 0 : 1);
 }
 
+// --- Execute Options ---
+
+export interface ExecuteOptions {
+  /** Filter SDK stderr noise (default: false). Set true in CLI entry path. */
+  filterStderr?: boolean;
+  /** Install SIGINT/SIGTERM shutdown handlers (default: false). Set true in CLI entry path. */
+  handleSignals?: boolean;
+}
+
 // --- Main Execution ---
 
 export async function execute(
   config: ParsedConfig,
-  adapter: EngineAdapter
+  adapter: EngineAdapter,
+  options: ExecuteOptions = {},
 ): Promise<never> {
   const startTime = Date.now();
   const heartbeat = new HeartbeatManager();
   const collector = new ActivityCollector();
 
-  // Suppress SDK stderr noise — but keep heartbeats flowing
-  const originalStderrWrite = process.stderr.write.bind(process.stderr);
-  const stderrFilter = function (this: typeof process.stderr, chunk: unknown, ...rest: unknown[]): boolean {
-    const str = typeof chunk === "string" ? chunk : String(chunk);
-    if (str.startsWith("[heartbeat]")) {
-      return originalStderrWrite(chunk as string, ...(rest as []));
-    }
-    return true; // swallow SDK noise
-  };
-  process.stderr.write = stderrFilter as typeof process.stderr.write;
+  // Optionally suppress SDK stderr noise — only when running as CLI
+  let originalStderrWrite: typeof process.stderr.write | null = null;
+  if (options.filterStderr) {
+    originalStderrWrite = process.stderr.write.bind(process.stderr);
+    const savedWrite = originalStderrWrite;
+    const stderrFilter = function (this: typeof process.stderr, chunk: unknown, ...rest: unknown[]): boolean {
+      const str = typeof chunk === "string" ? chunk : String(chunk);
+      if (str.startsWith("[heartbeat]") || str.startsWith("[agent-mux]")) {
+        return savedWrite(chunk as string, ...(rest as []));
+      }
+      return true; // swallow SDK noise
+    };
+    process.stderr.write = stderrFilter as typeof process.stderr.write;
+  }
 
-  // AbortController for timeout
+  /** Restore stderr if it was patched */
+  const restoreStderr = () => {
+    if (originalStderrWrite) {
+      process.stderr.write = originalStderrWrite as typeof process.stderr.write;
+      originalStderrWrite = null;
+    }
+  };
+
+  // AbortController for timeout and graceful shutdown
   const abortController = new AbortController();
   let didTimeout = false;
+  let didShutdown = false;
+
+  // Graceful shutdown handler — treat SIGINT/SIGTERM as user-initiated timeout
+  const shutdownHandler = () => {
+    if (didShutdown || didTimeout) return; // already aborting
+    didShutdown = true;
+    abortController.abort();
+  };
+
+  if (options.handleSignals) {
+    process.on("SIGINT", shutdownHandler);
+    process.on("SIGTERM", shutdownHandler);
+  }
+
+  /** Clean up all registered handlers and timers */
+  const cleanup = (timeoutId: ReturnType<typeof setTimeout>) => {
+    clearTimeout(timeoutId);
+    heartbeat.stop();
+    restoreStderr();
+    if (options.handleSignals) {
+      process.removeListener("SIGINT", shutdownHandler);
+      process.removeListener("SIGTERM", shutdownHandler);
+    }
+  };
 
   // Prepend time budget to prompt
   const timeAwarePrompt = `You have a time budget of ${config.timeout / 1000} seconds. Prioritize delivering complete output over exploration.\n\n${config.prompt}`;
@@ -413,15 +487,13 @@ export async function execute(
   try {
     const result = await adapter.run(runConfig, callbacks);
 
-    clearTimeout(timeoutId);
-    heartbeat.stop();
-    process.stderr.write = originalStderrWrite as typeof process.stderr.write;
+    cleanup(timeoutId);
 
     const output: Output = {
       success: true,
       engine: config.engine,
       response: result.response,
-      timed_out: didTimeout,
+      timed_out: didTimeout || didShutdown,
       duration_ms: Date.now() - startTime,
       activity: collector.getActivity(heartbeat.getCount()),
       metadata: result.metadata,
@@ -429,22 +501,23 @@ export async function execute(
 
     return writeOutput(output);
   } catch (err) {
-    clearTimeout(timeoutId);
-    heartbeat.stop();
-    process.stderr.write = originalStderrWrite as typeof process.stderr.write;
+    cleanup(timeoutId);
 
-    // Tighter abort detection: didTimeout is authoritative
+    // Abort detection: timeout or shutdown or AbortError
     const isAbort =
       didTimeout ||
+      didShutdown ||
       (err instanceof Error && err.name === "AbortError") ||
       abortController.signal.aborted;
 
     if (isAbort) {
-      // Timeout — return partial results with activity data
+      // Timeout or shutdown — return partial results with activity data
       const output: Output = {
         success: true,
         engine: config.engine,
-        response: "(timed out — partial results may be available in activity log)",
+        response: didShutdown
+          ? "(shutdown requested — partial results may be available in activity log)"
+          : "(timed out — partial results may be available in activity log)",
         timed_out: true,
         duration_ms: Date.now() - startTime,
         activity: collector.getActivity(heartbeat.getCount()),
@@ -466,10 +539,51 @@ export async function execute(
   }
 }
 
+// --- Pre-flight API Key Check ---
+
+const API_KEY_MAP: Record<EngineName, { envVar: string; hardError: boolean; hint: string }> = {
+  codex: {
+    envVar: "OPENAI_API_KEY",
+    hardError: true,
+    hint: "Get one at https://platform.openai.com/api-keys",
+  },
+  claude: {
+    envVar: "ANTHROPIC_API_KEY",
+    hardError: false,
+    hint: "Get one at https://console.anthropic.com/ — or use Claude Code device OAuth (SDK handles auth automatically)",
+  },
+  opencode: {
+    envVar: "OPENROUTER_API_KEY",
+    hardError: false,
+    hint: "Get one at https://openrouter.ai/keys — or configure provider keys directly in OpenCode",
+  },
+};
+
+function checkApiKey(engine: EngineName): { ok: boolean; warning?: string; error?: string } {
+  const spec = API_KEY_MAP[engine];
+  const value = process.env[spec.envVar];
+
+  if (value && value.trim().length > 0) {
+    return { ok: true };
+  }
+
+  const message = `${spec.envVar} is not set. ${spec.hint}`;
+
+  if (spec.hardError) {
+    return { ok: false, error: message };
+  }
+  return { ok: true, warning: message };
+}
+
 // --- Entry Point Helper ---
 
 export function run(getAdapter: (engine: EngineName) => EngineAdapter): void {
   const args = parseCliArgs();
+
+  if (args.kind === "version") {
+    console.log(getVersion());
+    process.exit(0);
+  }
 
   if (args.kind === "help") {
     console.log(buildHelpText(args.engine));
@@ -495,11 +609,38 @@ export function run(getAdapter: (engine: EngineName) => EngineAdapter): void {
     process.exit(1);
   }
 
-  const adapter = getAdapter(args.config.engine);
-  execute(args.config, adapter).catch((err) => {
+  // At this point, only "ok" remains
+  const { config } = args as { kind: "ok"; config: ParsedConfig };
+
+  // Pre-flight: check API key for the selected engine
+  const keyCheck = checkApiKey(config.engine);
+  if (!keyCheck.ok) {
+    const errorOutput: Output = {
+      success: false,
+      engine: config.engine,
+      error: keyCheck.error!,
+      code: "MISSING_API_KEY",
+      duration_ms: 0,
+      activity: {
+        files_changed: [],
+        commands_run: [],
+        files_read: [],
+        mcp_calls: [],
+        heartbeat_count: 0,
+      },
+    };
+    console.log(JSON.stringify(errorOutput, null, 2));
+    process.exit(1);
+  }
+  if (keyCheck.warning) {
+    process.stderr.write(`[agent-mux] warning: ${keyCheck.warning}\n`);
+  }
+
+  const adapter = getAdapter(config.engine);
+  execute(config, adapter, { filterStderr: true, handleSignals: true }).catch((err) => {
     const output: Output = {
       success: false,
-      engine: args.config.engine,
+      engine: config.engine,
       error: err instanceof Error ? err.message : String(err),
       code: "SDK_ERROR",
       duration_ms: 0,

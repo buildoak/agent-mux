@@ -69,7 +69,8 @@ export class CodexEngine implements EngineAdapter {
 
     // Build MCP config overrides
     // Strategy: disable ALL known servers from config, then enable only requested clusters
-    const mcpOverride: Record<string, Record<string, unknown>> = {};
+    type CodexConfig = NonNullable<CodexOptions["config"]>;
+    const mcpOverride: CodexConfig = {};
 
     // First: disable all known MCP servers (overrides config.toml auto-loading)
     for (const name of getAllServerNames()) {
@@ -79,12 +80,12 @@ export class CodexEngine implements EngineAdapter {
     // Then: enable only servers from requested clusters
     if (Object.keys(config.mcpServers).length > 0) {
       for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
-        mcpOverride[name] = { enabled: true, ...serverConfig };
+        mcpOverride[name] = { enabled: true, ...serverConfig } as CodexConfig;
       }
     }
 
     const codexOptions: CodexOptions = {
-      config: { mcp_servers: mcpOverride as Record<string, Record<string, unknown>> },
+      config: { mcp_servers: mcpOverride },
     };
 
     const codex = new Codex(codexOptions);

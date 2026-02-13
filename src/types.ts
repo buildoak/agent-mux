@@ -74,7 +74,7 @@ export interface ErrorOutput {
   success: false;
   engine: EngineName;
   error: string;
-  code: "INVALID_ARGS" | "SDK_ERROR";
+  code: "INVALID_ARGS" | "MISSING_API_KEY" | "SDK_ERROR";
   duration_ms: number;
   activity: Activity;
 }

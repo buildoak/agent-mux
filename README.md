@@ -5,6 +5,20 @@ Unified output. Proper timeouts. Activity tracking.
 
 Runtime: Bun only (`#!/usr/bin/env bun`).
 
+## Prerequisites
+
+**Runtime:** [Bun](https://bun.sh) >= 1.0.0
+
+**API keys** (only the engine you use needs its key):
+
+| Engine | Env Var | Required? | Notes |
+| --- | --- | --- | --- |
+| `codex` | `OPENAI_API_KEY` | Yes | [Get one here](https://platform.openai.com/api-keys) |
+| `claude` | `ANTHROPIC_API_KEY` | Recommended | Claude Code SDK also supports device OAuth — if no key is set, the SDK will prompt for browser-based auth |
+| `opencode` | `OPENROUTER_API_KEY` | Recommended | Or configure provider-specific keys directly in OpenCode |
+
+**MCP clusters** are optional. Only needed if you use `--mcp-cluster` to attach MCP servers at runtime. See [MCP Clusters](#mcp-clusters).
+
 ## Quick Start
 
 ```bash
@@ -34,7 +48,7 @@ Timeouts and long-running task behavior are usually where things break in produc
 ```bash
 git clone https://github.com/buildoak/agent-mux ~/.claude/skills/agent-mux
 cd ~/.claude/skills/agent-mux
-bun install
+./setup.sh
 ```
 
 ### 2) As a standalone CLI
@@ -42,7 +56,7 @@ bun install
 ```bash
 git clone https://github.com/buildoak/agent-mux
 cd agent-mux
-bun install
+./setup.sh
 bun run src/agent.ts --engine codex "Summarize this repo"
 ```
 
@@ -167,7 +181,7 @@ bun run src/agent.ts \
         "success": { "const": false, "description": "Always false for error payloads." },
         "engine": { "enum": ["codex", "claude", "opencode"] },
         "error": { "type": "string", "description": "Human-readable error." },
-        "code": { "enum": ["INVALID_ARGS", "SDK_ERROR"], "description": "Failure class." },
+        "code": { "enum": ["INVALID_ARGS", "MISSING_API_KEY", "SDK_ERROR"], "description": "Failure class." },
         "duration_ms": { "type": "number" },
         "activity": { "$ref": "#/$defs/activity" }
       },
