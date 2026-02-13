@@ -8,6 +8,15 @@
  * for 5-10x token savings on accessibility tree snapshots.
  *
  * Requires: agent-browser CLI installed separately (npm i -g agent-browser).
+ *
+ * Stealth configuration via env vars (set in mcp-clusters.yaml):
+ *   AGENT_BROWSER_SESSION       — Isolated session name (default: "mcp")
+ *   AGENT_BROWSER_HEADED        — "1" to run headed (avoids headless fingerprint)
+ *   AGENT_BROWSER_USER_AGENT    — Custom UA string (overrides HeadlessChrome)
+ *   AGENT_BROWSER_ARGS          — Chromium launch args (comma-separated)
+ *   AGENT_BROWSER_PROFILE       — Persistent browser profile path
+ *   AGENT_BROWSER_STATE         — Storage state JSON file path
+ *   REBROWSER_PATCHES_*         — rebrowser-patches env vars (if package installed)
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -18,15 +27,28 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { spawn } from "child_process";
 
+// --- Session isolation ---
+// Use a dedicated session name so the MCP server's daemon doesn't conflict
+// with manual agent-browser usage (which defaults to "default" session).
+const SESSION = process.env.AGENT_BROWSER_SESSION || "mcp";
+
+// --- Stealth global flags ---
+// Build once at startup from env vars. Prepended to every CLI invocation.
+const GLOBAL_FLAGS = ["--session", SESSION, "--json"];
+if (process.env.AGENT_BROWSER_HEADED === "1") GLOBAL_FLAGS.push("--headed");
+if (process.env.AGENT_BROWSER_USER_AGENT) GLOBAL_FLAGS.push("--user-agent", process.env.AGENT_BROWSER_USER_AGENT);
+if (process.env.AGENT_BROWSER_ARGS) GLOBAL_FLAGS.push("--args", process.env.AGENT_BROWSER_ARGS);
+if (process.env.AGENT_BROWSER_PROFILE) GLOBAL_FLAGS.push("--profile", process.env.AGENT_BROWSER_PROFILE);
+
 // --- CLI executor ---
 
 function exec(args, timeoutMs = 30000) {
   return new Promise((resolve) => {
-    const fullArgs = ["--json", ...args];
+    const fullArgs = [...GLOBAL_FLAGS, ...args];
     let stdout = "";
     let stderr = "";
 
-    const proc = spawn("agent-browser", fullArgs, { shell: true, timeout: timeoutMs });
+    const proc = spawn("agent-browser", fullArgs, { timeout: timeoutMs });
 
     proc.stdout.on("data", (d) => (stdout += d));
     proc.stderr.on("data", (d) => (stderr += d));
@@ -423,7 +445,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// --- Cleanup on shutdown ---
+// Close the browser session when MCP server exits to prevent orphaned daemons
+async function cleanup() {
+  try {
+    await exec(["close"], 5000);
+  } catch {
+    // Best-effort cleanup
+  }
+}
+process.on("SIGINT", cleanup);
+process.on("SIGTERM", cleanup);
+
 // Start
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error("[agent-browser-mcp] Server started (stdio mode, 25 tools)");
+console.error(`[agent-browser-mcp] Server started (stdio mode, 25 tools, session=${SESSION})`);
