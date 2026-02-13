@@ -7,7 +7,9 @@
     "agent-mux": "./src/agent.ts"
   },
   "scripts": {
-    "agent": "bun run src/agent.ts"
+    "agent": "bun run src/agent.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
     "@openai/codex-sdk": "^0.98.0",

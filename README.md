@@ -1,6 +1,9 @@
 # agent-mux
 
-One CLI to spawn Codex, Claude Code, or OpenCode agents.  
+[![CI](https://github.com/buildoak/agent-mux/actions/workflows/ci.yml/badge.svg)](https://github.com/buildoak/agent-mux/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+One CLI to spawn Codex, Claude Code, or OpenCode agents.
 Unified output. Proper timeouts. Activity tracking.
 
 Runtime: Bun only (`#!/usr/bin/env bun`).
