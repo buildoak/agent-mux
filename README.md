@@ -23,8 +23,15 @@ Runtime: Bun only (`#!/usr/bin/env bun`).
 
 ```bash
 git clone https://github.com/buildoak/agent-mux && cd agent-mux
-bun install
+./setup.sh
 bun run src/agent.ts --engine codex "Review src/core.ts for timeout edge cases"
+```
+
+To use the `agent-mux` command from anywhere:
+
+```bash
+cd agent-mux && bun link
+agent-mux --engine codex "Review src/core.ts for timeout edge cases"
 ```
 
 ## Why This Exists
@@ -58,6 +65,13 @@ git clone https://github.com/buildoak/agent-mux
 cd agent-mux
 ./setup.sh
 bun run src/agent.ts --engine codex "Summarize this repo"
+```
+
+Optionally, register the `agent-mux` command globally:
+
+```bash
+bun link
+agent-mux --engine codex "Summarize this repo"
 ```
 
 ## Usage
@@ -226,6 +240,7 @@ Field notes:
 | `--mcp-cluster` |  | cluster name (repeatable) | none | Enables cluster(s) |
 | `--browser` | `-b` | boolean | `false` | Sugar for `--mcp-cluster browser` |
 | `--full` | `-f` | boolean | `false` | Full access mode |
+| `--version` | `-V` | boolean | `false` | Show version |
 | `--help` | `-h` | boolean | `false` | Show help |
 
 Effort defaults:
@@ -296,10 +311,12 @@ clusters:
 Usage:
 
 ```bash
-bun run src/agent.ts --engine codex --mcp-cluster browser "Capture a screenshot of the dashboard"
-bun run src/agent.ts --engine claude --mcp-cluster research "Find docs on OAuth token rotation"
-bun run src/agent.ts --engine opencode --mcp-cluster all "Compare findings from all MCP sources"
+agent-mux --engine codex --mcp-cluster browser "Capture a screenshot of the dashboard"
+agent-mux --engine claude --mcp-cluster research "Find docs on OAuth token rotation"
+agent-mux --engine opencode --mcp-cluster all "Compare findings from all MCP sources"
 ```
+
+> If you haven't run `bun link`, replace `agent-mux` with `bun run src/agent.ts`.
 
 ## Prompting Guide
 
@@ -326,6 +343,63 @@ Full guide: [`SKILL.md`](./SKILL.md)
 - Pick cheaper presets for smoke tests, stronger presets for deep tasks.
 - Use `--agent` when your OpenCode setup defines specialized agents.
 
+## Troubleshooting
+
+**`agent-mux: command not found`**
+
+The CLI isn't on your PATH. Either run `bun link` inside the repo to register the command globally, or invoke directly:
+
+```bash
+bun run /path/to/agent-mux/src/agent.ts --engine codex "your prompt"
+```
+
+**`MISSING_API_KEY` error**
+
+Set the environment variable for the engine you're using:
+
+```bash
+export OPENAI_API_KEY="sk-..."        # for codex
+export ANTHROPIC_API_KEY="sk-ant-..." # for claude (optional — SDK supports device OAuth)
+export OPENROUTER_API_KEY="sk-or-..." # for opencode (optional — or use provider keys)
+```
+
+**`Unknown MCP cluster: '...'`**
+
+No `mcp-clusters.yaml` was found, or the cluster name doesn't match. Create one from the example:
+
+```bash
+cp mcp-clusters.example.yaml ~/.config/agent-mux/mcp-clusters.yaml
+```
+
+Then edit the file to define your clusters. See [MCP Clusters](#mcp-clusters).
+
+**`OpenCode binary not found`**
+
+The OpenCode engine requires the `opencode` CLI to be installed and on your PATH. Install it from [opencode.ai](https://opencode.ai).
+
+**Timeout with no output**
+
+The agent may need more time. Try increasing the effort level (`--effort high` or `--effort xhigh`) or setting an explicit timeout (`--timeout 1200000`). Also check that the prompt isn't too broad — narrow the scope for faster results.
+
+**SDK-specific errors**
+
+Check stderr output for details. The heartbeat protocol suppresses SDK noise by default, but raw errors from the underlying SDK are captured in the JSON output's `error` field. Run with a simple prompt first to verify the engine works:
+
+```bash
+bun run src/agent.ts --engine codex "Say hello"
+```
+
+## Contributing
+
+```bash
+git clone https://github.com/buildoak/agent-mux && cd agent-mux
+bun install
+bun test
+bunx tsc --noEmit
+```
+
+PRs welcome. Please open an issue for bug reports or feature requests.
+
 ## License
 
-MIT
+[MIT](./LICENSE)

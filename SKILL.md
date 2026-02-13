@@ -15,7 +15,26 @@ description: |
 Single entry point for all three subagent engines. One CLI, one output contract, three SDKs.
 
 ```bash
-bun run src/agent.ts --engine <codex|claude|opencode> [options] "prompt"
+agent-mux --engine <codex|claude|opencode> [options] "prompt"
+```
+
+> **Invocation:** If you ran `bun link` inside the repo, use `agent-mux` directly. Otherwise, use `bun run $SKILL_DIR/src/agent.ts` where `$SKILL_DIR` is the install location (e.g. `~/.claude/skills/agent-mux`).
+
+---
+
+## First Time Setup
+
+```bash
+cd ~/.claude/skills/agent-mux   # or wherever you cloned it
+./setup.sh
+```
+
+`setup.sh` checks Bun, installs dependencies, verifies TypeScript compilation, copies the MCP cluster config template, and reports API key status. Safe to re-run.
+
+To register the `agent-mux` command globally:
+
+```bash
+bun link
 ```
 
 ---
@@ -24,20 +43,20 @@ bun run src/agent.ts --engine <codex|claude|opencode> [options] "prompt"
 
 ```bash
 # Codex — code review, implementation, debugging
-bun run src/agent.ts --engine codex --cwd /path/to/repo --reasoning high "Review auth flow in src/auth/"
+agent-mux --engine codex --cwd /path/to/repo --reasoning high "Review auth flow in src/auth/"
 
 # Claude — architecture, writing, complex reasoning
-bun run src/agent.ts --engine claude --cwd /path/to/repo --effort high "Design the API schema for..."
+agent-mux --engine claude --cwd /path/to/repo --effort high "Design the API schema for..."
 
 # OpenCode — third perspective, free tier, model diversity
-bun run src/agent.ts --engine opencode --model kimi --effort high "Verify the implementation in..."
+agent-mux --engine opencode --model kimi --effort high "Verify the implementation in..."
 
 # Full access (writes + network for Codex, bypassPermissions for Claude)
-bun run src/agent.ts --engine codex --full --cwd /path/to/repo "Install deps and implement feature"
+agent-mux --engine codex --full --cwd /path/to/repo "Install deps and implement feature"
 
 # With MCP clusters
-bun run src/agent.ts --engine codex --browser --cwd /path "Navigate to site and extract data"
-bun run src/agent.ts --engine claude --mcp-cluster knowledge "Search KB for auth docs"
+agent-mux --engine codex --browser --cwd /path "Navigate to site and extract data"
+agent-mux --engine claude --mcp-cluster knowledge "Search KB for auth docs"
 ```
 
 ---
@@ -57,6 +76,7 @@ bun run src/agent.ts --engine claude --mcp-cluster knowledge "Search KB for auth
 | `--mcp-cluster` | — | string (repeatable) | none | Enable MCP cluster |
 | `--browser` | `-b` | boolean | false | Sugar for `--mcp-cluster browser` |
 | `--full` | `-f` | boolean | false | Full access mode |
+| `--version` | `-V` | boolean | — | Show version |
 | `--help` | `-h` | boolean | — | Show help |
 
 ### Codex-specific
@@ -116,7 +136,8 @@ All engines produce identical JSON on stdout:
 }
 ```
 
-Error:
+Error codes: `INVALID_ARGS`, `MISSING_API_KEY`, `SDK_ERROR`
+
 ```json
 {
   "success": false,
@@ -124,7 +145,7 @@ Error:
   "error": "Error message",
   "code": "SDK_ERROR",
   "duration_ms": 500,
-  "activity": { ... }
+  "activity": { "files_changed": [], "commands_run": [], "files_read": [], "mcp_calls": [], "heartbeat_count": 0 }
 }
 ```
 
