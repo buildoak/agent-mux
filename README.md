@@ -16,9 +16,9 @@ Runtime: Bun only (`#!/usr/bin/env bun`).
 
 | Engine | Env Var | Required? | Notes |
 | --- | --- | --- | --- |
-| `codex` | `OPENAI_API_KEY` | Yes | [Get one here](https://platform.openai.com/api-keys) |
-| `claude` | `ANTHROPIC_API_KEY` | Recommended | Claude Code SDK also supports device OAuth — if no key is set, the SDK will prompt for browser-based auth |
-| `opencode` | `OPENROUTER_API_KEY` | Recommended | Or configure provider-specific keys directly in OpenCode |
+| `codex` | `OPENAI_API_KEY` | No | API key **or** OAuth device auth via `codex auth` — if OAuth is configured in `~/.codex/auth.json`, no env var is needed |
+| `claude` | `ANTHROPIC_API_KEY` | No | Claude Code SDK also supports device OAuth — if no key is set, the SDK will prompt for browser-based auth |
+| `opencode` | `OPENROUTER_API_KEY` | No | Or configure provider-specific keys directly in OpenCode |
 
 **MCP clusters** are optional. Only needed if you use `--mcp-cluster` to attach MCP servers at runtime. See [MCP Clusters](#mcp-clusters).
 
@@ -388,12 +388,17 @@ bun run /path/to/agent-mux/src/agent.ts --engine codex "your prompt"
 
 **`MISSING_API_KEY` error**
 
-Set the environment variable for the engine you're using:
+Set the environment variable for the engine you're using, or configure SDK-native auth:
 
 ```bash
+# Option 1: Environment variables
 export OPENAI_API_KEY="sk-..."        # for codex
-export ANTHROPIC_API_KEY="sk-ant-..." # for claude (optional — SDK supports device OAuth)
-export OPENROUTER_API_KEY="sk-or-..." # for opencode (optional — or use provider keys)
+export ANTHROPIC_API_KEY="sk-ant-..." # for claude
+export OPENROUTER_API_KEY="sk-or-..." # for opencode
+
+# Option 2: SDK-native OAuth (codex and claude)
+codex auth    # Codex CLI device OAuth — stores tokens in ~/.codex/auth.json
+# Claude Code SDK prompts for browser-based auth automatically when no key is set
 ```
 
 **`Unknown MCP cluster: '...'`**

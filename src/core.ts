@@ -11,8 +11,9 @@
  */
 
 import { parseArgs } from "node:util";
-import { readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveClusters, listClusters } from "./mcp-clusters.ts";
 import type { McpServerConfig } from "./mcp-clusters.ts";
@@ -544,8 +545,8 @@ export async function execute(
 const API_KEY_MAP: Record<EngineName, { envVar: string; hardError: boolean; hint: string }> = {
   codex: {
     envVar: "OPENAI_API_KEY",
-    hardError: true,
-    hint: "Get one at https://platform.openai.com/api-keys",
+    hardError: false,
+    hint: "Get one at https://platform.openai.com/api-keys — or run `codex auth` to set up OAuth device auth",
   },
   claude: {
     envVar: "ANTHROPIC_API_KEY",
@@ -559,11 +560,28 @@ const API_KEY_MAP: Record<EngineName, { envVar: string; hardError: boolean; hint
   },
 };
 
+/** Check if Codex CLI has valid OAuth tokens in ~/.codex/auth.json */
+function hasCodexOAuth(): boolean {
+  try {
+    const authPath = join(homedir(), ".codex", "auth.json");
+    if (!existsSync(authPath)) return false;
+    const auth = JSON.parse(readFileSync(authPath, "utf-8"));
+    return !!(auth.tokens && auth.tokens.access_token);
+  } catch {
+    return false;
+  }
+}
+
 function checkApiKey(engine: EngineName): { ok: boolean; warning?: string; error?: string } {
   const spec = API_KEY_MAP[engine];
   const value = process.env[spec.envVar];
 
   if (value && value.trim().length > 0) {
+    return { ok: true };
+  }
+
+  // Codex supports OAuth device auth via ~/.codex/auth.json
+  if (engine === "codex" && hasCodexOAuth()) {
     return { ok: true };
   }
 
