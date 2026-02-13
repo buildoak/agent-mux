@@ -386,7 +386,7 @@ async function handleTool(name, args) {
     case "browser_screenshot": {
       const ssArgs = ["screenshot"];
       if (args.path) ssArgs.push(args.path);
-      if (args.fullPage) ssArgs.push("--full-page");
+      if (args.fullPage) ssArgs.push("--full");
       return exec(ssArgs);
     }
 
