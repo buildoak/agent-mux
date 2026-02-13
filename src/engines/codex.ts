@@ -84,7 +84,7 @@ export class CodexEngine implements EngineAdapter {
     }
 
     const codexOptions: CodexOptions = {
-      config: { mcp_servers: mcpOverride },
+      config: { mcp_servers: mcpOverride as Record<string, Record<string, unknown>> },
     };
 
     const codex = new Codex(codexOptions);
