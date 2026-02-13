@@ -7,27 +7,28 @@
 #
 # Usage:
 #   agent-mux --engine codex --mcp-cluster browser "Navigate to example.com"
-#   agent-mux --engine claude --mcp-cluster knowledge "Search KB for auth docs"
+#   agent-mux --engine claude --mcp-cluster research "Find React 19 docs"
 #   agent-mux --engine codex --mcp-cluster all "Full access task"
 
 clusters:
-  # Browser automation cluster
+  # Browser automation — Playwright + visual verification
+  # agent-browser MCP server is bundled at ./src/mcp-servers/agent-browser.mjs (25 tools)
   browser:
     description: "Browser automation — Playwright + visual verification"
     servers:
       agent-browser:
         command: node
         args:
-          - /path/to/agent-browser-mcp/server.mjs
+          - ./src/mcp-servers/agent-browser.mjs
       spectacles:
         command: node
         args:
           - /path/to/spectacles/dist/server.js
         cwd: /path/to/spectacles
 
-  # Knowledge base cluster
+  # Knowledge base — docs search, chat history, tech mentions, session context
   knowledge:
-    description: "Knowledge base — docs search, chat history, tech mentions"
+    description: "Knowledge base — docs, chats, tech ledger, session context"
     servers:
       docs-search:
         command: python
@@ -37,14 +38,28 @@ clusters:
         command: python
         args:
           - /path/to/chats-mcp/server.py
+      tech-ledger:
+        command: python
+        args:
+          - /path/to/tech-ledger-mcp/server.py
+      session-context:
+        command: python
+        args:
+          - /path/to/eywa-mcp/server.py
 
-  # Web research cluster
+  # Web research — search engines + library documentation
   research:
-    description: "Web search — Exa semantic search"
+    description: "Web search and library docs — Exa + Context7"
     servers:
       exa:
         command: bunx
         args:
           - exa-mcp-server
         env:
-          EXA_API_KEY: "your-api-key-here"
+          EXA_API_KEY: "your-exa-api-key"
+      context7:
+        command: bunx
+        args:
+          - "@upstash/context7-mcp"
+          - "--api-key"
+          - "your-context7-api-key"

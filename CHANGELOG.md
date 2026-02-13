@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-02-13
+
+### Added
+- Bundled agent-browser MCP server (25 tools) with interactive snapshot mode
+- 7 new browser tools: reload, check, uncheck, dblclick, clear, focus, get_html
+
 ## [2.0.0] - 2026-02-13
 
 ### Added

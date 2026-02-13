@@ -185,6 +185,23 @@ MCP clusters are loaded from a YAML config file. No MCP servers enabled by defau
 
 See `mcp-clusters.example.yaml` for the schema.
 
+### Bundled: agent-browser MCP (25 tools)
+
+agent-mux includes a built-in agent-browser MCP wrapper at `src/mcp-servers/agent-browser.mjs`. It provides 25 browser automation tools with interactive snapshot mode (`-i` flag) for 5-10x token savings.
+
+```yaml
+# In mcp-clusters.yaml
+clusters:
+  browser:
+    servers:
+      agent-browser:
+        command: node
+        args:
+          - ./src/mcp-servers/agent-browser.mjs
+```
+
+Requires `agent-browser` CLI installed separately.
+
 ---
 
 ## Engine Selection Guide

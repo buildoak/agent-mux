@@ -321,6 +321,36 @@ agent-mux --engine opencode --mcp-cluster all "Compare findings from all MCP sou
 
 > If you haven't run `bun link`, replace `agent-mux` with `bun run src/agent.ts`.
 
+## Bundled MCP Servers
+
+### agent-browser (25 tools)
+
+agent-mux ships with a built-in MCP wrapper for [agent-browser](https://github.com/nicepkg/agent-browser) (Vercel Labs). It provides 25 browser automation tools over the stdio MCP protocol.
+
+**Requires:** `agent-browser` CLI installed separately (`npm i -g agent-browser`).
+
+**Key feature:** Interactive snapshot mode (`-i` flag) returns only interactive elements from the accessibility tree, yielding 5-10x token savings compared to full snapshots. This is the default mode.
+
+**Tools:** `navigate`, `snapshot`, `click`, `dblclick`, `fill`, `type`, `press`, `select`, `hover`, `focus`, `clear`, `check`, `uncheck`, `scroll`, `reload`, `get_url`, `get_title`, `get_text`, `get_html`, `wait`, `evaluate`, `back`, `forward`, `screenshot`, `close`
+
+**Config example (`mcp-clusters.yaml`):**
+
+```yaml
+clusters:
+  browser:
+    servers:
+      agent-browser:
+        command: node
+        args:
+          - ./src/mcp-servers/agent-browser.mjs
+```
+
+Or use the `--browser` shorthand which enables the `browser` cluster:
+
+```bash
+agent-mux --engine codex --browser "Navigate to example.com and take a screenshot"
+```
+
 ## Prompting Guide
 
 Full guide: [`SKILL.md`](./SKILL.md)

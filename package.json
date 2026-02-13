@@ -1,6 +1,6 @@
 {
   "name": "agent-mux",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "One CLI to spawn Codex, Claude Code, or OpenCode agents. Unified output. Proper timeouts. Activity tracking.",
   "type": "module",
   "bin": {
