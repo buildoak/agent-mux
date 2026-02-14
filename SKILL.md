@@ -6,8 +6,8 @@ description: |
 
   Engines:
   - codex: OpenAI Codex (GPT-5.3-Codex) — code-focused execution
-  - claude: Claude Code (Sonnet 4) — complex reasoning, architecture
-  - opencode: 170+ models via OpenRouter — Kimi, GLM, DeepSeek, Qwen, free tiers
+  - claude: Claude Code (Opus 4.6) — complex reasoning, architecture
+  - opencode: 170+ models via OpenRouter — Kimi K2.5, GLM 5, MiniMax M2.5
 ---
 
 # agent-mux
@@ -42,13 +42,16 @@ bun link
 ## Quick Reference
 
 ```bash
-# Codex — code review, implementation, debugging
+# Codex — precise execution, code review, debugging
 agent-mux --engine codex --cwd /path/to/repo --reasoning high "Review auth flow in src/auth/"
 
-# Claude — architecture, writing, complex reasoning
+# Codex Spark — fast iteration, filesystem scanning, focused tasks (1000+ tok/s)
+agent-mux --engine codex --model gpt-5.3-codex-spark --reasoning high --cwd /path/to/repo "Generate docstrings for all functions in src/utils/"
+
+# Claude — architecture, orchestration, open-ended exploration
 agent-mux --engine claude --cwd /path/to/repo --effort high "Design the API schema for..."
 
-# OpenCode — third perspective, free tier, model diversity
+# OpenCode — third-opinion verification, different model lineage
 agent-mux --engine opencode --model kimi --effort high "Verify the implementation in..."
 
 # Full access (writes + network for Codex, bypassPermissions for Claude)
@@ -88,6 +91,15 @@ agent-mux --engine claude --mcp-cluster knowledge "Search KB for auth docs"
 | `--network` | `-n` | boolean | false |
 | `--add-dir` | `-d` | path (repeatable) | none |
 
+**Codex model variants:**
+- `gpt-5.3-codex` (default) — full-capability Codex. Thorough, pedantic, strong on complex multi-step tasks.
+- `gpt-5.3-codex-spark` — 1000+ tok/s on Cerebras WSE-3. 128K context (smaller). Equivalent on straightforward coding (SWE-Bench Pro: 56% vs 56.8%), weaker on complex tasks (Terminal-Bench: 58.4% vs 77.3%). Use `--model gpt-5.3-codex-spark`.
+
+**Reasoning level guidance:**
+- `high` — sweet spot for implementation. Fast, detail-oriented, reliable.
+- `xhigh` — deep audits and architecture only. Overthinks routine tasks.
+- `minimal`/`low` — quick checks. Note: `minimal` is incompatible with MCP tools (Codex rejects them).
+
 ### Claude-specific
 
 | Flag | Short | Values | Default |
@@ -104,7 +116,8 @@ agent-mux --engine claude --mcp-cluster knowledge "Search KB for auth docs"
 | `--variant` | — | model preset name | none |
 | `--agent` | — | OpenCode agent name | none |
 
-**OpenCode model presets:** `kimi`, `kimi-k2.5`, `glm`, `glm-5`, `deepseek`, `deepseek-r1`, `qwen`, `qwen-coder`, `free`
+**OpenCode model presets:** `kimi`, `kimi-k2.5`, `glm`, `glm-5`, `deepseek`, `deepseek-r1`, `qwen`, `qwen-coder`, `qwen-max`, `free`
+Additional: `kimi-free`, `glm-free` (free-tier variants), `opencode-minimax`, `opencode-kimi` (OpenCode native)
 
 ---
 
@@ -206,15 +219,22 @@ Requires `agent-browser` CLI installed separately.
 
 ## Engine Selection Guide
 
-| Need | Engine | Why |
-|------|--------|-----|
-| Code review, audit | codex | Focused, sandbox isolation |
-| Implementation | codex | Strong at code generation |
-| Architecture, design | claude | Better reasoning, context |
-| Writing, documentation | claude | Language strength |
-| Third opinion | opencode | Different model family |
-| Cost-effective check | opencode `--model free` | Zero-cost verification |
-| Multi-model pipeline | All three | Maximum blind spot coverage |
+| Need | Engine | Model | Why |
+|------|--------|-------|-----|
+| Code review, audit | codex | default | Sandbox isolation, pedantic attention to detail |
+| Deep architecture audit | codex | default (`xhigh`) | Thorough, catches edge cases |
+| Implementation | codex | default (`high`) | Precise executor, detail-oriented |
+| Fast iteration, refactoring | codex | spark | 1000+ tok/s, fast feedback loops |
+| Filesystem scanning, docstrings | codex | spark | Speed advantage for broad reads |
+| Architecture, design | claude | — | Best reasoning, thrives on ambiguity |
+| Writing, documentation | claude | — | Highest prose quality |
+| Open-ended exploration | claude | — | Handles uncertainty, decides from available info |
+| Prompt crafting for pipelines | claude | — | Natural orchestrator |
+| Third opinion (agentic) | opencode | `glm-5` | Strong agentic engineering, tool-calling |
+| Third opinion (long-context) | opencode | `kimi` | 262K context, multimodal, agent swarm |
+| Third opinion (cost-effective) | opencode | `opencode-minimax` | 80% SWE-bench, absurd value |
+| Smoke test, zero-cost check | opencode | `free` | Free-tier models, basic validation |
+| Multi-model pipeline | All three | — | Maximum blind spot coverage |
 
 ---
 
@@ -247,40 +267,73 @@ Codex operates in a sandbox with finite context. Every token spent reading files
 - Upfront planning announcements — causes premature stopping
 - Multi-goal prompts — causes partial completion
 
-### Prompting Claude
+### Prompting Codex Spark
+
+Spark is 15x faster but has a smaller context window (128K) and weaker performance on complex multi-step tasks. Same prompting discipline as regular Codex, tighter scope.
 
 **What works:**
-- More exploratory and open-ended (Claude handles ambiguity well)
+- Focused, single-goal tasks (even more important than regular Codex)
+- Fast iteration cycles — submit, review, refine
+- Filesystem-wide reads where speed matters (scanning, generating docs)
+- Parallel batch operations (multiple Spark workers on independent subtasks)
+
+**What fails:**
+- Complex multi-file refactors (use regular Codex)
+- Tasks requiring deep reasoning or architecture (use regular Codex `xhigh`, or Claude)
+- Large context requirements beyond 128K (use regular Codex or Claude)
+
+**When to use Spark vs Regular Codex:**
+
+| Factor | Spark | Regular Codex |
+|--------|-------|---------------|
+| Task complexity | Straightforward to medium | Hard, multi-step |
+| Context needed | <128K | >128K |
+| Iteration speed | Critical | Not critical |
+| Multi-file refactor | No | Yes |
+| Parallel workers | Yes (fast) | Yes (thorough) |
+
+### Prompting Claude (Opus 4.6)
+
+**What works:**
+- Open-ended exploration (Claude thrives on ambiguity — decides from available info)
 - Multi-goal when needed (Claude manages complexity)
 - Writing-focused (Claude's prose quality is highest)
+- Prompt crafting for other engines (natural orchestrator)
+- Architecture and system design where tradeoffs need reasoning
 
-### Prompting OpenCode / GLM-5
+### Prompting OpenCode Models
 
 **What works:**
-- End-to-end deliverable framing
-- Richer context than Codex prompts
-- Structured output requests
+- End-to-end deliverable framing (not discussions)
+- Richer context than Codex prompts (especially GLM-5)
+- Structured output requests for pipeline integration
 - Chinese/multilingual content
 
 **Model selection within OpenCode:**
 
-| Model | Best For | Avoid For |
-|-------|----------|-----------|
-| `glm-5` | Complex agentic tasks, tool-heavy workflows | Quick checks, creative writing |
-| `kimi` | Long-context analysis, general reasoning | Chinese-specific tasks |
-| `deepseek-r1` | Code reasoning, algorithm analysis | Document generation |
-| `qwen-coder` | Code-focused tasks, test generation | Non-code tasks |
-| `free` | Smoke tests, cost-free validation | Production-critical decisions |
+| Model | Preset | Pricing (per M tokens) | Best For | Avoid For |
+|-------|--------|------------------------|----------|-----------|
+| Kimi K2.5 | `kimi` | $0.45 in / $2.25 out | Long-context (262K), multimodal, agent swarm, visual coding | Cost-sensitive runs |
+| GLM-5 | `glm-5` | $0.80 in / $2.56 out | Agentic engineering, tool-heavy workflows, self-correction | Quick checks, creative writing |
+| MiniMax M2.5 | `opencode-minimax` | Free (native) | Cost-effective coding verification (80% SWE-bench) | Deep architectural reasoning |
+| DeepSeek R1 | `deepseek-r1` | Free | Code reasoning, algorithm analysis | Document generation |
+| Qwen Coder | `qwen-coder` | varies | Code-focused tasks, test generation | Non-code tasks |
+| Free tier | `free` | $0 | Smoke tests, zero-cost validation | Production-critical decisions |
 
-### Three-Way Comparison
+**Note:** Most OpenCode models incur per-token costs via OpenRouter. Only `free`, `deepseek-r1`, `kimi-free`, `glm-free`, and `opencode-*` presets are zero-cost. Budget accordingly for named models.
 
-| Aspect | Claude (Opus) | Codex (GPT-5.3) | GLM-5 |
-|--------|--------------|-----------------|-------|
-| Exploration | Handles open-ended | Needs tight scope | Moderate |
-| Tool calling | Good | Good | Excellent |
-| Context window | 200K | Moderate | 200K in / 128K out |
-| English writing | Excellent | Good | Adequate |
-| Planning | Excellent | Skip planning | Good autonomous |
+### Engine Comparison
+
+| Aspect | Claude (Opus 4.6) | Codex (5.3) | Codex Spark | OpenCode (varies) |
+|--------|-------------------|-------------|-------------|-------------------|
+| Speed | ~65-70 tok/s | ~65-70 tok/s | 1000+ tok/s | Varies |
+| Context window | 1M (beta) | Standard | 128K | 200-262K |
+| Exploration | Thrives on ambiguity | Needs tight scope | Needs tight scope | Moderate (GLM-5 handles autonomy) |
+| Tool calling | Good | Good | Good (tends to over-tool) | Excellent (GLM-5, Kimi) |
+| Planning | Natural orchestrator | Skip planning, bias to action | Skip planning, bias to speed | Good autonomous (GLM-5) |
+| Coding (SWE-bench) | 72-81% | Frontier | ~equivalent on SWE-bench Pro | 77-80% (GLM-5, MiniMax) |
+| Prompting style | Open-ended, multi-goal OK | One goal, explicit files, action-biased | Same as Codex, simpler tasks | End-to-end deliverables |
+| Cost model | Subscription (Max plan) | Subscription (Pro) | Subscription (Pro) | Per-token via OpenRouter |
 
 ---
 
