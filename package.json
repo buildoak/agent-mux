@@ -14,7 +14,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@openai/codex-sdk": "^0.98.0",
+    "@openai/codex-sdk": "0.101.0",
     "@opencode-ai/sdk": "^1.1.61",
     "js-yaml": "^4.1.0"
   },
