@@ -1,155 +1,106 @@
 # agent-mux
-
 [![CI](https://github.com/buildoak/agent-mux/actions/workflows/ci.yml/badge.svg)](https://github.com/buildoak/agent-mux/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-One CLI to spawn Codex, Claude Code, or OpenCode agents.
-Unified output. Proper timeouts. Activity tracking.
+Your AI coding agents deserve better than raw SDK calls.
+
+One CLI. One output contract. Skill injection. Heartbeat protocol. `agent-mux` lets Codex, Claude Code, and OpenCode run behind the same interface so orchestration code stays simple. Write a skill once and dispatch it through any engine. For most teams, CLI tools + skills beat thin MCP wrappers.
 
 Runtime: Bun only (`#!/usr/bin/env bun`).
 
-## Prerequisites
+## Why agent-mux?
+- Unified output contract: all engines return the same JSON shape.
+- Skill injection: load reusable `SKILL.md` instructions with `--skill`.
+- Heartbeat protocol: progress lines every 15s on stderr.
+- Effort-scaled timeouts: default timeout tracks task depth.
 
+## Prerequisites
 **Runtime:** [Bun](https://bun.sh) >= 1.0.0
 
 **API keys** (only the engine you use needs its key):
 
 | Engine | Env Var | Required? | Notes |
 | --- | --- | --- | --- |
-| `codex` | `OPENAI_API_KEY` | No | API key **or** OAuth device auth via `codex auth` — if OAuth is configured in `~/.codex/auth.json`, no env var is needed |
-| `claude` | `ANTHROPIC_API_KEY` | No | Claude Code SDK also supports device OAuth — if no key is set, the SDK will prompt for browser-based auth |
+| `codex` | `OPENAI_API_KEY` | No | API key **or** OAuth device auth via `codex auth` (`~/.codex/auth.json`) |
+| `claude` | `ANTHROPIC_API_KEY` | No | Claude Code SDK also supports device OAuth when no key is set |
 | `opencode` | `OPENROUTER_API_KEY` | No | Or configure provider-specific keys directly in OpenCode |
 
-**MCP clusters** are optional. Only needed if you use `--mcp-cluster` to attach MCP servers at runtime. See [MCP Clusters](#mcp-clusters).
+**MCP clusters** are optional and only needed with `--mcp-cluster`.
 
 ## Quick Start
-
 ```bash
 git clone https://github.com/buildoak/agent-mux && cd agent-mux
 ./setup.sh
 bun run src/agent.ts --engine codex "Review src/core.ts for timeout edge cases"
 ```
 
-To use the `agent-mux` command from anywhere:
-
-```bash
-cd agent-mux && bun link
-agent-mux --engine codex "Review src/core.ts for timeout edge cases"
-```
-
-## Why This Exists
-
-Every agent SDK solves the same task differently: different event streams, different output shapes, different tool-call metadata, and different failure behavior. If you are orchestrating multiple agents, you end up writing translation glue before you can build product logic.
-
-Timeouts and long-running task behavior are usually where things break in production: no clean abort path, no heartbeat for supervisors, and no partial payload on timeout. `agent-mux` standardizes this infrastructure layer so you can treat Codex, Claude Code, and OpenCode as interchangeable workers behind one CLI contract.
+To register the `agent-mux` command globally: `bun link`
 
 ## Engines
 
 | Engine | SDK | Best At | Default Model |
 | --- | --- | --- | --- |
-| `codex` | `@openai/codex-sdk` | Code edits, debugging, implementation | `gpt-5.3-codex` |
-| `claude` | `@anthropic-ai/claude-agent-sdk` | Architecture, deep reasoning, writing | `claude-sonnet-4-20250514` |
-| `opencode` | `@opencode-ai/sdk` | Model diversity, second opinions, cost-flexible runs | `kimi-k2.5` (`openrouter/moonshotai/kimi-k2.5`) |
+| `codex` | `@openai/codex-sdk` | Precise implementation and code edits | `gpt-5.3-codex` |
+| `claude` | `@anthropic-ai/claude-agent-sdk` | Planning, architecture, long-form reasoning | `claude-sonnet-4-20250514` |
+| `opencode` | `@opencode-ai/sdk` | Model diversity and cross-checking | `openrouter/moonshotai/kimi-k2.5` |
 
-## Installation
-
-### 1) As a Claude Code skill
-
-```bash
-git clone https://github.com/buildoak/agent-mux ~/.claude/skills/agent-mux
-cd ~/.claude/skills/agent-mux
-./setup.sh
-```
-
-### 2) As a standalone CLI
+## CLI Reference
+Prompt is required as positional text:
 
 ```bash
-git clone https://github.com/buildoak/agent-mux
-cd agent-mux
-./setup.sh
-bun run src/agent.ts --engine codex "Summarize this repo"
+agent-mux --engine <codex|claude|opencode> [flags] "your prompt"
 ```
 
-Optionally, register the `agent-mux` command globally:
+### Common Flags
+| Flag | Short | Values | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `--engine` | `-E` | `codex`, `claude`, `opencode` | required | Engine selection |
+| `--cwd` | `-C` | path | current directory | Working directory |
+| `--model` | `-m` | string | engine-specific | Model override |
+| `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` | `medium` | Drives default timeout |
+| `--timeout` | `-t` | positive integer ms | effort-scaled | Hard timeout override |
+| `--system-prompt` | `-s` | string | unset | Appended system prompt |
+| `--skill` |  | string (repeatable) | none | Loads `<cwd>/.claude/skills/<name>/SKILL.md` |
+| `--mcp-cluster` |  | string (repeatable) | none | Enables named cluster(s) |
+| `--browser` | `-b` | boolean | `false` | Sugar for `--mcp-cluster browser` |
+| `--full` | `-f` | boolean | `false` | Full-access mode |
+| `--help` | `-h` | boolean | `false` | Show help |
+| `--version` | `-V` | boolean | `false` | Show version |
 
-```bash
-bun link
-agent-mux --engine codex "Summarize this repo"
-```
+Effort defaults:
 
-## Usage
+| Effort | Timeout |
+| --- | --- |
+| `low` | `120000` ms (2 min) |
+| `medium` | `600000` ms (10 min) |
+| `high` | `1200000` ms (20 min) |
+| `xhigh` | `2400000` ms (40 min) |
 
-All JSON output is written to `stdout`. Heartbeats are written to `stderr` every 15s.
+### Codex Flags
+| Flag | Short | Values | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `--sandbox` |  | `read-only`, `workspace-write`, `danger-full-access` | `read-only` | `--full` forces `danger-full-access` |
+| `--reasoning` | `-r` | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Reasoning effort |
+| `--network` | `-n` | boolean | `false` | `--full` forces `true` |
+| `--add-dir` | `-d` | path (repeatable) | none | Additional writable dirs |
 
-```text
-[heartbeat] 45s — turn started
-```
+### Claude Flags
+| Flag | Short | Values | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `--permission-mode` | `-p` | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `bypassPermissions` | `--full` forces `bypassPermissions` |
+| `--max-turns` |  | positive integer | effort-scaled (`5/15/30/50`) | Runtime default set by effort |
+| `--max-budget` |  | positive number (USD) | unset | Budget cap |
+| `--allowed-tools` |  | comma-separated list | unset | Tool whitelist |
 
-### Codex
+### OpenCode Flags
+| Flag | Short | Values | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `--variant` |  | preset/model string | unset | Shorthand model selector |
+| `--agent` |  | string | unset | OpenCode agent name |
 
-```bash
-bun run src/agent.ts \
-  --engine codex \
-  --cwd /path/to/repo \
-  --effort high \
-  --reasoning high \
-  --timeout 900000 \
-  "Implement retries for src/http/client.ts and add tests"
-```
-
-### Claude Code
-
-```bash
-bun run src/agent.ts \
-  --engine claude \
-  --cwd /path/to/repo \
-  --permission-mode bypassPermissions \
-  --max-turns 25 \
-  "Design a migration plan from REST to GraphQL with rollout stages"
-```
-
-### OpenCode
-
-```bash
-bun run src/agent.ts \
-  --engine opencode \
-  --cwd /path/to/repo \
-  --variant glm-5 \
-  "Find regressions in this PR and propose minimal patches"
-```
-
-### Example JSON Output
-
-```json
-{
-  "success": true,
-  "engine": "codex",
-  "response": "Implemented retry middleware and added coverage for timeout/backoff paths.",
-  "timed_out": false,
-  "duration_ms": 84231,
-  "activity": {
-    "files_changed": ["src/http/client.ts", "test/http/client.test.ts"],
-    "commands_run": ["bun test test/http/client.test.ts"],
-    "files_read": ["src/http/client.ts", "src/http/types.ts"],
-    "mcp_calls": ["docs-search/search"],
-    "heartbeat_count": 5
-  },
-  "metadata": {
-    "model": "gpt-5.3-codex",
-    "session_id": "sess_...",
-    "cost_usd": 0.18,
-    "tokens": {
-      "input": 12840,
-      "output": 2104,
-      "reasoning": 512
-    },
-    "turns": 4
-  }
-}
-```
+OpenCode presets include `kimi`, `kimi-k2.5`, `glm`, `glm-5`, `deepseek`, `deepseek-r1`, `qwen`, `qwen-coder`, `qwen-max`, `free`, plus `kimi-free`, `glm-free`, `opencode-kimi`, `opencode-minimax`.
 
 ## Output Contract
-
 `agent-mux` returns one unified JSON contract for all engines.
 
 ```json
@@ -223,72 +174,31 @@ bun run src/agent.ts \
 }
 ```
 
-Field notes:
-- `success: true` and `timed_out: true` means partial results (not a hard failure).
-- On timeout, `response` may be a placeholder and `activity` still contains what happened before abort.
-- Timeout is enforced with `AbortSignal`.
+## Skill System
+`agent-mux` is both a skill host and a skill-style package.
 
-## CLI Reference
+It includes `SKILL.md`, `setup.sh`, and bundled runtime scripts (including MCP wrappers under `src/mcp-servers/`).
 
-### Common Flags
+Load external skills with repeatable `--skill` flags:
 
-| Flag | Short | Values | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--engine` | `-E` | `codex`, `claude`, `opencode` | required | Engine selection |
-| `--cwd` | `-C` | path | current directory | Working directory |
-| `--model` | `-m` | string | engine-specific | Model identifier |
-| `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` | `medium` | Effort levels map to timeout |
-| `--timeout` | `-t` | ms | effort-scaled | Override timeout directly |
-| `--system-prompt` | `-s` | string | unset | Appended system prompt |
-| `--mcp-cluster` |  | cluster name (repeatable) | none | Enables cluster(s) |
-| `--browser` | `-b` | boolean | `false` | Sugar for `--mcp-cluster browser` |
-| `--full` | `-f` | boolean | `false` | Full access mode |
-| `--version` | `-V` | boolean | `false` | Show version |
-| `--help` | `-h` | boolean | `false` | Show help |
+```bash
+agent-mux --engine codex --skill reviewer --skill migrations "Review and harden schema migration"
+```
 
-Effort defaults:
-- `low` = 120000 ms (2 min)
-- `medium` = 600000 ms (10 min)
-- `high` = 1200000 ms (20 min)
-- `xhigh` = 2400000 ms (40 min)
-
-### Codex Flags
-
-| Flag | Short | Values | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--sandbox` |  | `read-only`, `workspace-write`, `danger-full-access` | `read-only` | Sandbox mode |
-| `--reasoning` | `-r` | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Codex reasoning effort |
-| `--network` | `-n` | boolean | `false` | Enable network access |
-| `--add-dir` | `-d` | path (repeatable) | none | Extra writable directories |
-
-### Claude Flags
-
-| Flag | Short | Values | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--permission-mode` | `-p` | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `bypassPermissions` | Claude permission mode |
-| `--max-turns` |  | integer | effort-scaled (`5/15/30/50`) | Conversation turn cap |
-| `--max-budget` |  | number (USD) | unset | Max cost budget |
-| `--allowed-tools` |  | comma-separated list | unset | Tool whitelist |
-
-### OpenCode Flags
-
-| Flag | Short | Values | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--variant` |  | preset/model string | unset | Variant shorthand |
-| `--agent` |  | string | unset | OpenCode agent name |
-
-OpenCode presets:
-- `kimi`, `kimi-k2.5`, `glm`, `glm-5`, `deepseek`, `deepseek-r1`, `qwen`, `qwen-coder`, `free`
+Skill resolution path and behavior:
+- Reads `<cwd>/.claude/skills/<name>/SKILL.md`.
+- Injects each skill into the prompt as a `<skill ...>` block.
+- Adds `<skill>/scripts/` to `PATH` if present.
+- On Codex, adds each skill directory to writable `--add-dir` paths.
 
 ## MCP Clusters
-
-MCP servers are configured in YAML, then enabled by cluster name at runtime.
+Define clusters in YAML and enable them per run.
 
 Search order:
 1. `./mcp-clusters.yaml`
 2. `~/.config/agent-mux/mcp-clusters.yaml`
 
-Example schema:
+Example:
 
 ```yaml
 clusters:
@@ -298,89 +208,45 @@ clusters:
       agent-browser:
         command: node
         args:
-          - /path/to/agent-browser-mcp/server.mjs
-
+          - ./src/mcp-servers/agent-browser.mjs
   research:
     description: "Web research"
     servers:
       exa:
         command: bunx
-        args:
-          - exa-mcp-server
+        args: [exa-mcp-server]
         env:
           EXA_API_KEY: "your-api-key"
 ```
 
-Usage:
+`--browser` is sugar for `--mcp-cluster browser`.
 
 ```bash
-agent-mux --engine codex --mcp-cluster browser "Capture a screenshot of the dashboard"
-agent-mux --engine claude --mcp-cluster research "Find docs on OAuth token rotation"
-agent-mux --engine opencode --mcp-cluster all "Compare findings from all MCP sources"
+agent-mux --engine codex --browser "Capture a screenshot"
+agent-mux --engine claude --mcp-cluster research "Find OAuth rotation docs"
+agent-mux --engine opencode --mcp-cluster all "Cross-check findings"
 ```
 
-> If you haven't run `bun link`, replace `agent-mux` with `bun run src/agent.ts`.
-
-## Bundled MCP Servers
-
-### agent-browser (25 tools)
-
-agent-mux ships with a built-in MCP wrapper for [agent-browser](https://github.com/nicepkg/agent-browser) (Vercel Labs). It provides 25 browser automation tools over the stdio MCP protocol.
-
-**Requires:** `agent-browser` CLI installed separately (`npm i -g agent-browser`).
-
-**Key feature:** Interactive snapshot mode (`-i` flag) returns only interactive elements from the accessibility tree, yielding 5-10x token savings compared to full snapshots. This is the default mode.
-
-**Tools:** `navigate`, `snapshot`, `click`, `dblclick`, `fill`, `type`, `press`, `select`, `hover`, `focus`, `clear`, `check`, `uncheck`, `scroll`, `reload`, `get_url`, `get_title`, `get_text`, `get_html`, `wait`, `evaluate`, `back`, `forward`, `screenshot`, `close`
-
-**Config example (`mcp-clusters.yaml`):**
-
-```yaml
-clusters:
-  browser:
-    servers:
-      agent-browser:
-        command: node
-        args:
-          - ./src/mcp-servers/agent-browser.mjs
-```
-
-Or use the `--browser` shorthand which enables the `browser` cluster:
-
+## Installation
+### 1) As a Claude Code skill
 ```bash
-agent-mux --engine codex --browser "Navigate to example.com and take a screenshot"
+git clone https://github.com/buildoak/agent-mux ~/.claude/skills/agent-mux
+cd ~/.claude/skills/agent-mux
+./setup.sh
 ```
 
-## Prompting Guide
-
-Full guide: [`SKILL.md`](./SKILL.md)
-
-### Codex
-
-- Give a tight scope and explicit file targets.
-- Ask for concrete deliverables (patches/tests), not exploration.
-- Prefer one objective per run.
-- Specify output format when integrating downstream.
-
-### Claude Code
-
-- Use for broader reasoning and architecture tradeoffs.
-- Provide constraints (budget, turns, tool limits) for predictable runs.
-- Ask for structured artifacts (plans, RFC sections, migration checklists).
-- Reserve `bypassPermissions` for trusted workflows.
-
-### OpenCode
-
-- Use model presets for fast switching during orchestration.
-- Good as a second pass for validation or dissenting review.
-- Pick cheaper presets for smoke tests, stronger presets for deep tasks.
-- Use `--agent` when your OpenCode setup defines specialized agents.
+### 2) As a standalone CLI
+```bash
+git clone https://github.com/buildoak/agent-mux
+cd agent-mux
+./setup.sh
+bun run src/agent.ts --engine codex "Summarize this repo"
+```
 
 ## Troubleshooting
-
 **`agent-mux: command not found`**
 
-The CLI isn't on your PATH. Either run `bun link` inside the repo to register the command globally, or invoke directly:
+Run `bun link` in the repo or invoke directly:
 
 ```bash
 bun run /path/to/agent-mux/src/agent.ts --engine codex "your prompt"
@@ -388,47 +254,40 @@ bun run /path/to/agent-mux/src/agent.ts --engine codex "your prompt"
 
 **`MISSING_API_KEY` error**
 
-Set the environment variable for the engine you're using, or configure SDK-native auth:
+Set the right env var or use SDK auth:
 
 ```bash
-# Option 1: Environment variables
-export OPENAI_API_KEY="sk-..."        # for codex
-export ANTHROPIC_API_KEY="sk-ant-..." # for claude
-export OPENROUTER_API_KEY="sk-or-..." # for opencode
-
-# Option 2: SDK-native OAuth (codex and claude)
-codex auth    # Codex CLI device OAuth — stores tokens in ~/.codex/auth.json
-# Claude Code SDK prompts for browser-based auth automatically when no key is set
+export OPENAI_API_KEY="sk-..."        # codex
+export ANTHROPIC_API_KEY="sk-ant-..." # claude
+export OPENROUTER_API_KEY="sk-or-..." # opencode
+codex auth
 ```
 
 **`Unknown MCP cluster: '...'`**
 
-No `mcp-clusters.yaml` was found, or the cluster name doesn't match. Create one from the example:
+Create config from the template and update it:
 
 ```bash
 cp mcp-clusters.example.yaml ~/.config/agent-mux/mcp-clusters.yaml
 ```
 
-Then edit the file to define your clusters. See [MCP Clusters](#mcp-clusters).
-
 **`OpenCode binary not found`**
 
-The OpenCode engine requires the `opencode` CLI to be installed and on your PATH. Install it from [opencode.ai](https://opencode.ai).
+Install OpenCode CLI and ensure `opencode` is on `PATH`.
 
 **Timeout with no output**
 
-The agent may need more time. Try increasing the effort level (`--effort high` or `--effort xhigh`) or setting an explicit timeout (`--timeout 1200000`). Also check that the prompt isn't too broad — narrow the scope for faster results.
+Use `--effort high`/`xhigh` or increase `--timeout`.
 
 **SDK-specific errors**
 
-Check stderr output for details. The heartbeat protocol suppresses SDK noise by default, but raw errors from the underlying SDK are captured in the JSON output's `error` field. Run with a simple prompt first to verify the engine works:
+Inspect stderr and test engine wiring with:
 
 ```bash
 bun run src/agent.ts --engine codex "Say hello"
 ```
 
 ## Contributing
-
 ```bash
 git clone https://github.com/buildoak/agent-mux && cd agent-mux
 bun install
@@ -436,8 +295,5 @@ bun test
 bunx tsc --noEmit
 ```
 
-PRs welcome. Please open an issue for bug reports or feature requests.
-
 ## License
-
 [MIT](./LICENSE)

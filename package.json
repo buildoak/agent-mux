@@ -1,7 +1,7 @@
 {
   "name": "agent-mux",
   "version": "2.1.0",
-  "description": "One CLI to spawn Codex, Claude Code, or OpenCode agents. Unified output. Proper timeouts. Activity tracking.",
+  "description": "One CLI to dispatch agentic work across AI coding engines. Unified output, skill injection, heartbeat protocol.",
   "type": "module",
   "bin": {
     "agent-mux": "./src/agent.ts"

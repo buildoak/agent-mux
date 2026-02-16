@@ -1,367 +1,401 @@
 ---
 name: agent-mux
 description: |
-  Unified subagent system — three engines (Codex, Claude Code, OpenCode) through a single
-  entry point. One CLI, one output contract, three SDKs.
-
-  Engines:
-  - codex: OpenAI Codex (GPT-5.3-Codex) — code-focused execution
-  - claude: Claude Code (Opus 4.6) — complex reasoning, architecture
-  - opencode: 170+ models via OpenRouter — Kimi K2.5, GLM 5, MiniMax M2.5
+  Unified subagent execution layer for Codex, Claude Code, and OpenCode.
+  One CLI surface, one JSON output contract, strict timeout/heartbeat behavior,
+  and predictable skill + MCP injection for automation workflows.
 ---
 
 # agent-mux
 
-Single entry point for all three subagent engines. One CLI, one output contract, three SDKs.
+One CLI for Codex, Claude, and OpenCode with one strict JSON contract.
 
 ```bash
 agent-mux --engine <codex|claude|opencode> [options] "prompt"
 ```
 
-> **Invocation:** If you ran `bun link` inside the repo, use `agent-mux` directly. Otherwise, use `bun run $SKILL_DIR/src/agent.ts` where `$SKILL_DIR` is the install location (e.g. `~/.claude/skills/agent-mux`).
+> If `agent-mux` is not linked globally, run `bun run src/agent.ts ...` from this repo.
 
 ---
 
 ## First Time Setup
 
 ```bash
-cd ~/.claude/skills/agent-mux   # or wherever you cloned it
+cd /path/to/agent-mux
 ./setup.sh
-```
-
-`setup.sh` checks Bun, installs dependencies, verifies TypeScript compilation, copies the MCP cluster config template, and reports API key status. Safe to re-run.
-
-To register the `agent-mux` command globally:
-
-```bash
 bun link
 ```
+
+`setup.sh` validates Bun/deps and local build prerequisites. `bun link` exposes `agent-mux` globally.
 
 ---
 
 ## Quick Reference
 
 ```bash
-# Codex — precise execution, code review, debugging
-agent-mux --engine codex --cwd /path/to/repo --reasoning high "Review auth flow in src/auth/"
+# Codex: implementation, debugging, concrete code changes
+agent-mux --engine codex --cwd /repo --reasoning high --effort high "Implement retries in src/http/client.ts"
 
-# Codex Spark — fast iteration, filesystem scanning, focused tasks (1000+ tok/s)
-agent-mux --engine codex --model gpt-5.3-codex-spark --reasoning high --cwd /path/to/repo "Generate docstrings for all functions in src/utils/"
+# Codex Spark: fast grunt work and broad scan/edit tasks
+agent-mux --engine codex --model gpt-5.3-codex-spark --cwd /repo --reasoning high "Add doc comments across src/"
 
-# Claude — architecture, orchestration, open-ended exploration
-agent-mux --engine claude --cwd /path/to/repo --effort high "Design the API schema for..."
+# Claude: architecture, reasoning, synthesis
+agent-mux --engine claude --cwd /repo --effort high --permission-mode bypassPermissions "Design rollout plan for auth refactor"
 
-# OpenCode — third-opinion verification, different model lineage
-agent-mux --engine opencode --model kimi --effort high "Verify the implementation in..."
+# OpenCode: third opinion, model diversity, cost-flexible checks
+agent-mux --engine opencode --cwd /repo --model kimi "Review this patch and challenge assumptions"
 
-# Full access (writes + network for Codex, bypassPermissions for Claude)
-agent-mux --engine codex --full --cwd /path/to/repo "Install deps and implement feature"
+# Skill injection (repeatable)
+agent-mux --engine codex --cwd /repo --skill react --skill test-writer "Implement + test dark mode"
 
-# With MCP clusters
-agent-mux --engine codex --browser --cwd /path "Navigate to site and extract data"
-agent-mux --engine claude --mcp-cluster knowledge "Search KB for auth docs"
+# MCP clusters
+agent-mux --engine claude --cwd /repo --mcp-cluster knowledge "Find canonical docs for token rotation"
+
+# --browser sugar for browser cluster
+agent-mux --engine codex --cwd /repo --browser "Open app, inspect controls, summarize findings"
+
+# Full access mode
+agent-mux --engine codex --cwd /repo --full "Install deps and implement requested fix"
 ```
+
+---
+
+## Engine Selection Protocol
+
+Use this decision tree:
+
+1. Code execution, file edits, implementation -> **Codex** with `--reasoning high`.
+2. Fast grunt work, filesystem scanning, parallel worker throughput -> **Codex Spark** with `--model gpt-5.3-codex-spark`.
+3. Architecture, deep reasoning, multi-file analysis, synthesis, writing -> **Claude**.
+4. Model diversity, third-opinion checks, cost-flexible runs -> **OpenCode**.
+
+_Note: Pratchett-OS coordinator uses Codex + Claude only._
 
 ---
 
 ## CLI Flags
 
+Source of truth: `src/core.ts` (`parseCliArgs`) + `src/types.ts`.
+
 ### Common (all engines)
 
-| Flag | Short | Values | Default | Notes |
-|------|-------|--------|---------|-------|
-| `--engine` | `-E` | `codex`, `claude`, `opencode` | required | Which SDK to use |
-| `--cwd` | `-C` | path | current dir | Working directory |
-| `--model` | `-m` | string | engine-specific | Model identifier |
-| `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` | `medium` | Scales timeout |
-| `--timeout` | `-t` | milliseconds | effort-scaled | Override timeout |
-| `--system-prompt` | `-s` | text | none | Appended system prompt |
-| `--skill` | — | string (repeatable) | none | Load skill from `<cwd>/.claude/skills/<name>/SKILL.md` |
-| `--mcp-cluster` | — | string (repeatable) | none | Enable MCP cluster |
-| `--browser` | `-b` | boolean | false | Sugar for `--mcp-cluster browser` |
-| `--full` | `-f` | boolean | false | Full access mode |
-| `--version` | `-V` | boolean | — | Show version |
-| `--help` | `-h` | boolean | — | Show help |
+| Flag | Short | Type | Values | Default | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `--engine` | `-E` | string | `codex`, `claude`, `opencode` | required | Engine selector |
+| `--cwd` | `-C` | string | path | current directory | Working directory |
+| `--model` | `-m` | string | model id | engine default | Model override |
+| `--effort` | `-e` | string | `low`, `medium`, `high`, `xhigh` | `medium` | Effort level |
+| `--timeout` | `-t` | string | positive integer (ms) | effort-mapped | Hard timeout override |
+| `--system-prompt` | `-s` | string | text | unset | Appended system context |
+| `--skill` | — | string[] | repeatable names | `[]` | Loads `<cwd>/.claude/skills/<name>/SKILL.md` |
+| `--mcp-cluster` | — | string[] | repeatable names | `[]` | Enables MCP cluster(s) |
+| `--browser` | `-b` | boolean | true/false | `false` | Adds `browser` cluster |
+| `--full` | `-f` | boolean | true/false | `false` | Full access mode |
+| `--version` | `-V` | boolean | true/false | `false` | Print version |
+| `--help` | `-h` | boolean | true/false | `false` | Print help |
 
 ### Codex-specific
 
-| Flag | Short | Values | Default |
-|------|-------|--------|---------|
-| `--sandbox` | — | `read-only`, `workspace-write`, `danger-full-access` | `read-only` |
-| `--reasoning` | `-r` | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` |
-| `--network` | `-n` | boolean | false |
-| `--add-dir` | `-d` | path (repeatable) | none |
-
-**Codex model variants:**
-- `gpt-5.3-codex` (default) — full-capability Codex. Thorough, pedantic, strong on complex multi-step tasks.
-- `gpt-5.3-codex-spark` — 1000+ tok/s on Cerebras WSE-3. 128K context (smaller). Equivalent on straightforward coding (SWE-Bench Pro: 56% vs 56.8%), weaker on complex tasks (Terminal-Bench: 58.4% vs 77.3%). Use `--model gpt-5.3-codex-spark`.
-
-**Reasoning level guidance:**
-- `high` — sweet spot for implementation. Fast, detail-oriented, reliable.
-- `xhigh` — deep audits and architecture only. Overthinks routine tasks.
-- `minimal`/`low` — quick checks. Note: `minimal` is incompatible with MCP tools (Codex rejects them).
+| Flag | Short | Type | Values | Default | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `--sandbox` | — | string | `read-only`, `workspace-write`, `danger-full-access` | `read-only` | `--full` forces `danger-full-access` |
+| `--reasoning` | `-r` | string | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Model reasoning effort |
+| `--network` | `-n` | boolean | true/false | `false` | `--full` forces `true` |
+| `--add-dir` | `-d` | string[] | repeatable paths | `[]` | Additional writable dirs |
 
 ### Claude-specific
 
-| Flag | Short | Values | Default |
-|------|-------|--------|---------|
-| `--permission-mode` | `-p` | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `bypassPermissions` |
-| `--max-turns` | — | number | effort-scaled |
-| `--max-budget` | — | USD | none |
-| `--allowed-tools` | — | comma-separated | none |
+| Flag | Short | Type | Values | Default | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `--permission-mode` | `-p` | string | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `bypassPermissions` | `--full` also resolves to `bypassPermissions` |
+| `--max-turns` | — | string | positive integer | effort-derived if unset | Parsed to number when valid |
+| `--max-budget` | — | string | positive number (USD) | unset | Parsed to `maxBudgetUsd` |
+| `--allowed-tools` | — | string | comma-separated tool list | unset | Split into string array |
 
 ### OpenCode-specific
 
-| Flag | Short | Values | Default |
-|------|-------|--------|---------|
-| `--variant` | — | model preset name | none |
-| `--agent` | — | OpenCode agent name | none |
+| Flag | Short | Type | Values | Default | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `--variant` | — | string | preset/model string | unset | Used if `--model` absent |
+| `--agent` | — | string | agent name | unset | OpenCode agent selection |
 
-**OpenCode model presets:** `kimi`, `kimi-k2.5`, `glm`, `glm-5`, `deepseek`, `deepseek-r1`, `qwen`, `qwen-coder`, `qwen-max`, `free`
-Additional: `kimi-free`, `glm-free` (free-tier variants), `opencode-minimax`, `opencode-kimi` (OpenCode native)
+### Canonical enum values from `src/types.ts`
+
+- Engine names: `codex`, `claude`, `opencode`
+- Effort levels: `low`, `medium`, `high`, `xhigh`
 
 ---
 
 ## Output Contract
 
-All engines produce identical JSON on stdout:
+All engines emit one JSON payload to `stdout`.
+
+### Success example
 
 ```json
 {
   "success": true,
   "engine": "codex",
-  "response": "The agent's text output...",
+  "response": "Implemented retries and added tests.",
   "timed_out": false,
-  "duration_ms": 12345,
+  "duration_ms": 84231,
   "activity": {
-    "files_changed": ["src/foo.ts"],
-    "commands_run": ["npm test"],
-    "files_read": ["src/bar.ts"],
+    "files_changed": ["src/http/client.ts"],
+    "commands_run": ["bun test"],
+    "files_read": ["src/http/types.ts"],
     "mcp_calls": ["docs-search/search"],
-    "heartbeat_count": 3
+    "heartbeat_count": 5
   },
   "metadata": {
     "model": "gpt-5.3-codex",
-    "tokens": { "input": 5000, "output": 1200 },
-    "cost_usd": 0.05,
-    "session_id": "...",
-    "turns": 3
+    "session_id": "sess_...",
+    "cost_usd": 0.18,
+    "tokens": { "input": 12840, "output": 2104, "reasoning": 512 },
+    "turns": 4
   }
 }
 ```
 
-Error codes: `INVALID_ARGS`, `MISSING_API_KEY`, `SDK_ERROR`
+### Error example
 
 ```json
 {
   "success": false,
   "engine": "codex",
-  "error": "Error message",
-  "code": "SDK_ERROR",
-  "duration_ms": 500,
-  "activity": { "files_changed": [], "commands_run": [], "files_read": [], "mcp_calls": [], "heartbeat_count": 0 }
+  "error": "--engine is required. Use: codex, claude, opencode",
+  "code": "INVALID_ARGS",
+  "duration_ms": 0,
+  "activity": {
+    "files_changed": [],
+    "commands_run": [],
+    "files_read": [],
+    "mcp_calls": [],
+    "heartbeat_count": 0
+  }
 }
 ```
 
-**Key design:** `timed_out: true` with `success: true` = partial results. Activity log preserved even on timeout.
+### Full JSON Schema (copied from `README.md`)
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "agent-mux output",
+  "oneOf": [
+    {
+      "type": "object",
+      "description": "Successful run (including timeout with partial results).",
+      "required": ["success", "engine", "response", "timed_out", "duration_ms", "activity", "metadata"],
+      "properties": {
+        "success": { "const": true, "description": "Always true for success payloads." },
+        "engine": { "enum": ["codex", "claude", "opencode"], "description": "Engine used for the run." },
+        "response": { "type": "string", "description": "Agent text response. On timeout this can be a placeholder." },
+        "timed_out": { "type": "boolean", "description": "True if timeout fired and run was aborted via AbortSignal." },
+        "duration_ms": { "type": "number", "description": "End-to-end runtime in milliseconds." },
+        "activity": { "$ref": "#/$defs/activity" },
+        "metadata": {
+          "type": "object",
+          "description": "Engine-reported metadata (shape varies by SDK).",
+          "properties": {
+            "session_id": { "type": "string" },
+            "cost_usd": { "type": "number" },
+            "tokens": {
+              "type": "object",
+              "properties": {
+                "input": { "type": "number" },
+                "output": { "type": "number" },
+                "reasoning": { "type": "number" }
+              }
+            },
+            "turns": { "type": "number" },
+            "model": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "description": "Failure payload.",
+      "required": ["success", "engine", "error", "code", "duration_ms", "activity"],
+      "properties": {
+        "success": { "const": false, "description": "Always false for error payloads." },
+        "engine": { "enum": ["codex", "claude", "opencode"] },
+        "error": { "type": "string", "description": "Human-readable error." },
+        "code": { "enum": ["INVALID_ARGS", "MISSING_API_KEY", "SDK_ERROR"], "description": "Failure class." },
+        "duration_ms": { "type": "number" },
+        "activity": { "$ref": "#/$defs/activity" }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "activity": {
+      "type": "object",
+      "description": "Structured activity log collected during execution.",
+      "required": ["files_changed", "commands_run", "files_read", "mcp_calls", "heartbeat_count"],
+      "properties": {
+        "files_changed": { "type": "array", "items": { "type": "string" } },
+        "commands_run": { "type": "array", "items": { "type": "string" } },
+        "files_read": { "type": "array", "items": { "type": "string" } },
+        "mcp_calls": { "type": "array", "items": { "type": "string" } },
+        "heartbeat_count": { "type": "number", "description": "Heartbeat lines emitted to stderr." }
+      },
+      "additionalProperties": false
+    }
+  }
+}
+```
 
 ---
 
 ## Timeout & Effort
 
-| Effort | Timeout | Use Case |
-|--------|---------|----------|
-| `low` | 2 min | Quick checks, smoke tests |
-| `medium` | 10 min | Routine tasks |
-| `high` | 20 min | Implementation, review |
-| `xhigh` | 40 min | Deep analysis, architecture |
+| Effort | Timeout (ms) | Timeout | Guidance |
+| --- | ---: | --- | --- |
+| `low` | `120000` | 2m | quick checks |
+| `medium` | `600000` | 10m | routine tasks |
+| `high` | `1200000` | 20m | workhorse for implementation |
+| `xhigh` | `2400000` | 40m | deep analysis only |
 
 ---
 
 ## Heartbeat Protocol
 
-Every 15 seconds, the agent writes to stderr:
-```
+- Interval: every 15s.
+- Channel: `stderr` only.
+- Format:
+
+```text
 [heartbeat] 45s — processing file changes
 ```
 
-This keeps parent processes from timing out on long-running tasks. SDK noise is suppressed; only heartbeat lines pass through.
+`stdout` is reserved for final JSON output.
+
+---
+
+## Skills
+
+Use `--skill <name>` (repeatable).
+
+Resolution and safety:
+1. Resolve from `<cwd>/.claude/skills/<name>`.
+2. Require `<skillDir>/SKILL.md`.
+3. Reject path traversal names.
+
+Injection behavior:
+- Skill content is prepended as `<skill name="..." source=".../SKILL.md">...</skill>` blocks.
+- If `<skillDir>/scripts` exists, it is prepended to `PATH`.
+- For Codex, resolved skill directories are auto-appended to internal `addDirs` sandbox access.
 
 ---
 
 ## MCP Clusters
 
-MCP clusters are loaded from a YAML config file. No MCP servers enabled by default.
+Config search order:
+1. `./mcp-clusters.yaml`
+2. `~/.config/agent-mux/mcp-clusters.yaml`
 
-**Config file search order:**
-1. `./mcp-clusters.yaml` (project-local)
-2. `~/.config/agent-mux/mcp-clusters.yaml` (user-global)
+`--mcp-cluster` is repeatable. `all` merges all configured clusters.
 
-See `mcp-clusters.example.yaml` for the schema.
-
-### Bundled: agent-browser MCP (25 tools)
-
-agent-mux includes a built-in agent-browser MCP wrapper at `src/mcp-servers/agent-browser.mjs`. It provides 25 browser automation tools with interactive snapshot mode (`-i` flag) for 5-10x token savings.
+Example YAML:
 
 ```yaml
-# In mcp-clusters.yaml
 clusters:
   browser:
+    description: Browser automation
     servers:
       agent-browser:
         command: node
         args:
           - ./src/mcp-servers/agent-browser.mjs
+
+  knowledge:
+    description: Docs/search tools
+    servers:
+      docs-search:
+        command: bunx
+        args:
+          - your-docs-mcp-server
 ```
 
-Requires `agent-browser` CLI installed separately.
+`--browser` is sugar for `--mcp-cluster browser`.
 
-## Skills
-
-Skills are injectable prompt packages that live in `<cwd>/.claude/skills/<name>/`. Each skill has a `SKILL.md` file whose content is prepended to the worker's prompt.
-
-```bash
-# Single skill
-agent-mux --engine codex --skill pratchett-read "Search for auth docs"
-
-# Multiple skills
-agent-mux --engine codex --skill pratchett-read --skill pratchett-write "Migrate docs"
-```
-
-**How it works:**
-1. Resolves `<cwd>/.claude/skills/<name>/SKILL.md`
-2. Prepends SKILL.md content to the prompt (wrapped in `<skill>` tags)
-3. If `<skill-dir>/scripts/` exists, adds it to PATH
-4. For Codex: adds the skill directory to `--add-dir` for sandbox read access
-
----
-
-## Engine Selection Guide
-
-| Need | Engine | Model | Why |
-|------|--------|-------|-----|
-| Code review, audit | codex | default | Sandbox isolation, pedantic attention to detail |
-| Deep architecture audit | codex | default (`xhigh`) | Thorough, catches edge cases |
-| Implementation | codex | default (`high`) | Precise executor, detail-oriented |
-| Fast iteration, refactoring | codex | spark | 1000+ tok/s, fast feedback loops |
-| Filesystem scanning, docstrings | codex | spark | Speed advantage for broad reads |
-| Architecture, design | claude | — | Best reasoning, thrives on ambiguity |
-| Writing, documentation | claude | — | Highest prose quality |
-| Open-ended exploration | claude | — | Handles uncertainty, decides from available info |
-| Prompt crafting for pipelines | claude | — | Natural orchestrator |
-| Third opinion (agentic) | opencode | `glm-5` | Strong agentic engineering, tool-calling |
-| Third opinion (long-context) | opencode | `kimi` | 262K context, multimodal, agent swarm |
-| Third opinion (cost-effective) | opencode | `opencode-minimax` | 80% SWE-bench, absurd value |
-| Smoke test, zero-cost check | opencode | `free` | Free-tier models, basic validation |
-| Multi-model pipeline | All three | — | Maximum blind spot coverage |
+Bundled browser server:
+- `src/mcp-servers/agent-browser.mjs` (agent-browser MCP wrapper)
 
 ---
 
 ## Prompting Guide by Engine
 
-Each engine has different prompting needs. Using Claude-style prompts on Codex causes silent failures.
-
-### Prompting Codex (GPT-5.3)
-
-Codex operates in a sandbox with finite context. Every token spent reading files is a token NOT spent writing output.
+### Codex (GPT-5.3)
 
 **The golden rule:** Tell Codex WHAT to read, WHAT to check, and WHERE to write. Never say "explore" or "audit everything."
 
-**Prompt structure that works:**
-1. State the goal in one sentence
-2. List specific files to read
-3. Define the output format
-4. Constrain the scope
+**What works:** One goal per invocation. Explicit file targets. Concrete deliverables (patches, tests). LOC limits and style constraints. Bias toward action.
 
-**What works:**
-- Batch file reads in parallel
-- Bias toward action — "deliver working code, not just a plan"
-- One clear deliverable per invocation
-- Explicit output path
-- LOC limits and style constraints
+**What fails:** "Audit the entire codebase." Multi-goal prompts. Upfront planning announcements (causes premature stopping). Open-ended exploration.
 
-**What fails:**
-- "Audit the entire codebase" — burns tokens reading files, produces nothing
-- "Read all files and design architecture" — too exploratory
-- Upfront planning announcements — causes premature stopping
-- Multi-goal prompts — causes partial completion
+**Model variants:**
+- `gpt-5.3-codex` (default) -- thorough, pedantic, strong on complex multi-step tasks
+- `gpt-5.3-codex-spark` -- 1000+ tok/s, 128K context, equivalent on SWE-Bench Pro (56% vs 56.8%), weaker on complex tasks (Terminal-Bench: 58.4% vs 77.3%)
 
-### Prompting Codex Spark
+**Reasoning levels:** `high` = implementation sweet spot. `xhigh` = deep audits only (overthinks routine work). `minimal` = incompatible with MCP tools.
 
-Spark is 15x faster but has a smaller context window (128K) and weaker performance on complex multi-step tasks. Same prompting discipline as regular Codex, tighter scope.
+### Codex Spark
 
-**What works:**
-- Focused, single-goal tasks (even more important than regular Codex)
-- Fast iteration cycles — submit, review, refine
-- Filesystem-wide reads where speed matters (scanning, generating docs)
-- Parallel batch operations (multiple Spark workers on independent subtasks)
+Same prompting discipline as Codex, tighter scope. Use for: parallel workers, filesystem scanning, docstring generation, fast iteration cycles.
 
-**What fails:**
-- Complex multi-file refactors (use regular Codex)
-- Tasks requiring deep reasoning or architecture (use regular Codex `xhigh`, or Claude)
-- Large context requirements beyond 128K (use regular Codex or Claude)
+Avoid for: complex multi-file refactors, deep reasoning, context beyond 128K.
 
-**When to use Spark vs Regular Codex:**
+### Claude (Opus 4.6)
 
-| Factor | Spark | Regular Codex |
-|--------|-------|---------------|
-| Task complexity | Straightforward to medium | Hard, multi-step |
-| Context needed | <128K | >128K |
-| Iteration speed | Critical | Not critical |
-| Multi-file refactor | No | Yes |
-| Parallel workers | Yes (fast) | Yes (thorough) |
+**What works:** Open-ended exploration. Multi-goal when needed. Writing and documentation. Prompt crafting for other engines. Architecture with tradeoff reasoning.
 
-### Prompting Claude (Opus 4.6)
+### OpenCode
 
-**What works:**
-- Open-ended exploration (Claude thrives on ambiguity — decides from available info)
-- Multi-goal when needed (Claude manages complexity)
-- Writing-focused (Claude's prose quality is highest)
-- Prompt crafting for other engines (natural orchestrator)
-- Architecture and system design where tradeoffs need reasoning
+**What works:** End-to-end deliverable framing. Structured output requests. Cross-checking other engines.
 
-### Prompting OpenCode Models
-
-**What works:**
-- End-to-end deliverable framing (not discussions)
-- Richer context than Codex prompts (especially GLM-5)
-- Structured output requests for pipeline integration
-- Chinese/multilingual content
-
-**Model selection within OpenCode:**
-
-| Model | Preset | Pricing (per M tokens) | Best For | Avoid For |
-|-------|--------|------------------------|----------|-----------|
-| Kimi K2.5 | `kimi` | $0.45 in / $2.25 out | Long-context (262K), multimodal, agent swarm, visual coding | Cost-sensitive runs |
-| GLM-5 | `glm-5` | $0.80 in / $2.56 out | Agentic engineering, tool-heavy workflows, self-correction | Quick checks, creative writing |
-| MiniMax M2.5 | `opencode-minimax` | Free (native) | Cost-effective coding verification (80% SWE-bench) | Deep architectural reasoning |
-| DeepSeek R1 | `deepseek-r1` | Free | Code reasoning, algorithm analysis | Document generation |
-| Qwen Coder | `qwen-coder` | varies | Code-focused tasks, test generation | Non-code tasks |
-| Free tier | `free` | $0 | Smoke tests, zero-cost validation | Production-critical decisions |
-
-**Note:** Most OpenCode models incur per-token costs via OpenRouter. Only `free`, `deepseek-r1`, `kimi-free`, `glm-free`, and `opencode-*` presets are zero-cost. Budget accordingly for named models.
+**Key presets:** `kimi` (262K context, multimodal), `glm-5` (agentic engineering, tool-heavy), `opencode-minimax` (free, 80% SWE-bench), `deepseek-r1` (free, code reasoning), `free` (zero-cost smoke tests).
 
 ### Engine Comparison
 
-| Aspect | Claude (Opus 4.6) | Codex (5.3) | Codex Spark | OpenCode (varies) |
-|--------|-------------------|-------------|-------------|-------------------|
-| Speed | ~65-70 tok/s | ~65-70 tok/s | 1000+ tok/s | Varies |
-| Context window | 1M (beta) | Standard | 128K | 200-262K |
-| Exploration | Thrives on ambiguity | Needs tight scope | Needs tight scope | Moderate (GLM-5 handles autonomy) |
-| Tool calling | Good | Good | Good (tends to over-tool) | Excellent (GLM-5, Kimi) |
-| Planning | Natural orchestrator | Skip planning, bias to action | Skip planning, bias to speed | Good autonomous (GLM-5) |
-| Coding (SWE-bench) | 72-81% | Frontier | ~equivalent on SWE-bench Pro | 77-80% (GLM-5, MiniMax) |
-| Prompting style | Open-ended, multi-goal OK | One goal, explicit files, action-biased | Same as Codex, simpler tasks | End-to-end deliverables |
-| Cost model | Subscription (Max plan) | Subscription (Pro) | Subscription (Pro) | Per-token via OpenRouter |
+| Aspect | Codex (5.3) | Codex Spark | Claude (Opus 4.6) | OpenCode (varies) |
+| --- | --- | --- | --- | --- |
+| Speed | ~65-70 tok/s | 1000+ tok/s | ~65-70 tok/s | Varies |
+| Context | Standard | 128K | 1M (beta) | 200-262K |
+| Prompting | One goal, explicit files | Same, simpler tasks | Open-ended, multi-goal OK | End-to-end deliverables |
+| Best for | Implementation, review | Fast grunt work | Architecture, writing | Third opinion, diversity |
+| Fails on | Open-ended exploration | Complex multi-step | Drift without constraints | Vague prompts |
 
 ---
 
-## Files
+## Bundled Resources Index
 
-- **Entry point:** `src/agent.ts`
-- **Core (CLI, heartbeat, output):** `src/core.ts`
-- **Types:** `src/types.ts`
-- **MCP clusters:** `src/mcp-clusters.ts`
-- **Codex engine:** `src/engines/codex.ts`
-- **Claude engine:** `src/engines/claude.ts`
-- **OpenCode engine:** `src/engines/opencode.ts`
+| Path | What | When to load |
+| --- | --- | --- |
+| `src/agent.ts` | CLI entrypoint and adapter dispatch | Trace invocation path |
+| `src/core.ts` | parseCliArgs, timeout, heartbeat, output assembly | Always for behavior truth |
+| `src/types.ts` | canonical engine/effort/output types | Always for contract truth |
+| `src/mcp-clusters.ts` | MCP config discovery and merge logic | MCP cluster setup/debug |
+| `src/engines/codex.ts` | Codex adapter | Codex option/event behavior |
+| `src/engines/claude.ts` | Claude adapter | Claude permissions/turn behavior |
+| `src/engines/opencode.ts` | OpenCode adapter + model presets | OpenCode model routing |
+| `src/mcp-servers/agent-browser.mjs` | Bundled browser MCP wrapper | Browser automation integration |
+| `setup.sh` | bootstrap script | First install or environment repair |
+| `mcp-clusters.example.yaml` | starter MCP config | Creating cluster config |
+| `CHANGELOG.md` | release history | Verify version-specific behavior |
+| `tests/` | test suite | Validate changes/regressions |
+
+---
+
+## Anti-Patterns
+
+- Do not use `--sandbox danger-full-access` unless explicitly authorized.
+- Do not parse agent-mux output as text. Always parse JSON from stdout.
+- Do not run parallel browser workers. One browser session at a time.
+- Do not read agent output files with full Read; use `tail -n 20` via Bash.
+- Do not use `--reasoning minimal` with MCP tools (Codex rejects them).
+- Do not send exploration tasks to Codex; use Claude for open-ended work.
+- Do not use `xhigh` effort for routine tasks; `high` is the workhorse.
