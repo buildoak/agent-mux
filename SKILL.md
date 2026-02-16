@@ -76,6 +76,7 @@ agent-mux --engine claude --mcp-cluster knowledge "Search KB for auth docs"
 | `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` | `medium` | Scales timeout |
 | `--timeout` | `-t` | milliseconds | effort-scaled | Override timeout |
 | `--system-prompt` | `-s` | text | none | Appended system prompt |
+| `--skill` | — | string (repeatable) | none | Load skill from `<cwd>/.claude/skills/<name>/SKILL.md` |
 | `--mcp-cluster` | — | string (repeatable) | none | Enable MCP cluster |
 | `--browser` | `-b` | boolean | false | Sugar for `--mcp-cluster browser` |
 | `--full` | `-f` | boolean | false | Full access mode |
@@ -214,6 +215,24 @@ clusters:
 ```
 
 Requires `agent-browser` CLI installed separately.
+
+## Skills
+
+Skills are injectable prompt packages that live in `<cwd>/.claude/skills/<name>/`. Each skill has a `SKILL.md` file whose content is prepended to the worker's prompt.
+
+```bash
+# Single skill
+agent-mux --engine codex --skill pratchett-read "Search for auth docs"
+
+# Multiple skills
+agent-mux --engine codex --skill pratchett-read --skill pratchett-write "Migrate docs"
+```
+
+**How it works:**
+1. Resolves `<cwd>/.claude/skills/<name>/SKILL.md`
+2. Prepends SKILL.md content to the prompt (wrapped in `<skill>` tags)
+3. If `<skill-dir>/scripts/` exists, adds it to PATH
+4. For Codex: adds the skill directory to `--add-dir` for sandbox read access
 
 ---
 

@@ -111,7 +111,10 @@ export class CodexEngine implements EngineAdapter {
     callbacks.onHeartbeat("starting codex agent");
 
     // Use runStreamed for heartbeat-compatible execution
-    const streamedTurn = await thread.runStreamed(config.prompt, {
+    const fullPrompt = config.systemPrompt
+      ? `<system-context>\n${config.systemPrompt}\n</system-context>\n\n${config.prompt}`
+      : config.prompt;
+    const streamedTurn = await thread.runStreamed(fullPrompt, {
       signal: config.signal,
     });
 

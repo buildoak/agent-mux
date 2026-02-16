@@ -12,7 +12,7 @@
 
 import { parseArgs } from "node:util";
 import { readFileSync, existsSync } from "node:fs";
-import { resolve, dirname, join } from "node:path";
+import { resolve, dirname, join, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveClusters, listClusters } from "./mcp-clusters.ts";
@@ -40,6 +40,7 @@ export interface ParsedConfig {
   engine: EngineName;
   prompt: string;
   cwd: string;
+  skills: Array<{ name: string; dir: string; content: string; hasScripts: boolean }>;
   model?: string;
   effort: EffortLevel;
   timeout: number;
@@ -63,6 +64,7 @@ Common Options:
   -e, --effort <level>       Effort: low, medium (default), high, xhigh
   -t, --timeout <ms>         Timeout in ms (default: effort-scaled)
   -s, --system-prompt <text> System prompt (appended)
+      --skill <name>         Load skill (repeatable, reads <cwd>/.claude/skills/<name>/SKILL.md)
       --mcp-cluster <name>   Enable MCP cluster (repeatable)
   -b, --browser              Sugar for --mcp-cluster browser
   -f, --full                 Full access mode
@@ -123,6 +125,7 @@ export function parseCliArgs(): ParseResult {
         effort: { type: "string", short: "e" },
         timeout: { type: "string", short: "t" },
         "system-prompt": { type: "string", short: "s" },
+        skill: { type: "string", multiple: true },
         "mcp-cluster": { type: "string", multiple: true },
         browser: { type: "boolean", short: "b" },
         full: { type: "boolean", short: "f" },
@@ -208,6 +211,7 @@ export function parseCliArgs(): ParseResult {
     // Engine-specific options bag
     const engineOptions: Record<string, unknown> = {};
     const fullMode = values.full === true;
+    const cwd = values.cwd || process.cwd();
 
     // Codex options
     if (engine === "codex") {
@@ -218,6 +222,7 @@ export function parseCliArgs(): ParseResult {
       engineOptions.reasoning = (values.reasoning as string) || "medium";
       engineOptions.network = fullMode || values.network === true;
       engineOptions.addDirs = (values["add-dir"] as string[] | undefined) ?? [];
+      // Codex: add skill directories for sandbox access (will be populated after skill resolution below)
     }
 
     // Claude options
@@ -252,12 +257,50 @@ export function parseCliArgs(): ParseResult {
       if (values.agent) engineOptions.agent = values.agent;
     }
 
+    // Skill resolution
+    const skillNames = (values["skill"] as string[] | undefined) ?? [];
+    const resolvedSkills: Array<{ name: string; dir: string; content: string; hasScripts: boolean }> = [];
+
+    for (const name of skillNames) {
+      const skillsRoot = resolve(cwd, ".claude", "skills");
+      const skillDir = resolve(skillsRoot, name);
+      // Validate the resolved path is inside skills root
+      if (!skillDir.startsWith(skillsRoot + "/") && skillDir !== skillsRoot) {
+        return {
+          kind: "invalid",
+          error: `Invalid skill name '${name}': path traversal detected`,
+          engine,
+        };
+      }
+      const skillMdPath = join(skillDir, "SKILL.md");
+      if (!existsSync(skillMdPath)) {
+        return {
+          kind: "invalid",
+          error: `Skill '${name}' not found: expected SKILL.md at ${skillMdPath}`,
+          engine,
+        };
+      }
+      const content = readFileSync(skillMdPath, "utf-8");
+      const scriptsDir = join(skillDir, "scripts");
+      const hasScripts = existsSync(scriptsDir);
+      resolvedSkills.push({ name, dir: skillDir, content, hasScripts });
+    }
+
+    if (engine === "codex" && resolvedSkills.length > 0) {
+      const existingDirs = (engineOptions.addDirs as string[]) || [];
+      for (const skill of resolvedSkills) {
+        existingDirs.push(skill.dir);
+      }
+      engineOptions.addDirs = existingDirs;
+    }
+
     return {
       kind: "ok",
       config: {
         engine,
         prompt,
-        cwd: values.cwd || process.cwd(),
+        cwd,
+        skills: resolvedSkills,
         model: values.model || undefined,
         effort,
         timeout,
@@ -423,6 +466,7 @@ export async function execute(
       originalStderrWrite = null;
     }
   };
+  const originalPath = process.env.PATH;
 
   // AbortController for timeout and graceful shutdown
   const abortController = new AbortController();
@@ -446,14 +490,30 @@ export async function execute(
     clearTimeout(timeoutId);
     heartbeat.stop();
     restoreStderr();
+    if (originalPath !== undefined) {
+      process.env.PATH = originalPath;
+    }
     if (options.handleSignals) {
       process.removeListener("SIGINT", shutdownHandler);
       process.removeListener("SIGTERM", shutdownHandler);
     }
   };
 
-  // Prepend time budget to prompt
-  const timeAwarePrompt = `You have a time budget of ${config.timeout / 1000} seconds. Prioritize delivering complete output over exploration.\n\n${config.prompt}`;
+  // Build skill-augmented prompt
+  let skillPrefix = "";
+  for (const skill of config.skills) {
+    skillPrefix += `<skill name="${skill.name.replace(/"/g, "&quot;")}" source="${skill.dir.replace(/"/g, "&quot;")}/SKILL.md">\n${skill.content}\n</skill>\n\n`;
+  }
+  const basePrompt = skillPrefix + config.prompt;
+  const timeAwarePrompt = `You have a time budget of ${config.timeout / 1000} seconds. Prioritize delivering complete output over exploration.\n\n${basePrompt}`;
+
+  // Add skill scripts/ directories to PATH
+  const skillScriptDirs = config.skills
+    .filter((s) => s.hasScripts)
+    .map((s) => join(s.dir, "scripts"));
+  if (skillScriptDirs.length > 0) {
+    process.env.PATH = skillScriptDirs.join(delimiter) + delimiter + (process.env.PATH || "");
+  }
 
   const callbacks: EngineCallbacks = {
     onHeartbeat(activity: string) {
