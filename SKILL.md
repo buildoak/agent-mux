@@ -23,74 +23,17 @@ agent-mux --engine <codex|claude|opencode> [options] "prompt"
 
 ---
 
-## First Time Setup
+## Setup
 
 ```bash
+git clone https://github.com/buildoak/agent-mux.git /path/to/agent-mux
 cd /path/to/agent-mux && ./setup.sh && bun link
 ```
 
----
+- **Claude Code:** copy this repo into `.claude/skills/agent-mux/`
+- **Codex CLI:** append this SKILL.md content to your project's root `AGENTS.md`
 
-## How to install this skill
-
-Pick one option below. Option 1 is fastest if you already have an AI coding agent running.
-
-### Option 1: Tell your AI agent (easiest)
-
-Paste this into your AI agent chat:
-
-> Install the agent-mux skill from https://github.com/buildoak/agent-mux
-
-The agent will read this `SKILL.md` and install it for your environment.
-
-### Option 2: Clone and copy
-
-```bash
-# 1. Clone the repo
-git clone https://github.com/buildoak/agent-mux.git /tmp/agent-mux
-
-# 2A. Claude Code: copy this skill folder into your project
-mkdir -p /path/to/your-project/.claude/skills
-cp -R /tmp/agent-mux /path/to/your-project/.claude/skills/agent-mux
-
-# 2B. Codex CLI: Codex reads AGENTS.md only
-touch /path/to/your-project/AGENTS.md
-{
-  echo
-  echo "<!-- fieldwork-skill:agent-mux -->"
-  cat /tmp/agent-mux/SKILL.md
-} >> /path/to/your-project/AGENTS.md
-
-# 3. Run setup (Bun runtime install + typecheck)
-cd /tmp/agent-mux && ./setup.sh
-```
-
-### Option 3: Download just this skill
-
-```bash
-# 1. Download and extract the repo zip
-curl -L -o /tmp/agent-mux.zip https://github.com/buildoak/agent-mux/archive/refs/heads/main.zip
-unzip -q /tmp/agent-mux.zip -d /tmp
-
-# 2A. Claude Code: copy this skill folder into your project
-mkdir -p /path/to/your-project/.claude/skills
-cp -R /tmp/agent-mux-main /path/to/your-project/.claude/skills/agent-mux
-
-# 2B. Codex CLI: Codex reads AGENTS.md only
-touch /path/to/your-project/AGENTS.md
-{
-  echo
-  echo "<!-- fieldwork-skill:agent-mux -->"
-  cat /tmp/agent-mux-main/SKILL.md
-} >> /path/to/your-project/AGENTS.md
-
-# 3. Run setup (Bun runtime install + typecheck)
-cd /tmp/agent-mux-main && ./setup.sh
-```
-
-For Codex CLI, do not use `codex.md` or `.codex/skills/`. Root `AGENTS.md` is the only instruction source.
-
-For a detailed installation walkthrough, see [references/installation-guide.md](references/installation-guide.md).
+For the full installation walkthrough (prerequisites, verification, troubleshooting), see [references/installation-guide.md](references/installation-guide.md).
 
 ---
 
