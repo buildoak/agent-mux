@@ -10,13 +10,24 @@ Three problems this solves:
 
 3. **The 10x pattern.** Inside Claude Code's `Task` subagents, you can spawn agent-mux workers. Claude architects the plan, Codex executes the code, a second Claude verifies the result — all within one coordinated pipeline. This is how [gsd-coordinator](https://github.com/buildoak/fieldwork-skills/tree/main/skills/gsd-coordinator) works.
 
-One CLI. One output contract. Any engine. Runtime: Bun only (`#!/usr/bin/env bun`).
+One CLI. One output contract. Any engine. Runtime: Bun (`#!/usr/bin/env bun`). Browser automation (`--browser`) additionally requires Node and the `agent-browser` CLI.
 
 ## What you get
 - **Unified output contract** — all engines return the same JSON shape, no format translation.
 - **Skill injection** — load reusable `SKILL.md` runbooks with `--skill`, dispatch through any engine.
 - **Heartbeat protocol** — progress signals every 15s on stderr for long-running tasks.
 - **Effort-scaled timeouts** — task duration automatically adjusts based on complexity level.
+- **Activity tracking** — structured log of files changed, commands run, files read, and MCP calls for every run.
+
+## The 10x Pattern
+Inside Claude Code, you spawn `Task` subagents. Those subagents can call `agent-mux` to dispatch Codex workers. Claude architects the plan, Codex executes the code, and Claude reads the result and verifies it.
+
+Concrete flow:
+1. Claude Task subagent receives `Refactor auth module`.
+2. Subagent calls `agent-mux --engine codex --sandbox workspace-write --reasoning high "Refactor auth module in src/auth/"`.
+3. Subagent parses JSON output, reads the `response` field, and verifies the changes.
+
+`agent-mux` is the execution substrate, not an orchestrator. Coordination logic lives in the calling agent (`Task`, `gsd-coordinator`, etc.). Reference implementation: [gsd-coordinator](https://github.com/buildoak/fieldwork-skills/tree/main/skills/gsd-coordinator).
 
 ## Prerequisites
 **Runtime:** [Bun](https://bun.sh) >= 1.0.0
@@ -67,7 +78,7 @@ agent-mux --engine <codex|claude|opencode> [flags] "your prompt"
 | `--skill` |  | string (repeatable) | none | Loads `<cwd>/.claude/skills/<name>/SKILL.md` |
 | `--mcp-cluster` |  | string (repeatable) | none | Enables named cluster(s) |
 | `--browser` | `-b` | boolean | `false` | Sugar for `--mcp-cluster browser` |
-| `--full` | `-f` | boolean | `false` | Full-access mode |
+| `--full` | `-f` | boolean | `false` | Full-access mode (Codex: danger-full-access + network; Claude: bypassPermissions; OpenCode: no effect) |
 | `--help` | `-h` | boolean | `false` | Show help |
 | `--version` | `-V` | boolean | `false` | Show version |
 
@@ -79,6 +90,8 @@ Effort defaults:
 | `medium` | `600000` ms (10 min) |
 | `high` | `1200000` ms (20 min) |
 | `xhigh` | `2400000` ms (40 min) |
+
+`agent-mux` prepends a time-budget instruction to every prompt, telling the agent how much wall-clock time it has. This affects agent behavior -- agents will scope their work to fit the budget.
 
 ### Codex Flags
 | Flag | Short | Values | Default | Notes |
@@ -92,9 +105,9 @@ Effort defaults:
 | Flag | Short | Values | Default | Notes |
 | --- | --- | --- | --- | --- |
 | `--permission-mode` | `-p` | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `bypassPermissions` | `--full` forces `bypassPermissions` |
-| `--max-turns` |  | positive integer | effort-scaled (`5/15/30/50`) | Runtime default set by effort |
+| `--max-turns` |  | positive integer | effort-scaled (`5/15/30/50`) | Effort-based defaults: low=5, medium=15, high=30, xhigh=50 turns |
 | `--max-budget` |  | positive number (USD) | unset | Budget cap |
-| `--allowed-tools` |  | comma-separated list | unset | Tool whitelist |
+| `--allowed-tools` |  | comma-separated list | unset | When MCP clusters are active, `mcp_*` wildcards are auto-appended to the allowed tools list. |
 
 ### OpenCode Flags
 | Flag | Short | Values | Default | Notes |
@@ -178,22 +191,38 @@ OpenCode presets include `kimi`, `kimi-k2.5`, `glm`, `glm-5`, `deepseek`, `deeps
 }
 ```
 
+Timed-out and gracefully-stopped runs return `success: true` with `timed_out: true`. The `response` field may contain partial output or a placeholder. Downstream parsers should always check the `timed_out` field.
+
+`stdout` is reserved for the final JSON payload. `stderr` carries heartbeat lines and filtered SDK output. Never mix the two when parsing.
+
 ## Skill System
-`agent-mux` is both a skill host and a skill-style package.
-
-It includes `SKILL.md`, `setup.sh`, and bundled runtime scripts (including MCP wrappers under `src/mcp-servers/`).
-
 Load external skills with repeatable `--skill` flags:
 
 ```bash
 agent-mux --engine codex --skill reviewer --skill migrations "Review and harden schema migration"
 ```
 
-Skill resolution path and behavior:
-- Reads `<cwd>/.claude/skills/<name>/SKILL.md`.
-- Injects each skill into the prompt as a `<skill ...>` block.
-- Adds `<skill>/scripts/` to `PATH` if present.
-- On Codex, adds each skill directory to writable `--add-dir` paths.
+Core mechanics:
+- `--skill <name>` resolves `SKILL.md` from `<cwd>/.claude/skills/<name>/SKILL.md`.
+- Skill contents are injected into the prompt as prepended `<skill name="...">...</skill>` XML blocks.
+- If `<skillDir>/scripts/` exists, it is prepended to `PATH` for the run.
+- On Codex, each resolved skill directory is auto-added to writable `addDirs` (`--add-dir` behavior).
+- Path traversal protection rejects invalid names that escape skills root (for example `..`) and absolute `/...` paths.
+
+### agent-mux as a skill
+`agent-mux` itself ships as a skill via `SKILL.md` at the repo root, with `setup.sh` for first-time setup. An AI agent can read `SKILL.md`, run `setup.sh`, and start dispatching workers autonomously.
+
+Clone the repo, read `SKILL.md`, run `setup.sh`, and invoke `agent-mux` -- the skill document teaches the agent everything it needs.
+
+### Skill anatomy
+A skill is a directory under `<cwd>/.claude/skills/<name>/` containing at minimum a `SKILL.md` file.
+
+Optional components:
+- `scripts/` directory (auto-added to `PATH`)
+- `references/` directory (loaded on demand)
+- `setup.sh` (for first-time install)
+
+Skills are injected as `<skill name="...">` XML blocks prepended to the prompt.
 
 ## MCP Clusters
 Define clusters in YAML and enable them per run.
@@ -224,6 +253,7 @@ clusters:
 ```
 
 `--browser` is sugar for `--mcp-cluster browser`.
+The special name `all` merges every cluster defined in your config. On Codex, non-selected cluster servers are explicitly disabled to prevent unintended tool exposure.
 
 ```bash
 agent-mux --engine codex --browser "Capture a screenshot"
@@ -247,6 +277,15 @@ cd agent-mux
 bun run src/agent.ts --engine codex "Summarize this repo"
 ```
 
+## Bundled Reference Docs
+| Doc | What |
+| --- | --- |
+| `references/engine-comparison.md` | Detailed engine table, timeout mapping, sandbox/permission modes |
+| `references/prompting-guide.md` | Engine-specific prompting tips, model variants, comparison tables |
+| `references/output-contract.md` | Full JSON schema with field descriptions and examples |
+
+For release history, see `CHANGELOG.md`. For full operational usage, see `SKILL.md`.
+
 ## Troubleshooting
 **`agent-mux: command not found`**
 
@@ -258,14 +297,11 @@ bun run /path/to/agent-mux/src/agent.ts --engine codex "your prompt"
 
 **`MISSING_API_KEY` error**
 
-Set the right env var or use SDK auth:
+`agent-mux` warns when an API key env var is missing, but it does not hard-fail if another auth path is available.
 
-```bash
-export OPENAI_API_KEY="sk-..."        # codex
-export ANTHROPIC_API_KEY="sk-ant-..." # claude
-export OPENROUTER_API_KEY="sk-or-..." # opencode
-codex auth
-```
+- Codex supports OAuth fallback via `codex auth` (`~/.codex/auth.json`) when `OPENAI_API_KEY` is unset.
+- Claude SDK supports device OAuth when `ANTHROPIC_API_KEY` is unset.
+- `MISSING_API_KEY` appears only when no supported auth method is available for the selected engine.
 
 **`Unknown MCP cluster: '...'`**
 
@@ -298,6 +334,13 @@ bun install
 bun test
 bunx tsc --noEmit
 ```
+
+## What setup.sh Does
+The bootstrap script is idempotent:
+1. Installs Bun dependencies
+2. Runs TypeScript type-check
+3. Copies mcp-clusters.example.yaml to ~/.config/agent-mux/ if no config exists
+4. Checks which API keys are available and reports status
 
 ## License
 [MIT](./LICENSE)
