@@ -23,11 +23,11 @@ One CLI. One output contract. Any engine. Runtime: Bun only (`#!/usr/bin/env bun
 
 **API keys** (only the engine you use needs its key):
 
-| Engine | Env Var | Required? | Notes |
-| --- | --- | --- | --- |
-| `codex` | `OPENAI_API_KEY` | No | API key **or** OAuth device auth via `codex auth` (`~/.codex/auth.json`) |
-| `claude` | `ANTHROPIC_API_KEY` | No | Claude Code SDK also supports device OAuth when no key is set |
-| `opencode` | `OPENROUTER_API_KEY` | No | Or configure provider-specific keys directly in OpenCode |
+| Engine | Env Var | Notes |
+| --- | --- | --- |
+| `codex` | `OPENAI_API_KEY` | API key **or** OAuth device auth via `codex auth` (`~/.codex/auth.json`) |
+| `claude` | `ANTHROPIC_API_KEY` | Claude Code SDK also supports device OAuth when no key is set |
+| `opencode` | `OPENROUTER_API_KEY` | Or configure provider-specific keys directly in OpenCode |
 
 **MCP clusters** are optional and only needed with `--mcp-cluster`.
 
