@@ -277,14 +277,32 @@ cd agent-mux
 bun run src/agent.ts --engine codex "Summarize this repo"
 ```
 
+For a detailed installation walkthrough (including Codex CLI setup), see [references/installation-guide.md](references/installation-guide.md).
+
 ## Bundled Reference Docs
 | Doc | What |
 | --- | --- |
 | `references/engine-comparison.md` | Detailed engine table, timeout mapping, sandbox/permission modes |
 | `references/prompting-guide.md` | Engine-specific prompting tips, model variants, comparison tables |
 | `references/output-contract.md` | Full JSON schema with field descriptions and examples |
+| `references/installation-guide.md` | Agent-readable installation walkthrough for Claude Code and Codex CLI |
 
 For release history, see `CHANGELOG.md`. For full operational usage, see `SKILL.md`.
+
+## Staying Updated
+
+agent-mux ships with structured update infrastructure for AI agents:
+
+| File | Purpose |
+| --- | --- |
+| `UPDATES.md` | Structured changelog listing new, changed, and removed files per release |
+| `UPDATE-GUIDE.md` | Step-by-step instructions for AI agents to apply updates safely |
+
+To check for updates, tell your AI agent: "Check UPDATES.md in agent-mux for any new features or changes."
+
+To apply updates, tell your agent: "Read UPDATE-GUIDE.md and apply the latest changes from UPDATES.md."
+
+The update guide ensures customized files (like `mcp-clusters.yaml`) are never overwritten without asking.
 
 ## Troubleshooting
 **`agent-mux: command not found`**

@@ -31,6 +31,69 @@ cd /path/to/agent-mux && ./setup.sh && bun link
 
 ---
 
+## How to install this skill
+
+Pick one option below. Option 1 is fastest if you already have an AI coding agent running.
+
+### Option 1: Tell your AI agent (easiest)
+
+Paste this into your AI agent chat:
+
+> Install the agent-mux skill from https://github.com/buildoak/agent-mux
+
+The agent will read this `SKILL.md` and install it for your environment.
+
+### Option 2: Clone and copy
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/buildoak/agent-mux.git /tmp/agent-mux
+
+# 2A. Claude Code: copy this skill folder into your project
+mkdir -p /path/to/your-project/.claude/skills
+cp -R /tmp/agent-mux /path/to/your-project/.claude/skills/agent-mux
+
+# 2B. Codex CLI: Codex reads AGENTS.md only
+touch /path/to/your-project/AGENTS.md
+{
+  echo
+  echo "<!-- fieldwork-skill:agent-mux -->"
+  cat /tmp/agent-mux/SKILL.md
+} >> /path/to/your-project/AGENTS.md
+
+# 3. Run setup (Bun runtime install + typecheck)
+cd /tmp/agent-mux && ./setup.sh
+```
+
+### Option 3: Download just this skill
+
+```bash
+# 1. Download and extract the repo zip
+curl -L -o /tmp/agent-mux.zip https://github.com/buildoak/agent-mux/archive/refs/heads/main.zip
+unzip -q /tmp/agent-mux.zip -d /tmp
+
+# 2A. Claude Code: copy this skill folder into your project
+mkdir -p /path/to/your-project/.claude/skills
+cp -R /tmp/agent-mux-main /path/to/your-project/.claude/skills/agent-mux
+
+# 2B. Codex CLI: Codex reads AGENTS.md only
+touch /path/to/your-project/AGENTS.md
+{
+  echo
+  echo "<!-- fieldwork-skill:agent-mux -->"
+  cat /tmp/agent-mux-main/SKILL.md
+} >> /path/to/your-project/AGENTS.md
+
+# 3. Run setup (Bun runtime install + typecheck)
+cd /tmp/agent-mux-main && ./setup.sh
+```
+
+For Codex CLI, do not use `codex.md` or `.codex/skills/`. Root `AGENTS.md` is the only instruction source.
+
+For a detailed installation walkthrough, see [references/installation-guide.md](references/installation-guide.md).
+
+---
+
 ## Quick Reference
 
 ```bash
@@ -200,3 +263,15 @@ See `mcp-clusters.example.yaml` for config format.
 - Do not use `--reasoning minimal` with MCP tools (Codex rejects them).
 - Do not send exploration tasks to Codex; use Claude for open-ended work.
 - Do not use `xhigh` effort for routine tasks; `high` is the workhorse.
+
+---
+
+## Staying Updated
+
+This skill ships with an `UPDATES.md` changelog and `UPDATE-GUIDE.md` for your AI agent.
+
+After installing, tell your agent: "Check `UPDATES.md` in the agent-mux skill for any new features or changes."
+
+When updating, tell your agent: "Read `UPDATE-GUIDE.md` and apply the latest changes from `UPDATES.md`."
+
+Follow `UPDATE-GUIDE.md` so customized local files are diffed before any overwrite.
