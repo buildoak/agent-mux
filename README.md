@@ -2,17 +2,21 @@
 [![CI](https://github.com/buildoak/agent-mux/actions/workflows/ci.yml/badge.svg)](https://github.com/buildoak/agent-mux/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Your AI coding agents deserve better than raw SDK calls.
+Three problems this solves:
 
-One CLI. One output contract. Skill injection. Heartbeat protocol. `agent-mux` lets Codex, Claude Code, and OpenCode run behind the same interface so orchestration code stays simple. Write a skill once and dispatch it through any engine. For most teams, CLI tools + skills beat thin MCP wrappers.
+1. **Claude Code can't natively use Codex as a subagent.** Claude already has `Task` subagents and is a natural prompt master — it knows how to delegate. But it can't reach Codex or OpenCode out of the box. agent-mux bridges that gap: Claude dispatches Codex workers the same way it dispatches its own subagents.
 
-Runtime: Bun only (`#!/usr/bin/env bun`).
+2. **Codex has no subagent system at all.** No `Task` tool, no nested agents, no orchestration primitives. agent-mux gives Codex the ability to spawn workers across any engine — including Claude — through one CLI command with one JSON contract.
 
-## Why agent-mux?
-- Unified output contract: all engines return the same JSON shape.
-- Skill injection: load reusable `SKILL.md` instructions with `--skill`.
-- Heartbeat protocol: progress lines every 15s on stderr.
-- Effort-scaled timeouts: default timeout tracks task depth.
+3. **The 10x pattern.** Inside Claude Code's `Task` subagents, you can spawn agent-mux workers. Claude architects the plan, Codex executes the code, a second Claude verifies the result — all within one coordinated pipeline. This is how [gsd-coordinator](https://github.com/buildoak/fieldwork-skills/tree/main/skills/gsd-coordinator) works.
+
+One CLI. One output contract. Any engine. Runtime: Bun only (`#!/usr/bin/env bun`).
+
+## What you get
+- **Unified output contract** — all engines return the same JSON shape, no format translation.
+- **Skill injection** — load reusable `SKILL.md` runbooks with `--skill`, dispatch through any engine.
+- **Heartbeat protocol** — progress signals every 15s on stderr for long-running tasks.
+- **Effort-scaled timeouts** — task duration automatically adjusts based on complexity level.
 
 ## Prerequisites
 **Runtime:** [Bun](https://bun.sh) >= 1.0.0
