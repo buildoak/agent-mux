@@ -231,6 +231,31 @@ Validation and errors:
 - `--system-prompt-file` resolves relative to `--cwd`
 - Missing prompt file or directory path returns `INVALID_ARGS`
 
+### GSD Coordinator Reference
+
+agent-mux ships with a reference GSD (Get Shit Done) coordinator spec at [references/get-shit-done-agent.md](references/get-shit-done-agent.md).
+
+This is a multi-step task coordinator that orchestrates Codex and Claude workers for complex pipelines. It includes:
+- Model selection heuristics (when to use Codex vs Claude vs Spark)
+- Orchestration patterns (10x Pattern, Fan-Out, Research + Synthesize)
+- Output contracts and context discipline rules
+- Anti-patterns to avoid
+
+To use the GSD coordinator:
+
+```bash
+# Copy to your project
+cp references/get-shit-done-agent.md <project>/.claude/agents/get-shit-done-agent.md
+
+# Invoke via agent-mux
+agent-mux --engine claude --cwd <project> --coordinator get-shit-done-agent "Complex multi-step task"
+
+# Or from Claude Code via Task subagent
+Task(subagent_type="gsd-coordinator")
+```
+
+Customize the frontmatter `skills` list and output paths for your project. The spec is a template designed to be adapted.
+
 ---
 
 ## MCP Clusters
@@ -252,6 +277,8 @@ See `mcp-clusters.example.yaml` for config format.
 | `references/output-contract.md` | Full output schema, examples, field descriptions | Parsing agent output, debugging response shape |
 | `references/prompting-guide.md` | Engine-specific prompting tips, model variants, comparison | Crafting prompts for specific engines |
 | `references/engine-comparison.md` | Detailed engine table, timeouts, sandbox/permission modes | Choosing engine config, debugging options |
+| `references/get-shit-done-agent.md` | GSD coordinator spec (reference template) | Setting up multi-step task coordination |
+| `references/installation-guide.md` | Full installation walkthrough | First-time setup, prerequisites, troubleshooting |
 | `src/agent.ts` | CLI entrypoint and adapter dispatch | Trace invocation path |
 | `src/core.ts` | parseCliArgs, timeout, heartbeat, output assembly | Always for behavior truth |
 | `src/types.ts` | Canonical engine/effort/output types | Always for contract truth |

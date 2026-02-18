@@ -10,9 +10,10 @@ Three problems this solves:
 
 3. **The 10x pattern.** Inside Claude Code's `Task` subagents, you can spawn agent-mux workers. Claude architects the plan, Codex executes the code, a second Claude verifies the result — all within one coordinated pipeline. This is how [gsd-coordinator](https://github.com/buildoak/fieldwork-skills/tree/main/skills/gsd-coordinator) works.
 
-One CLI. One output contract. Any engine. Runtime: Bun (`#!/usr/bin/env bun`). Browser automation (`--browser`) additionally requires Node and the `agent-browser` CLI.
+One CLI. One output contract. Any engine. agent-mux works as both a worker dispatch tool and an orchestrator spawn tool, so the same command can run direct tasks or coordinator-driven pipelines. Runtime: Bun (`#!/usr/bin/env bun`). Browser automation (`--browser`) additionally requires Node and the `agent-browser` CLI.
 
 ## What you get
+- **Dispatch + orchestration in one tool** — run direct worker tasks or launch coordinator personas from the same CLI.
 - **Unified output contract** — all engines return the same JSON shape, no format translation.
 - **Skill injection** — load reusable `SKILL.md` runbooks with `--skill`, dispatch through any engine.
 - **Coordinator mode** — load orchestrator personas from `--coordinator` with frontmatter-driven defaults.
@@ -311,6 +312,25 @@ Flag interactions:
 - For Claude, frontmatter `allowedTools` merges with `--allowed-tools`.
 - `--system-prompt-file` is resolved relative to `--cwd`; missing files, directories, malformed frontmatter, missing coordinator files, and path traversal attempts return `INVALID_ARGS`.
 
+### GSD Coordinator
+agent-mux ships with a reference GSD (Get Shit Done) coordinator spec at `references/get-shit-done-agent.md` — a multi-step task orchestrator that coordinates Codex and Claude workers.
+
+The GSD coordinator provides:
+- **Model selection heuristics** — when to use Codex vs Claude vs Spark
+- **Orchestration patterns** — 10x Pattern, Fan-Out, Research + Synthesize
+- **Output contracts** — consistent return format for worker results
+- **Context discipline** — rules for efficient context management across workers
+
+Copy the reference spec into your coordinator directory and invoke it:
+
+```bash
+mkdir -p .claude/agents
+cp references/get-shit-done-agent.md .claude/agents/gsd-coordinator.md
+agent-mux --engine claude --coordinator gsd-coordinator "Plan and execute the release hardening workstream."
+```
+
+The spec is a template. Customize the frontmatter skills list and output paths for your project.
+
 ## Installation
 ### 1) As a Claude Code skill
 ```bash
@@ -319,11 +339,33 @@ cd ~/.claude/skills/agent-mux
 ./setup.sh
 ```
 
-### 2) As a standalone CLI
+Optional global CLI registration:
+
+```bash
+bun link
+```
+
+### 2) As a Codex CLI tool
 ```bash
 git clone https://github.com/buildoak/agent-mux
 cd agent-mux
 ./setup.sh
+bun link
+```
+
+To let Codex discover the bundled workflow instructions, append the repo `SKILL.md` into your `AGENTS.md`:
+
+```bash
+printf "\n\n## agent-mux\n\n" >> AGENTS.md
+cat SKILL.md >> AGENTS.md
+```
+
+### 3) As a standalone CLI
+```bash
+git clone https://github.com/buildoak/agent-mux
+cd agent-mux
+./setup.sh
+bun link
 bun run src/agent.ts --engine codex "Summarize this repo"
 ```
 
@@ -336,6 +378,7 @@ For a detailed installation walkthrough (including Codex CLI setup), see [refere
 | `references/prompting-guide.md` | Engine-specific prompting tips, model variants, comparison tables |
 | `references/output-contract.md` | Full JSON schema with field descriptions and examples |
 | `references/installation-guide.md` | Agent-readable installation walkthrough for Claude Code and Codex CLI |
+| `references/get-shit-done-agent.md` | GSD coordinator reference spec (multi-step task orchestration template) |
 
 For release history, see `CHANGELOG.md`. For full operational usage, see `SKILL.md`.
 
