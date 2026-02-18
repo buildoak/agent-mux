@@ -6,7 +6,7 @@ Three problems this solves:
 
 1. **Claude Code can't natively use Codex as a subagent.** Claude already has `Task` subagents and is a natural prompt master — it knows how to delegate. But it can't reach Codex or OpenCode out of the box. agent-mux bridges that gap: Claude dispatches Codex workers the same way it dispatches its own subagents.
 
-2. **Codex has no subagent system at all.** No `Task` tool, no nested agents, no orchestration primitives. agent-mux gives Codex the ability to spawn workers across any engine — including Claude — through one CLI command with one JSON contract.
+2. **Codex has no subagent system at all.** No `Task` tool, no nested agents, no orchestration primitives. agent-mux gives Codex the ability to spawn workers across any engine — including Claude — through one CLI command with one JSON contract. With `--coordinator`, Codex can even launch a full GSD orchestrator that dispatches nested agents inside it — the same multi-step pipeline that Claude Code gets via `Task`.
 
 3. **The 10x pattern.** Inside Claude Code's `Task` subagents, you can spawn agent-mux workers. Claude architects the plan, Codex executes the code, a second Claude verifies the result — all within one coordinated pipeline. This is how [gsd-coordinator](https://github.com/buildoak/fieldwork-skills/tree/main/skills/gsd-coordinator) works.
 
@@ -330,6 +330,8 @@ agent-mux --engine claude --coordinator gsd-coordinator "Plan and execute the re
 ```
 
 The spec is a template. Customize the frontmatter skills list and output paths for your project.
+
+This works from **any engine** — Claude Code, Codex, or OpenCode. The GSD coordinator runs as a Claude Opus session via agent-mux and dispatches nested workers (Codex, Claude, Spark) through agent-mux calls inside it. Codex users get the same orchestration depth as Claude Code's `Task(subagent_type="gsd-coordinator")`, with no platform lock-in.
 
 ## Installation
 ### 1) As a Claude Code skill
