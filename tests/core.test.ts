@@ -912,44 +912,38 @@ describe("TIMEOUT_BY_EFFORT", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Symlink traversal protection
+// Symlink handling — symlinks to external repos are legitimate
 // ---------------------------------------------------------------------------
 
-describe("parseCliArgs — symlink escape protection", () => {
-  test("coordinator symlink pointing outside agents root returns invalid", () => {
+describe("parseCliArgs — symlink to external paths (legitimate pattern)", () => {
+  test("coordinator symlink pointing outside agents root resolves successfully", () => {
     withTempWorkspace((cwd) => {
       setupClaudeDirs(cwd);
-      // Create a file outside the agents root
-      const outsideFile = join(cwd, "evil.md");
-      writeFileSync(outsideFile, "evil content");
+      // Create a coordinator file outside the agents root (simulates symlink to source repo)
+      const outsideFile = join(cwd, "external-coordinator.md");
+      writeFileSync(outsideFile, "---\nname: external\n---\nExternal coordinator body");
       // Create a symlink inside agents root pointing outside
       const symlinkPath = join(cwd, ".claude", "agents", "escape.md");
       symlinkSync(outsideFile, symlinkPath);
       setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "escape", "test");
       const result = parseCliArgs();
-      expect(result.kind).toBe("invalid");
-      if (result.kind === "invalid") {
-        expect(result.error).toContain("path traversal detected");
-      }
+      expect(result.kind).toBe("ok");
     });
   });
 
-  test("skill symlink pointing outside skills root returns invalid", () => {
+  test("skill symlink pointing outside skills root resolves successfully", () => {
     withTempWorkspace((cwd) => {
       setupClaudeDirs(cwd);
-      // Create a skill directory outside the skills root
-      const outsideDir = join(cwd, "evil-skill");
+      // Create a skill directory outside the skills root (simulates symlink to source repo)
+      const outsideDir = join(cwd, "external-skill");
       mkdirSync(outsideDir, { recursive: true });
-      writeFileSync(join(outsideDir, "SKILL.md"), "# evil skill");
+      writeFileSync(join(outsideDir, "SKILL.md"), "# External skill");
       // Create a symlink inside skills root pointing outside
       const symlinkPath = join(cwd, ".claude", "skills", "escape");
       symlinkSync(outsideDir, symlinkPath);
       setArgs("--engine", "codex", "--cwd", cwd, "--skill", "escape", "test");
       const result = parseCliArgs();
-      expect(result.kind).toBe("invalid");
-      if (result.kind === "invalid") {
-        expect(result.error).toContain("path traversal detected");
-      }
+      expect(result.kind).toBe("ok");
     });
   });
 });

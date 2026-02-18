@@ -11,7 +11,7 @@
  */
 
 import { parseArgs } from "node:util";
-import { readFileSync, existsSync, statSync, realpathSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname, join, delimiter, sep, relative, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -169,17 +169,9 @@ function loadCoordinatorSpec(
     throw new Error(`Coordinator '${name}' is not a file: ${coordinatorPath}`);
   }
 
-  // Also check real path to prevent symlink escape
-  try {
-    const realPath = realpathSync(coordinatorPath);
-    const realRoot = realpathSync(agentsRoot);
-    if (!isContainedIn(realPath, realRoot)) {
-      throw new Error(`Invalid coordinator name '${name}': path traversal detected (symlink escape)`);
-    }
-  } catch (e) {
-    // realpathSync throws if path doesn't exist, which is fine - existsSync check above passed
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-  }
+  // Note: no realpathSync check here — symlinks from .claude/agents/ to external
+  // repos are a legitimate installation pattern. Lexical check above prevents
+  // path traversal in the name itself (e.g., ../../etc/passwd).
 
   const content = readFileSync(coordinatorPath, "utf-8");
   const { frontmatter, body } = extractFrontmatter(content);
@@ -463,21 +455,9 @@ export function parseCliArgs(): ParseResult {
         };
       }
 
-      // Also check real path to prevent symlink escape
-      try {
-        const realPath = realpathSync(skillDir);
-        const realRoot = realpathSync(skillsRoot);
-        if (!isContainedIn(realPath, realRoot)) {
-          return {
-            kind: "invalid",
-            error: `Invalid skill name '${name}': path traversal detected (symlink escape)`,
-            engine,
-          };
-        }
-      } catch (e) {
-        // realpathSync throws if path doesn't exist, which is fine - existsSync check above passed
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-      }
+      // Note: no realpathSync check here — symlinks from .claude/skills/ to external
+      // repos are a legitimate installation pattern. Lexical check above prevents
+      // path traversal in the name itself.
 
       const content = readFileSync(skillMdPath, "utf-8");
       const scriptsDir = join(skillDir, "scripts");
