@@ -11,8 +11,8 @@
  */
 
 import { parseArgs } from "node:util";
-import { readFileSync, existsSync, statSync } from "node:fs";
-import { resolve, dirname, join, delimiter } from "node:path";
+import { readFileSync, existsSync, statSync, realpathSync } from "node:fs";
+import { resolve, dirname, join, delimiter, sep, relative, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import * as yaml from "js-yaml";
@@ -144,6 +144,12 @@ function extractFrontmatter(content: string): { frontmatter: Record<string, any>
   return { frontmatter: parsed as Record<string, any>, body };
 }
 
+/** Platform-safe check: is `child` strictly contained within `parent`? */
+function isContainedIn(child: string, parent: string): boolean {
+  const rel = relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
 function loadCoordinatorSpec(
   cwd: string,
   name: string,
@@ -152,12 +158,27 @@ function loadCoordinatorSpec(
   const coordinatorFile = name.endsWith(".md") ? name : `${name}.md`;
   const coordinatorPath = resolve(agentsRoot, coordinatorFile);
 
-  // Validate the resolved path is inside agents root
-  if (!coordinatorPath.startsWith(agentsRoot + "/") && coordinatorPath !== agentsRoot) {
+  // Validate the resolved path is inside agents root (platform-safe)
+  if (!isContainedIn(coordinatorPath, agentsRoot)) {
     throw new Error(`Invalid coordinator name '${name}': path traversal detected`);
   }
   if (!existsSync(coordinatorPath)) {
     throw new Error(`Coordinator '${name}' not found: expected file at ${coordinatorPath}`);
+  }
+  if (!statSync(coordinatorPath).isFile()) {
+    throw new Error(`Coordinator '${name}' is not a file: ${coordinatorPath}`);
+  }
+
+  // Also check real path to prevent symlink escape
+  try {
+    const realPath = realpathSync(coordinatorPath);
+    const realRoot = realpathSync(agentsRoot);
+    if (!isContainedIn(realPath, realRoot)) {
+      throw new Error(`Invalid coordinator name '${name}': path traversal detected (symlink escape)`);
+    }
+  } catch (e) {
+    // realpathSync throws if path doesn't exist, which is fine - existsSync check above passed
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
   }
 
   const content = readFileSync(coordinatorPath, "utf-8");
@@ -371,6 +392,9 @@ export function parseCliArgs(): ParseResult {
       }
     }
 
+    // --system-prompt-file: intentionally allows any path (not confined to cwd).
+    // Unlike --coordinator and --skill which resolve names within fixed roots,
+    // this flag takes an explicit path argument similar to --cwd.
     const systemPromptFile = values["system-prompt-file"] as string | undefined;
     let fileSystemPrompt: string | undefined;
     if (systemPromptFile) {
@@ -416,14 +440,14 @@ export function parseCliArgs(): ParseResult {
     }
 
     // Skill resolution
-    const skillNames = [...(coordinatorSpec?.skills || []), ...((values["skill"] as string[] | undefined) ?? [])];
+    const skillNames = [...new Set([...(coordinatorSpec?.skills || []), ...((values["skill"] as string[] | undefined) ?? [])])];
     const resolvedSkills: Array<{ name: string; dir: string; content: string; hasScripts: boolean }> = [];
 
     for (const name of skillNames) {
       const skillsRoot = resolve(cwd, ".claude", "skills");
       const skillDir = resolve(skillsRoot, name);
-      // Validate the resolved path is inside skills root
-      if (!skillDir.startsWith(skillsRoot + "/") && skillDir !== skillsRoot) {
+      // Validate the resolved path is inside skills root (platform-safe)
+      if (!isContainedIn(skillDir, skillsRoot)) {
         return {
           kind: "invalid",
           error: `Invalid skill name '${name}': path traversal detected`,
@@ -438,6 +462,23 @@ export function parseCliArgs(): ParseResult {
           engine,
         };
       }
+
+      // Also check real path to prevent symlink escape
+      try {
+        const realPath = realpathSync(skillDir);
+        const realRoot = realpathSync(skillsRoot);
+        if (!isContainedIn(realPath, realRoot)) {
+          return {
+            kind: "invalid",
+            error: `Invalid skill name '${name}': path traversal detected (symlink escape)`,
+            engine,
+          };
+        }
+      } catch (e) {
+        // realpathSync throws if path doesn't exist, which is fine - existsSync check above passed
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      }
+
       const content = readFileSync(skillMdPath, "utf-8");
       const scriptsDir = join(skillDir, "scripts");
       const hasScripts = existsSync(scriptsDir);

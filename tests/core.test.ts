@@ -5,8 +5,8 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { parseCliArgs } from "../src/core.ts";
 import { TIMEOUT_BY_EFFORT } from "../src/types.ts";
@@ -908,5 +908,143 @@ describe("TIMEOUT_BY_EFFORT", () => {
 
   test("xhigh = 2400 seconds (40 min)", () => {
     expect(TIMEOUT_BY_EFFORT.xhigh).toBe(2_400_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Symlink traversal protection
+// ---------------------------------------------------------------------------
+
+describe("parseCliArgs — symlink escape protection", () => {
+  test("coordinator symlink pointing outside agents root returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      // Create a file outside the agents root
+      const outsideFile = join(cwd, "evil.md");
+      writeFileSync(outsideFile, "evil content");
+      // Create a symlink inside agents root pointing outside
+      const symlinkPath = join(cwd, ".claude", "agents", "escape.md");
+      symlinkSync(outsideFile, symlinkPath);
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "escape", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("path traversal detected");
+      }
+    });
+  });
+
+  test("skill symlink pointing outside skills root returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      // Create a skill directory outside the skills root
+      const outsideDir = join(cwd, "evil-skill");
+      mkdirSync(outsideDir, { recursive: true });
+      writeFileSync(join(outsideDir, "SKILL.md"), "# evil skill");
+      // Create a symlink inside skills root pointing outside
+      const symlinkPath = join(cwd, ".claude", "skills", "escape");
+      symlinkSync(outsideDir, symlinkPath);
+      setArgs("--engine", "codex", "--cwd", cwd, "--skill", "escape", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("path traversal detected");
+      }
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Skill deduplication
+// ---------------------------------------------------------------------------
+
+describe("parseCliArgs — skill deduplication", () => {
+  test("coordinator + CLI both specify same skill, loaded only once", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeSkill(cwd, "shared-skill", "shared content");
+      writeCoordinator(cwd, "planner", "---\nskills:\n  - shared-skill\n---\n");
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "planner", "--skill", "shared-skill", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.skills.map((s) => s.name)).toEqual(["shared-skill"]);
+        expect(result.config.skills).toHaveLength(1);
+      }
+    });
+  });
+
+  test("multiple CLI --skill with same name, loaded only once", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeSkill(cwd, "dup-skill", "dup content");
+      setArgs("--engine", "codex", "--cwd", cwd, "--skill", "dup-skill", "--skill", "dup-skill", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.skills).toHaveLength(1);
+        expect(result.config.skills[0]?.name).toBe("dup-skill");
+      }
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Coordinator isFile check
+// ---------------------------------------------------------------------------
+
+describe("parseCliArgs — coordinator isFile check", () => {
+  test("coordinator pointing to a directory returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      // Create a directory where the coordinator file would be
+      mkdirSync(join(cwd, ".claude", "agents", "dir-coord.md"), { recursive: true });
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "dir-coord", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("is not a file");
+      }
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Platform-safe containment (isContainedIn via path traversal)
+// ---------------------------------------------------------------------------
+
+describe("parseCliArgs — platform-safe containment", () => {
+  test("coordinator with path separator in name is rejected", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "../../etc/passwd", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("path traversal detected");
+      }
+    });
+  });
+
+  test("skill with .. traversal is rejected", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      setArgs("--engine", "codex", "--cwd", cwd, "--skill", "../../../etc", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("path traversal detected");
+      }
+    });
+  });
+
+  test("coordinator resolving to agents root itself is rejected", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      // "." resolves to the agentsRoot itself — isContainedIn rejects rel === ""
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", ".", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+    });
   });
 });
