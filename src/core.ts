@@ -11,7 +11,7 @@
  */
 
 import { parseArgs } from "node:util";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname, join, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -117,20 +117,22 @@ type ParseResult =
   | { kind: "invalid"; error: string; engine?: EngineName };
 
 function extractFrontmatter(content: string): { frontmatter: Record<string, any> | null; body: string } {
-  const opening = "---\n";
-  if (!content.startsWith(opening)) {
+  const openingMatch = content.match(/^---\r?\n/);
+  if (!openingMatch) {
     return { frontmatter: null, body: content };
   }
 
-  const closing = "\n---\n";
-  const closingIndex = content.indexOf(closing, opening.length - 1);
-  if (closingIndex === -1) {
+  const openingLength = openingMatch[0].length;
+  const closingRegex = /\r?\n---(?:\r?\n|$)/g;
+  closingRegex.lastIndex = openingLength;
+  const closingMatch = closingRegex.exec(content);
+  if (!closingMatch) {
     throw new Error("Invalid frontmatter: missing closing --- marker");
   }
 
-  const yamlContent = content.slice(opening.length, closingIndex);
+  const yamlContent = content.slice(openingLength, closingMatch.index);
   const parsed = yaml.load(yamlContent);
-  const body = content.slice(closingIndex + closing.length);
+  const body = content.slice(closingMatch.index + closingMatch[0].length);
 
   if (parsed === undefined || parsed === null) {
     return { frontmatter: null, body };
@@ -356,7 +358,18 @@ export function parseCliArgs(): ParseResult {
 
     // Coordinator + prompt-file resolution and merged options
     const coordinatorName = values.coordinator as string | undefined;
-    const coordinatorSpec = coordinatorName ? loadCoordinatorSpec(cwd, coordinatorName) : null;
+    let coordinatorSpec: ReturnType<typeof loadCoordinatorSpec> | null = null;
+    if (coordinatorName) {
+      try {
+        coordinatorSpec = loadCoordinatorSpec(cwd, coordinatorName);
+      } catch (err) {
+        return {
+          kind: "invalid",
+          error: err instanceof Error ? err.message : String(err),
+          engine,
+        };
+      }
+    }
 
     const systemPromptFile = values["system-prompt-file"] as string | undefined;
     let fileSystemPrompt: string | undefined;
@@ -369,7 +382,22 @@ export function parseCliArgs(): ParseResult {
           engine,
         };
       }
-      fileSystemPrompt = readFileSync(systemPromptPath, "utf-8");
+      try {
+        if (!statSync(systemPromptPath).isFile()) {
+          return {
+            kind: "invalid",
+            error: `System prompt file is not a file: ${systemPromptPath}`,
+            engine,
+          };
+        }
+        fileSystemPrompt = readFileSync(systemPromptPath, "utf-8");
+      } catch (err) {
+        return {
+          kind: "invalid",
+          error: `Failed to read system prompt file '${systemPromptPath}': ${err instanceof Error ? err.message : String(err)}`,
+          engine,
+        };
+      }
     }
 
     const model = (values.model as string | undefined) || coordinatorSpec?.model;

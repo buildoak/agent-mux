@@ -592,6 +592,18 @@ describe("parseCliArgs -- system-prompt-file", () => {
     });
   });
 
+  test("path pointing to directory returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      mkdirSync(join(cwd, "prompt-dir"), { recursive: true });
+      setArgs("--engine", "codex", "--cwd", cwd, "--system-prompt-file", "prompt-dir", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("not a file");
+      }
+    });
+  });
+
   test("file + inline concatenated (file first)", () => {
     withTempWorkspace((cwd) => {
       writeFileSync(join(cwd, "prompt.txt"), "from file");
@@ -668,6 +680,32 @@ describe("parseCliArgs -- coordinator", () => {
     });
   });
 
+  test("malformed frontmatter (missing closing marker) returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nskills:\n  - from-coordinator\n");
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("missing closing --- marker");
+      }
+    });
+  });
+
+  test("frontmatter with no body leaves systemPrompt undefined", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nmodel: claude-3-7-sonnet\n---\n");
+      setArgs("--engine", "claude", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.systemPrompt).toBeUndefined();
+      }
+    });
+  });
+
   test("frontmatter skills are resolved", () => {
     withTempWorkspace((cwd) => {
       setupClaudeDirs(cwd);
@@ -692,6 +730,32 @@ describe("parseCliArgs -- coordinator", () => {
       expect(result.kind).toBe("ok");
       if (result.kind === "ok") {
         expect(result.config.model).toBe("claude-3-7-sonnet");
+      }
+    });
+  });
+
+  test("frontmatter skills non-array returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nskills: not-an-array\n---\n");
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("frontmatter.skills must be a string array");
+      }
+    });
+  });
+
+  test("frontmatter model non-string returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nmodel: 123\n---\n");
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("frontmatter.model must be a string");
       }
     });
   });
@@ -757,6 +821,21 @@ describe("parseCliArgs -- coordinator", () => {
     });
   });
 
+  test("coordinator skills are loaded before CLI --skill entries", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeSkill(cwd, "from-coordinator", "coordinator skill");
+      writeSkill(cwd, "from-cli", "cli skill");
+      writeCoordinator(cwd, "planner", "---\nskills:\n  - from-coordinator\n---\n");
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "planner", "--skill", "from-cli", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.skills.map((s) => s.name)).toEqual(["from-coordinator", "from-cli"]);
+      }
+    });
+  });
+
   test("coordinator allowedTools reach engineOptions for Claude", () => {
     withTempWorkspace((cwd) => {
       setupClaudeDirs(cwd);
@@ -791,6 +870,20 @@ describe("parseCliArgs -- coordinator", () => {
       expect(result.kind).toBe("invalid");
       if (result.kind === "invalid") {
         expect(result.error).toContain("path traversal detected");
+      }
+    });
+  });
+
+  test("frontmatter closing marker at EOF without trailing newline is supported", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nmodel: claude-3-7-sonnet\n---");
+      setArgs("--engine", "claude", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.model).toBe("claude-3-7-sonnet");
+        expect(result.config.systemPrompt).toBeUndefined();
       }
     });
   });
