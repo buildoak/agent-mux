@@ -15,6 +15,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname, join, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import * as yaml from "js-yaml";
 import { resolveClusters, listClusters } from "./mcp-clusters.ts";
 import type { McpServerConfig } from "./mcp-clusters.ts";
 import type {
@@ -64,6 +65,8 @@ Common Options:
   -e, --effort <level>       Effort: low, medium (default), high, xhigh
   -t, --timeout <ms>         Timeout in ms (default: effort-scaled)
   -s, --system-prompt <text> System prompt (appended)
+      --system-prompt-file <path> Load system prompt text from file
+      --coordinator <name>   Load coordinator spec from <cwd>/.claude/agents/<name>.md
       --skill <name>         Load skill (repeatable, reads <cwd>/.claude/skills/<name>/SKILL.md)
       --mcp-cluster <name>   Enable MCP cluster (repeatable)
   -b, --browser              Sugar for --mcp-cluster browser
@@ -113,6 +116,98 @@ type ParseResult =
   | { kind: "version" }
   | { kind: "invalid"; error: string; engine?: EngineName };
 
+function extractFrontmatter(content: string): { frontmatter: Record<string, any> | null; body: string } {
+  const opening = "---\n";
+  if (!content.startsWith(opening)) {
+    return { frontmatter: null, body: content };
+  }
+
+  const closing = "\n---\n";
+  const closingIndex = content.indexOf(closing, opening.length - 1);
+  if (closingIndex === -1) {
+    throw new Error("Invalid frontmatter: missing closing --- marker");
+  }
+
+  const yamlContent = content.slice(opening.length, closingIndex);
+  const parsed = yaml.load(yamlContent);
+  const body = content.slice(closingIndex + closing.length);
+
+  if (parsed === undefined || parsed === null) {
+    return { frontmatter: null, body };
+  }
+  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid frontmatter: expected a YAML object");
+  }
+
+  return { frontmatter: parsed as Record<string, any>, body };
+}
+
+function loadCoordinatorSpec(
+  cwd: string,
+  name: string,
+): { skills: string[]; model?: string; allowedTools?: string[]; systemPrompt?: string } {
+  const agentsRoot = resolve(cwd, ".claude", "agents");
+  const coordinatorFile = name.endsWith(".md") ? name : `${name}.md`;
+  const coordinatorPath = resolve(agentsRoot, coordinatorFile);
+
+  // Validate the resolved path is inside agents root
+  if (!coordinatorPath.startsWith(agentsRoot + "/") && coordinatorPath !== agentsRoot) {
+    throw new Error(`Invalid coordinator name '${name}': path traversal detected`);
+  }
+  if (!existsSync(coordinatorPath)) {
+    throw new Error(`Coordinator '${name}' not found: expected file at ${coordinatorPath}`);
+  }
+
+  const content = readFileSync(coordinatorPath, "utf-8");
+  const { frontmatter, body } = extractFrontmatter(content);
+
+  const spec: { skills: string[]; model?: string; allowedTools?: string[]; systemPrompt?: string } = {
+    skills: [],
+  };
+
+  if (frontmatter) {
+    if (frontmatter.skills !== undefined) {
+      if (!Array.isArray(frontmatter.skills) || frontmatter.skills.some((s) => typeof s !== "string")) {
+        throw new Error(`Invalid coordinator '${name}': frontmatter.skills must be a string array`);
+      }
+      spec.skills = frontmatter.skills;
+    }
+
+    if (frontmatter.model !== undefined) {
+      if (typeof frontmatter.model !== "string") {
+        throw new Error(`Invalid coordinator '${name}': frontmatter.model must be a string`);
+      }
+      spec.model = frontmatter.model;
+    }
+
+    if (frontmatter.allowedTools !== undefined) {
+      if (typeof frontmatter.allowedTools === "string") {
+        spec.allowedTools = frontmatter.allowedTools
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+      } else if (Array.isArray(frontmatter.allowedTools)) {
+        if (frontmatter.allowedTools.some((t) => typeof t !== "string")) {
+          throw new Error(`Invalid coordinator '${name}': frontmatter.allowedTools must be a string array`);
+        }
+        spec.allowedTools = frontmatter.allowedTools
+          .map((t) => t.trim())
+          .filter(Boolean);
+      } else {
+        throw new Error(
+          `Invalid coordinator '${name}': frontmatter.allowedTools must be a string or string array`,
+        );
+      }
+    }
+  }
+
+  if (body.trim().length > 0) {
+    spec.systemPrompt = body;
+  }
+
+  return spec;
+}
+
 export function parseCliArgs(): ParseResult {
   try {
     const { values, positionals } = parseArgs({
@@ -125,6 +220,8 @@ export function parseCliArgs(): ParseResult {
         effort: { type: "string", short: "e" },
         timeout: { type: "string", short: "t" },
         "system-prompt": { type: "string", short: "s" },
+        "system-prompt-file": { type: "string" },
+        coordinator: { type: "string" },
         skill: { type: "string", multiple: true },
         "mcp-cluster": { type: "string", multiple: true },
         browser: { type: "boolean", short: "b" },
@@ -212,6 +309,12 @@ export function parseCliArgs(): ParseResult {
     const engineOptions: Record<string, unknown> = {};
     const fullMode = values.full === true;
     const cwd = values.cwd || process.cwd();
+    const cliAllowedTools = values["allowed-tools"]
+      ? (values["allowed-tools"] as string)
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+      : [];
 
     // Codex options
     if (engine === "codex") {
@@ -242,12 +345,6 @@ export function parseCliArgs(): ParseResult {
           engineOptions.maxBudget = parsed;
         }
       }
-      if (values["allowed-tools"]) {
-        engineOptions.allowedTools = (values["allowed-tools"] as string)
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean);
-      }
       engineOptions.full = fullMode;
     }
 
@@ -257,8 +354,41 @@ export function parseCliArgs(): ParseResult {
       if (values.agent) engineOptions.agent = values.agent;
     }
 
+    // Coordinator + prompt-file resolution and merged options
+    const coordinatorName = values.coordinator as string | undefined;
+    const coordinatorSpec = coordinatorName ? loadCoordinatorSpec(cwd, coordinatorName) : null;
+
+    const systemPromptFile = values["system-prompt-file"] as string | undefined;
+    let fileSystemPrompt: string | undefined;
+    if (systemPromptFile) {
+      const systemPromptPath = resolve(cwd, systemPromptFile);
+      if (!existsSync(systemPromptPath)) {
+        return {
+          kind: "invalid",
+          error: `System prompt file not found: ${systemPromptPath}`,
+          engine,
+        };
+      }
+      fileSystemPrompt = readFileSync(systemPromptPath, "utf-8");
+    }
+
+    const model = (values.model as string | undefined) || coordinatorSpec?.model;
+
+    const inlineSystemPrompt = values["system-prompt"] as string | undefined;
+    const promptParts = [coordinatorSpec?.systemPrompt, fileSystemPrompt, inlineSystemPrompt]
+      .filter((part): part is string => typeof part === "string" && part.trim().length > 0);
+    const systemPrompt = promptParts.length > 0 ? promptParts.join("\n\n") : undefined;
+
+    if (engine === "claude") {
+      const mergedAllowedTools = [...(coordinatorSpec?.allowedTools || []), ...cliAllowedTools];
+      const dedupedAllowedTools = [...new Set(mergedAllowedTools)];
+      if (dedupedAllowedTools.length > 0) {
+        engineOptions.allowedTools = dedupedAllowedTools;
+      }
+    }
+
     // Skill resolution
-    const skillNames = (values["skill"] as string[] | undefined) ?? [];
+    const skillNames = [...(coordinatorSpec?.skills || []), ...((values["skill"] as string[] | undefined) ?? [])];
     const resolvedSkills: Array<{ name: string; dir: string; content: string; hasScripts: boolean }> = [];
 
     for (const name of skillNames) {
@@ -301,10 +431,10 @@ export function parseCliArgs(): ParseResult {
         prompt,
         cwd,
         skills: resolvedSkills,
-        model: values.model || undefined,
+        model,
         effort,
         timeout,
-        systemPrompt: values["system-prompt"] || undefined,
+        systemPrompt,
         mcpClusters,
         mcpServers,
         engineOptions,

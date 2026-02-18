@@ -5,6 +5,9 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { parseCliArgs } from "../src/core.ts";
 import { TIMEOUT_BY_EFFORT } from "../src/types.ts";
 
@@ -21,6 +24,35 @@ afterEach(() => {
 /** Helper: set process.argv as if the CLI was invoked with the given args */
 function setArgs(...args: string[]): void {
   process.argv = ["bun", "agent.ts", ...args];
+}
+
+function createTempWorkspace(prefix = "agent-mux-core-"): string {
+  return mkdtempSync(join(tmpdir(), prefix));
+}
+
+function withTempWorkspace<T>(run: (cwd: string) => T): T {
+  const cwd = createTempWorkspace();
+  try {
+    return run(cwd);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
+function setupClaudeDirs(cwd: string): void {
+  mkdirSync(join(cwd, ".claude", "agents"), { recursive: true });
+  mkdirSync(join(cwd, ".claude", "skills"), { recursive: true });
+}
+
+function writeCoordinator(cwd: string, name: string, content: string): void {
+  const fileName = name.endsWith(".md") ? name : `${name}.md`;
+  writeFileSync(join(cwd, ".claude", "agents", fileName), content);
+}
+
+function writeSkill(cwd: string, name: string, content = `# ${name}`): void {
+  const skillDir = join(cwd, ".claude", "skills", name);
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), content);
 }
 
 // ---------------------------------------------------------------------------
@@ -529,6 +561,238 @@ describe("parseCliArgs — full mode", () => {
       expect(result.config.engineOptions.permissionMode).toBe("bypassPermissions");
       expect(result.config.engineOptions.full).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --system-prompt-file
+// ---------------------------------------------------------------------------
+
+describe("parseCliArgs -- system-prompt-file", () => {
+  test("loads file content as system prompt", () => {
+    withTempWorkspace((cwd) => {
+      writeFileSync(join(cwd, "prompt.txt"), "from file");
+      setArgs("--engine", "codex", "--cwd", cwd, "--system-prompt-file", "prompt.txt", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.systemPrompt).toBe("from file");
+      }
+    });
+  });
+
+  test("missing file returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setArgs("--engine", "codex", "--cwd", cwd, "--system-prompt-file", "missing.txt", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("System prompt file not found");
+      }
+    });
+  });
+
+  test("file + inline concatenated (file first)", () => {
+    withTempWorkspace((cwd) => {
+      writeFileSync(join(cwd, "prompt.txt"), "from file");
+      setArgs(
+        "--engine",
+        "codex",
+        "--cwd",
+        cwd,
+        "--system-prompt-file",
+        "prompt.txt",
+        "--system-prompt",
+        "from inline",
+        "test",
+      );
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.systemPrompt).toBe("from file\n\nfrom inline");
+      }
+    });
+  });
+
+  test("empty file with inline still yields inline", () => {
+    withTempWorkspace((cwd) => {
+      writeFileSync(join(cwd, "prompt.txt"), "");
+      setArgs(
+        "--engine",
+        "codex",
+        "--cwd",
+        cwd,
+        "--system-prompt-file",
+        "prompt.txt",
+        "--system-prompt",
+        "from inline",
+        "test",
+      );
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.systemPrompt).toBe("from inline");
+      }
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --coordinator
+// ---------------------------------------------------------------------------
+
+describe("parseCliArgs -- coordinator", () => {
+  test("loads coordinator spec from <cwd>/.claude/agents/<name>.md", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "coordinator body");
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.systemPrompt).toBe("coordinator body");
+      }
+    });
+  });
+
+  test("body becomes system prompt", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nmodel: haiku\n---\nbody prompt");
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.systemPrompt).toBe("body prompt");
+      }
+    });
+  });
+
+  test("frontmatter skills are resolved", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeSkill(cwd, "from-coordinator", "coordinator skill content");
+      writeCoordinator(cwd, "planner", "---\nskills:\n  - from-coordinator\n---\n");
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.skills.map((s) => s.name)).toEqual(["from-coordinator"]);
+        expect(result.config.skills[0]?.content).toContain("coordinator skill content");
+      }
+    });
+  });
+
+  test("frontmatter model applies when --model absent", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nmodel: claude-3-7-sonnet\n---\n");
+      setArgs("--engine", "claude", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.model).toBe("claude-3-7-sonnet");
+      }
+    });
+  });
+
+  test("CLI --model overrides coordinator model", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nmodel: claude-3-7-sonnet\n---\n");
+      setArgs(
+        "--engine",
+        "claude",
+        "--cwd",
+        cwd,
+        "--coordinator",
+        "planner",
+        "--model",
+        "claude-4-opus",
+        "test",
+      );
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.model).toBe("claude-4-opus");
+      }
+    });
+  });
+
+  test("missing coordinator file returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "missing", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("Coordinator 'missing' not found");
+      }
+    });
+  });
+
+  test("coordinator + prompt-file + inline prompt order is correct", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "from coordinator");
+      writeFileSync(join(cwd, "prompt.txt"), "from file");
+      setArgs(
+        "--engine",
+        "codex",
+        "--cwd",
+        cwd,
+        "--coordinator",
+        "planner",
+        "--system-prompt-file",
+        "prompt.txt",
+        "--system-prompt",
+        "from inline",
+        "test",
+      );
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.systemPrompt).toBe("from coordinator\n\nfrom file\n\nfrom inline");
+      }
+    });
+  });
+
+  test("coordinator allowedTools reach engineOptions for Claude", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nallowedTools: Bash,Read\n---\n");
+      setArgs("--engine", "claude", "--cwd", cwd, "--coordinator", "planner", "--allowed-tools", "Read,Write", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.engineOptions.allowedTools).toEqual(["Bash", "Read", "Write"]);
+      }
+    });
+  });
+
+  test("non-Claude engine with coordinator allowedTools doesn't throw", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      writeCoordinator(cwd, "planner", "---\nallowedTools:\n  - Bash\n---\n");
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "planner", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.engineOptions.allowedTools).toBeUndefined();
+      }
+    });
+  });
+
+  test("path traversal in coordinator name returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setupClaudeDirs(cwd);
+      setArgs("--engine", "codex", "--cwd", cwd, "--coordinator", "../evil", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("path traversal detected");
+      }
+    });
   });
 });
 
