@@ -63,6 +63,15 @@ agent-mux --engine codex --cwd /repo --browser "Open app, inspect controls, summ
 
 # Full access mode
 agent-mux --engine codex --cwd /repo --full "Install deps and implement requested fix"
+
+# System prompt from file
+agent-mux --engine claude --cwd /repo --system-prompt-file prompts/reviewer.md "Review this patch"
+
+# Coordinator persona
+agent-mux --engine codex --cwd /repo --coordinator reviewer "Audit this change for regressions"
+
+# Combine coordinator + extra skill + inline system prompt
+agent-mux --engine claude --cwd /repo --coordinator reviewer --skill perf-auditor --system-prompt "Prioritize latency risks." "Evaluate this service update"
 ```
 
 ---
@@ -96,6 +105,8 @@ Source of truth: `src/core.ts` (`parseCliArgs`) + `src/types.ts`.
 | `--effort` | `-e` | string | `low`, `medium`, `high`, `xhigh` | `medium` | Effort level |
 | `--timeout` | `-t` | string | positive integer (ms) | effort-mapped | Hard timeout override |
 | `--system-prompt` | `-s` | string | text | unset | Appended system context |
+| `--system-prompt-file` | -- | string | path to file | unset | Loads file as system prompt, joined with other prompts |
+| `--coordinator` | -- | string | coordinator name | unset | Loads spec from `<cwd>/.claude/agents/<name>.md` |
 | `--skill` | -- | string[] | repeatable names | `[]` | Loads `<cwd>/.claude/skills/<name>/SKILL.md` |
 | `--mcp-cluster` | -- | string[] | repeatable names | `[]` | Enables MCP cluster(s) |
 | `--browser` | `-b` | boolean | true/false | `false` | Adds `browser` cluster |
@@ -160,6 +171,65 @@ Use `--skill <name>` (repeatable). Resolves from `<cwd>/.claude/skills/<name>/SK
 - If `<skillDir>/scripts` exists, prepended to `PATH`
 - For Codex, skill directories auto-appended to sandbox `addDirs`
 - Path traversal names are rejected
+
+---
+
+## Coordinator Mode
+
+Use `--coordinator <name>` to load a coordinator spec from `<cwd>/.claude/agents/<name>.md`.
+
+Coordinator file format: Markdown with optional YAML frontmatter.
+
+- Frontmatter `skills` (array): auto-injected as repeated `--skill`
+- Frontmatter `model` (string): default model unless CLI `--model` is set
+- Frontmatter `allowedTools` (string or array): Claude-only, merged with CLI `--allowed-tools`
+- Markdown body after frontmatter: coordinator system prompt content
+
+Example coordinator file (`<cwd>/.claude/agents/reviewer.md`):
+
+```md
+---
+skills:
+  - code-review
+  - test-writer
+model: claude-sonnet-4-20250514
+allowedTools:
+  - Bash
+  - Read
+  - Write
+---
+You are a senior code reviewer. Focus on correctness, edge cases, and test coverage.
+```
+
+Example invocations:
+
+```bash
+# Load coordinator persona
+agent-mux --engine claude --cwd /repo --coordinator reviewer "Review recent changes"
+
+# Coordinator + file prompt + inline prompt (all three compose in order)
+agent-mux --engine codex --cwd /repo --coordinator reviewer --system-prompt-file prompts/repo.md --system-prompt "Prioritize auth paths" "Audit this module"
+```
+
+Prompt composition order:
+
+1. Coordinator body (`--coordinator`)
+2. File content (`--system-prompt-file`)
+3. Inline text (`--system-prompt`)
+
+Flag interactions:
+
+- `--model` on CLI overrides frontmatter `model`
+- Frontmatter `skills` merge with explicit `--skill` flags (coordinator skills first)
+- For Claude, frontmatter `allowedTools` merge with `--allowed-tools`
+
+Validation and errors:
+
+- Coordinator path traversal is rejected
+- Missing coordinator file returns `INVALID_ARGS`
+- Malformed frontmatter returns `INVALID_ARGS`
+- `--system-prompt-file` resolves relative to `--cwd`
+- Missing prompt file or directory path returns `INVALID_ARGS`
 
 ---
 

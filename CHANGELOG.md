@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.0] - 2026-02-18
+
+### Added
+- --system-prompt-file <path> flag: load system prompt text from a file, composable with --system-prompt (file content first)
+- --coordinator <name> flag: load coordinator specs from <cwd>/.claude/agents/<name>.md with YAML frontmatter (skills, model, allowedTools) and markdown body as system prompt
+- Prompt composition order: coordinator body -> file content -> inline text
+- 29 new tests covering both features, edge cases, and interactions
+
+### Fixed
+- extractFrontmatter handles CRLF line endings and closing --- at EOF without trailing newline
+- Coordinator loading wrapped in try/catch with engine context in error response
+- system-prompt-file validates path is a file (not directory)
+
 ## [2.1.0] - 2026-02-13
 
 ### Added

@@ -15,6 +15,7 @@ One CLI. One output contract. Any engine. Runtime: Bun (`#!/usr/bin/env bun`). B
 ## What you get
 - **Unified output contract** — all engines return the same JSON shape, no format translation.
 - **Skill injection** — load reusable `SKILL.md` runbooks with `--skill`, dispatch through any engine.
+- **Coordinator mode** — load orchestrator personas from `--coordinator` with frontmatter-driven defaults.
 - **Heartbeat protocol** — progress signals every 15s on stderr for long-running tasks.
 - **Effort-scaled timeouts** — task duration automatically adjusts based on complexity level.
 - **Activity tracking** — structured log of files changed, commands run, files read, and MCP calls for every run.
@@ -75,6 +76,8 @@ agent-mux --engine <codex|claude|opencode> [flags] "your prompt"
 | `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` | `medium` | Drives default timeout |
 | `--timeout` | `-t` | positive integer ms | effort-scaled | Hard timeout override |
 | `--system-prompt` | `-s` | string | unset | Appended system prompt |
+| `--system-prompt-file` |  | string | unset | Load system prompt from file (path relative to `--cwd`) |
+| `--coordinator` |  | string | unset | Load coordinator spec from `<cwd>/.claude/agents/<name>.md` |
 | `--skill` |  | string (repeatable) | none | Loads `<cwd>/.claude/skills/<name>/SKILL.md` |
 | `--mcp-cluster` |  | string (repeatable) | none | Enables named cluster(s) |
 | `--browser` | `-b` | boolean | `false` | Sugar for `--mcp-cluster browser` |
@@ -260,6 +263,53 @@ agent-mux --engine codex --browser "Capture a screenshot"
 agent-mux --engine claude --mcp-cluster research "Find OAuth rotation docs"
 agent-mux --engine opencode --mcp-cluster all "Cross-check findings"
 ```
+
+## Coordinator Mode
+Coordinators are markdown specs that let any engine load a "fat orchestrator" persona in one flag.
+
+Location:
+- `<cwd>/.claude/agents/<name>.md` (loaded via `--coordinator <name>`)
+
+Format:
+- Optional YAML frontmatter
+- Markdown body after frontmatter
+
+Frontmatter fields:
+- `skills` (array): auto-injected as repeatable `--skill`
+- `model` (string): default model unless `--model` is passed on the CLI
+- `allowedTools` (string or array): passed to the Claude adapter and merged with `--allowed-tools`
+
+Body behavior:
+- The markdown body becomes the coordinator system prompt.
+- Prompt composition order is: coordinator body -> `--system-prompt-file` content -> `--system-prompt` inline text.
+
+Example coordinator file (`<cwd>/.claude/agents/reviewer.md`):
+
+```md
+---
+skills:
+  - code-review
+  - test-writer
+model: claude-sonnet-4-20250514
+allowedTools:
+  - Bash
+  - Read
+  - Write
+---
+You are a senior code reviewer. Focus on correctness, edge cases, and test coverage.
+```
+
+Example invocation:
+
+```bash
+agent-mux --engine claude --cwd . --coordinator reviewer --system-prompt-file prompts/repo.md --system-prompt "Prioritize auth and billing paths." "Review recent changes for regressions."
+```
+
+Flag interactions:
+- `--model` overrides frontmatter `model`.
+- Frontmatter `skills` merge with explicit `--skill` flags.
+- For Claude, frontmatter `allowedTools` merges with `--allowed-tools`.
+- `--system-prompt-file` is resolved relative to `--cwd`; missing files, directories, malformed frontmatter, missing coordinator files, and path traversal attempts return `INVALID_ARGS`.
 
 ## Installation
 ### 1) As a Claude Code skill
