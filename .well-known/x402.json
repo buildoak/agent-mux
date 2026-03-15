@@ -1,0 +1,63 @@
+{
+  "name": "buildoak/agent-mux",
+  "description": "One CLI to spawn Codex, Claude Code, or OpenCode agents. Unified output. Proper timeouts. Activity tracking.",
+  "accepts": [
+    {
+      "network": "eip155:8453",
+      "asset": "USDC",
+      "address": "YOUR_WALLET_ADDRESS"
+    }
+  ],
+  "resources": [
+    {
+      "path": "/agent-mux",
+      "price": "0.01",
+      "description": "Pay-per-call access to agent-mux"
+    },
+    {
+      "path": "/--engine",
+      "price": "0.01",
+      "description": "Pay-per-call access to --engine"
+    },
+    {
+      "path": "/--coordinator",
+      "price": "0.01",
+      "description": "Pay-per-call access to --coordinator"
+    },
+    {
+      "path": "/--skill",
+      "price": "0.01",
+      "description": "Pay-per-call access to --skill"
+    },
+    {
+      "path": "/--mcp-cluster",
+      "price": "0.01",
+      "description": "Pay-per-call access to --mcp-cluster"
+    },
+    {
+      "path": "/--browser",
+      "price": "0.01",
+      "description": "Pay-per-call access to --browser"
+    },
+    {
+      "path": "/--sandbox",
+      "price": "0.01",
+      "description": "Pay-per-call access to --sandbox"
+    },
+    {
+      "path": "/--reasoning",
+      "price": "0.01",
+      "description": "Pay-per-call access to --reasoning"
+    },
+    {
+      "path": "/--permission-mode",
+      "price": "0.01",
+      "description": "Pay-per-call access to --permission-mode"
+    },
+    {
+      "path": "/--max-budget",
+      "price": "0.01",
+      "description": "Pay-per-call access to --max-budget"
+    }
+  ]
+}
