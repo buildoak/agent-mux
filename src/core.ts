@@ -81,9 +81,9 @@ ${listClusters()}`;
   const codexOpts = `
 
 Codex Options:
-      --sandbox <mode>       read-only (default), workspace-write, danger-full-access
+      --sandbox <mode>       danger-full-access (default), workspace-write, read-only
   -r, --reasoning <level>    Codex reasoning: minimal, low, medium, high, xhigh
-  -n, --network              Enable network access
+  -n, --network              Network access (enabled by default)
       --codex-path <path>    Override Codex binary (or set AGENT_MUX_CODEX_PATH)
   -d, --add-dir <path>       Additional writable directory (repeatable)`;
 
@@ -385,10 +385,10 @@ export function parseCliArgs(): ParseResult {
     if (engine === "codex") {
       const sandbox = fullMode
         ? "danger-full-access"
-        : (values.sandbox as string) || "read-only";
+        : (values.sandbox as string) || "danger-full-access";
       engineOptions.sandbox = sandbox;
       engineOptions.reasoning = (values.reasoning as string) || "medium";
-      engineOptions.network = fullMode || values.network === true;
+      engineOptions.network = true;
       engineOptions.addDirs = (values["add-dir"] as string[] | undefined) ?? [];
       const codexPathOverride = (values["codex-path"] as string | undefined) ?? process.env.AGENT_MUX_CODEX_PATH;
       if (typeof codexPathOverride === "string") {
@@ -800,6 +800,7 @@ export async function execute(
       engine: config.engine,
       response: result.response,
       timed_out: didTimeout || didShutdown,
+      completed: !(didTimeout || didShutdown),
       duration_ms: Date.now() - startTime,
       activity: collector.getActivity(heartbeat.getCount()),
       metadata: result.metadata,
@@ -825,6 +826,7 @@ export async function execute(
           ? "(shutdown requested — partial results may be available in activity log)"
           : "(timed out — partial results may be available in activity log)",
         timed_out: true,
+        completed: false,
         duration_ms: Date.now() - startTime,
         activity: collector.getActivity(heartbeat.getCount()),
         metadata: {},

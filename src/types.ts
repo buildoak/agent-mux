@@ -65,6 +65,7 @@ export interface SuccessOutput {
   engine: EngineName;
   response: string;
   timed_out: boolean;
+  completed: boolean;
   duration_ms: number;
   activity: Activity;
   metadata: EngineResult["metadata"];
@@ -86,6 +87,6 @@ export type Output = SuccessOutput | ErrorOutput;
 export const TIMEOUT_BY_EFFORT: Record<EffortLevel, number> = {
   low: 120_000,       // 2 min
   medium: 600_000,    // 10 min
-  high: 1_200_000,    // 20 min
-  xhigh: 2_400_000,   // 40 min
+  high: 1_800_000,    // 30 min
+  xhigh: 2_700_000,   // 45 min
 };

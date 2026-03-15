@@ -35,6 +35,7 @@ function makeSuccessOutput(overrides: Partial<SuccessOutput> = {}): SuccessOutpu
     engine: "codex" as EngineName,
     response: "Done.",
     timed_out: false,
+    completed: true,
     duration_ms: 1234,
     activity: makeActivity(),
     metadata: {},
@@ -57,6 +58,7 @@ function makeErrorOutput(overrides: Partial<ErrorOutput> = {}): ErrorOutput {
 function makeTimeoutOutput(): SuccessOutput {
   return makeSuccessOutput({
     timed_out: true,
+    completed: false,
     response: "(timed out -- partial results may be available in activity log)",
   });
 }
@@ -102,6 +104,11 @@ describe("SuccessOutput shape", () => {
   test("has timed_out: false for normal completion", () => {
     const output = makeSuccessOutput();
     expect(output.timed_out).toBe(false);
+  });
+
+  test("has completed: true for normal completion", () => {
+    const output = makeSuccessOutput();
+    expect(output.completed).toBe(true);
   });
 
   test("has duration_ms as number", () => {
@@ -187,6 +194,16 @@ describe("Timeout output shape", () => {
   test("has timed_out: true", () => {
     const output = makeTimeoutOutput();
     expect(output.timed_out).toBe(true);
+  });
+
+  test("has completed: false", () => {
+    const output = makeTimeoutOutput();
+    expect(output.completed).toBe(false);
+  });
+
+  test("completed is inverse of timed_out for timeout case", () => {
+    const output = makeTimeoutOutput();
+    expect(output.completed).toBe(!output.timed_out);
   });
 
   test("has response (partial results message)", () => {

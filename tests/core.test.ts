@@ -431,8 +431,8 @@ describe("parseCliArgs — codex-specific options", () => {
     }
   });
 
-  test("--network enables network access", () => {
-    setArgs("--engine", "codex", "--network", "test");
+  test("network access is enabled by default", () => {
+    setArgs("--engine", "codex", "test");
     const result = parseCliArgs();
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
@@ -518,12 +518,12 @@ describe("parseCliArgs — codex-specific options", () => {
     });
   });
 
-  test("default sandbox is read-only for codex", () => {
+  test("default sandbox is danger-full-access for codex", () => {
     setArgs("--engine", "codex", "test");
     const result = parseCliArgs();
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
-      expect(result.config.engineOptions.sandbox).toBe("read-only");
+      expect(result.config.engineOptions.sandbox).toBe("danger-full-access");
     }
   });
 
@@ -998,12 +998,12 @@ describe("TIMEOUT_BY_EFFORT", () => {
     expect(TIMEOUT_BY_EFFORT.medium).toBe(600_000);
   });
 
-  test("high = 1200 seconds (20 min)", () => {
-    expect(TIMEOUT_BY_EFFORT.high).toBe(1_200_000);
+  test("high = 1800 seconds (30 min)", () => {
+    expect(TIMEOUT_BY_EFFORT.high).toBe(1_800_000);
   });
 
-  test("xhigh = 2400 seconds (40 min)", () => {
-    expect(TIMEOUT_BY_EFFORT.xhigh).toBe(2_400_000);
+  test("xhigh = 2700 seconds (45 min)", () => {
+    expect(TIMEOUT_BY_EFFORT.xhigh).toBe(2_700_000);
   });
 });
 
