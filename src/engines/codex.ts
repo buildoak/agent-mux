@@ -127,12 +127,17 @@ export class CodexEngine implements EngineAdapter {
     const items: ActivityItem[] = [];
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    let sessionId = "";
 
     for await (const event of streamedTurn.events) {
       // Heartbeat on every event
       callbacks.onHeartbeat(describeEvent(event));
 
       switch (event.type) {
+        case "thread.started": {
+          sessionId = event.thread_id;
+          break;
+        }
         case "item.started":
         case "item.updated": {
           break;
@@ -169,6 +174,7 @@ export class CodexEngine implements EngineAdapter {
       response: response || "(no response)",
       items,
       metadata: {
+        session_id: sessionId || thread.id || undefined,
         model,
         tokens: { input: totalInputTokens, output: totalOutputTokens },
       },
