@@ -29,6 +29,39 @@ func TestGeminiBuildArgs(t *testing.T) {
 	}
 }
 
+func TestGeminiBuildArgsPermissionMode(t *testing.T) {
+	a := &GeminiAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt: "Build the parser",
+		EngineOpts: map[string]any{
+			"permission-mode": "plan",
+		},
+	}
+
+	args := a.BuildArgs(spec)
+
+	assertContains(t, args, "--approval-mode")
+	assertContains(t, args, "plan")
+}
+
+func TestGeminiBuildArgsEmptyPermissionModeDefaultsToYolo(t *testing.T) {
+	a := &GeminiAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt: "Build the parser",
+		EngineOpts: map[string]any{
+			"permission-mode": "",
+		},
+	}
+
+	args := a.BuildArgs(spec)
+
+	assertContains(t, args, "--approval-mode")
+	assertContains(t, args, "yolo")
+	assertNotContains(t, args, "plan")
+}
+
 func TestGeminiParseInit(t *testing.T) {
 	a := &GeminiAdapter{}
 

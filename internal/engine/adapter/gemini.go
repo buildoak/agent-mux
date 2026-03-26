@@ -41,10 +41,6 @@ type geminiStats struct {
 	Turns        int   `json:"turns"`
 }
 
-func GeminiValidModels() []string {
-	return []string{"gemini-3.1-pro", "gemini-3.1-flash"}
-}
-
 func (a *GeminiAdapter) Binary() string {
 	return "gemini"
 }
@@ -54,7 +50,11 @@ func (a *GeminiAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	if spec.Model != "" {
 		args = append(args, "-m", spec.Model)
 	}
-	args = append(args, "--approval-mode", "yolo", spec.Prompt)
+	approvalMode := "yolo"
+	if mode, ok := spec.EngineOpts["permission-mode"].(string); ok && mode != "" {
+		approvalMode = mode
+	}
+	args = append(args, "--approval-mode", approvalMode, spec.Prompt)
 	return args
 }
 

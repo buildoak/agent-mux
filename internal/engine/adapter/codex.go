@@ -19,16 +19,21 @@ func (a *CodexAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	if spec.Model != "" {
 		args = append(args, "-m", spec.Model)
 	}
-	sandbox := "danger-full-access"
-	if opts, ok := spec.EngineOpts["sandbox"]; ok {
-		if s, ok := opts.(string); ok && s != "" {
-			sandbox = s
-		}
-	}
-	if spec.FullAccess && sandbox == "danger-full-access" {
-		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	permMode, _ := spec.EngineOpts["permission-mode"].(string)
+	if permMode != "" {
+		args = append(args, "-s", permMode)
 	} else {
-		args = append(args, "-s", sandbox)
+		sandbox := "danger-full-access"
+		if opts, ok := spec.EngineOpts["sandbox"]; ok {
+			if s, ok := opts.(string); ok && s != "" {
+				sandbox = s
+			}
+		}
+		if spec.FullAccess && sandbox == "danger-full-access" {
+			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+		} else {
+			args = append(args, "-s", sandbox)
+		}
 	}
 	if spec.Cwd != "" {
 		args = append(args, "-C", spec.Cwd)

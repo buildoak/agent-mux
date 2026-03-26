@@ -43,13 +43,27 @@ func TestClaudeBuildArgsPermissionMode(t *testing.T) {
 	spec := &types.DispatchSpec{
 		Prompt: "Build the parser",
 		EngineOpts: map[string]any{
-			"permission-mode": "acceptEdits",
+			"permission-mode": "plan",
 		},
 	}
 
 	args := a.BuildArgs(spec)
 	assertContains(t, args, "--permission-mode")
-	assertContains(t, args, "acceptEdits")
+	assertContains(t, args, "plan")
+}
+
+func TestClaudeBuildArgsEmptyPermissionMode(t *testing.T) {
+	a := &ClaudeAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt: "Build the parser",
+		EngineOpts: map[string]any{
+			"permission-mode": "",
+		},
+	}
+
+	args := a.BuildArgs(spec)
+	assertNotContains(t, args, "--permission-mode")
 }
 
 func TestClaudeBuildArgsSystemPrompt(t *testing.T) {

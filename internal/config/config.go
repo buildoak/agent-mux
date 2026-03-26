@@ -120,6 +120,10 @@ func LoadConfig(configPath string, cwd string) (*Config, error) {
 	return cfg, nil
 }
 
+func MergeConfigInto(base, overlay *Config) {
+	mergeConfig(base, overlay)
+}
+
 func mergeConfig(base, overlay *Config) {
 	if base == nil || overlay == nil {
 		return

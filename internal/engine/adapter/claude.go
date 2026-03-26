@@ -135,10 +135,6 @@ func (a *ClaudeAdapter) ResumeArgs(sessionID string, message string) []string {
 	return []string{"--resume", sessionID, "--continue", message}
 }
 
-func ClaudeValidModels() []string {
-	return []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
-}
-
 func (a *ClaudeAdapter) parseAssistantEvent(raw *claudeEvent, inputFields *struct {
 	FilePath string `json:"file_path"`
 	Command  string `json:"command"`

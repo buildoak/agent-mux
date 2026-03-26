@@ -67,6 +67,43 @@ func TestCodexBuildArgsWithSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestCodexBuildArgsPermissionModeOverridesSandbox(t *testing.T) {
+	a := &CodexAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt:     "test prompt",
+		FullAccess: true,
+		EngineOpts: map[string]any{
+			"permission-mode": "plan",
+			"sandbox":         "workspace-write",
+		},
+	}
+
+	args := a.BuildArgs(spec)
+
+	assertContains(t, args, "-s")
+	assertContains(t, args, "plan")
+	assertNotContains(t, args, "--dangerously-bypass-approvals-and-sandbox")
+	assertNotContains(t, args, "workspace-write")
+}
+
+func TestCodexBuildArgsEmptyPermissionModeUsesSandboxLogic(t *testing.T) {
+	a := &CodexAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt:     "test prompt",
+		FullAccess: true,
+		EngineOpts: map[string]any{
+			"permission-mode": "",
+		},
+	}
+
+	args := a.BuildArgs(spec)
+
+	assertContains(t, args, "--dangerously-bypass-approvals-and-sandbox")
+	assertNotContains(t, args, "plan")
+}
+
 func TestCodexParseThreadStarted(t *testing.T) {
 	a := &CodexAdapter{}
 
@@ -321,4 +358,14 @@ func assertContains(t *testing.T, slice []string, want string) {
 		}
 	}
 	t.Errorf("slice %v does not contain %q", slice, want)
+}
+
+func assertNotContains(t *testing.T, slice []string, want string) {
+	t.Helper()
+	for _, s := range slice {
+		if s == want {
+			t.Errorf("slice %v unexpectedly contains %q", slice, want)
+			return
+		}
+	}
 }

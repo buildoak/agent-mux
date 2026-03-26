@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,8 +51,8 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 	if spec.Engine != "codex" {
 		t.Fatalf("engine = %q, want %q", spec.Engine, "codex")
 	}
-	if spec.Effort != "high" {
-		t.Fatalf("effort = %q, want %q", spec.Effort, "high")
+	if spec.Effort != "" {
+		t.Fatalf("effort = %q, want empty default for config fallback", spec.Effort)
 	}
 	wantCwd, err := os.Getwd()
 	if err != nil {
@@ -292,6 +294,102 @@ func TestWriteTextResultError(t *testing.T) {
 	}
 }
 
+func TestRunPrependsContextFilePreamble(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
+	contextFile := filepath.Join(t.TempDir(), "context.md")
+	if err := os.WriteFile(contextFile, []byte("context"), 0644); err != nil {
+		t.Fatalf("write context file: %v", err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	prompt := "implement feature"
+	exitCode := run([]string{
+		"--engine", "codex",
+		"--artifact-dir", artifactDir,
+		"--context-file", contextFile,
+		prompt,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 && exitCode != 1 {
+		t.Fatalf("exit code = %d, want 0 or 1; stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
+	}
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found", result.Error)
+	}
+
+	meta := readDispatchMeta(t, artifactDir)
+	wantPrompt := contextFilePromptPreamble + "\n" + prompt
+	if meta.PromptHash != promptHash(wantPrompt) {
+		t.Fatalf("prompt_hash = %q, want %q", meta.PromptHash, promptHash(wantPrompt))
+	}
+}
+
+func TestRunFailsWhenContextFileMissing(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "nonexistent-12345.md")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--engine", "codex",
+		"--context-file", missingPath,
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
+	}
+	if result.Error == nil {
+		t.Fatal("error = nil, want config_error")
+	}
+	if result.Error.Code != "config_error" {
+		t.Fatalf("error.code = %q, want %q", result.Error.Code, "config_error")
+	}
+}
+
+func TestRunLeavesPromptUnchangedWithoutContextFile(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	prompt := "implement feature"
+	exitCode := run([]string{
+		"--engine", "codex",
+		"--artifact-dir", artifactDir,
+		prompt,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 && exitCode != 1 {
+		t.Fatalf("exit code = %d, want 0 or 1; stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
+	}
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found", result.Error)
+	}
+
+	meta := readDispatchMeta(t, artifactDir)
+	if meta.PromptHash != promptHash(prompt) {
+		t.Fatalf("prompt_hash = %q, want %q", meta.PromptHash, promptHash(prompt))
+	}
+	if meta.PromptHash == promptHash(contextFilePromptPreamble+"\n"+prompt) {
+		t.Fatalf("prompt_hash = %q, should not include context preamble", meta.PromptHash)
+	}
+}
+
 type ioDiscard struct{}
 
 func (ioDiscard) Write(p []byte) (int, error) {
@@ -315,6 +413,40 @@ func writeTempConfig(t *testing.T, content string) string {
 	t.Cleanup(func() { os.Remove(f.Name()) })
 
 	return f.Name()
+}
+
+func decodeResult(t *testing.T, data []byte) types.DispatchResult {
+	t.Helper()
+
+	var result types.DispatchResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("unmarshal DispatchResult: %v\nstdout=%q", err, string(data))
+	}
+	return result
+}
+
+func readDispatchMeta(t *testing.T, artifactDir string) dispatchMetaForTest {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(artifactDir, "_dispatch_meta.json"))
+	if err != nil {
+		t.Fatalf("read dispatch meta: %v", err)
+	}
+
+	var meta dispatchMetaForTest
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("unmarshal dispatch meta: %v", err)
+	}
+	return meta
+}
+
+func promptHash(prompt string) string {
+	sum := sha256.Sum256([]byte(prompt))
+	return fmt.Sprintf("sha256:%x", sum[:8])
+}
+
+type dispatchMetaForTest struct {
+	PromptHash string `json:"prompt_hash"`
 }
 
 func TestFlagSetVisitTracksExplicitFlags(t *testing.T) {
@@ -441,7 +573,7 @@ func TestRoleEffortNotAppliedWhenExplicitEffort(t *testing.T) {
 	}
 }
 
-func TestDefaultEffortWithNoRole(t *testing.T) {
+func TestBuildDispatchSpecLeavesEffortEmptyWithoutExplicitFlag(t *testing.T) {
 	t.Parallel()
 
 	fs, parsed := newFlagSet(ioDiscard{})
@@ -456,7 +588,7 @@ func TestDefaultEffortWithNoRole(t *testing.T) {
 		t.Fatalf("buildDispatchSpecE: %v", err)
 	}
 
-	if spec.Effort != "high" {
-		t.Errorf("spec.Effort = %q, want %q", spec.Effort, "high")
+	if spec.Effort != "" {
+		t.Errorf("spec.Effort = %q, want empty string", spec.Effort)
 	}
 }

@@ -23,6 +23,7 @@ import (
 )
 
 const version = "agent-mux v2.0.0-dev"
+const contextFilePromptPreamble = "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting."
 
 type stringSlice []string
 
@@ -39,13 +40,13 @@ func (s *stringSlice) Set(value string) error {
 }
 
 type cliFlags struct {
-	engine, role, cwd, model, effort, systemPrompt, systemPromptFile string
-	contextFile, artifactDir, salt, config, promptFile               string
-	permissionMode, sandbox, reasoning                               string
-	output                                                           string
-	timeout, maxDepth, responseMaxChars, maxTurns                    int
-	full, noFull, noSubdispatch, stdin, version, verbose             bool
-	skills, addDirs                                                  stringSlice
+	engine, role, coordinator, cwd, model, effort, systemPrompt, systemPromptFile string
+	contextFile, artifactDir, salt, config, promptFile                            string
+	permissionMode, sandbox, reasoning                                            string
+	output                                                                        string
+	timeout, maxDepth, responseMaxChars, maxTurns                                 int
+	full, noFull, noSubdispatch, stdin, version, verbose                          bool
+	skills, addDirs                                                               stringSlice
 }
 
 func main() {
@@ -118,6 +119,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	if flags.coordinator != "" {
+		coordSpec, companionCfg, err := config.LoadCoordinator(flags.coordinator, spec.Cwd)
+		if err != nil {
+			return failResult(spec, "config_error", err.Error(), "")
+		}
+		if companionCfg != nil {
+			config.MergeConfigInto(cfg, companionCfg)
+		}
+		if !flagsSet["engine"] && !flagsSet["E"] && coordSpec.Engine != "" {
+			spec.Engine = coordSpec.Engine
+		}
+		if !flagsSet["model"] && !flagsSet["m"] && coordSpec.Model != "" {
+			spec.Model = coordSpec.Model
+		}
+		if !flagsSet["effort"] && !flagsSet["e"] && coordSpec.Effort != "" {
+			spec.Effort = coordSpec.Effort
+		}
+		if !flagsSet["timeout"] && !flagsSet["t"] && coordSpec.Timeout > 0 {
+			spec.TimeoutSec = coordSpec.Timeout
+		}
+		if spec.SystemPrompt == "" && coordSpec.SystemPrompt != "" {
+			spec.SystemPrompt = coordSpec.SystemPrompt
+		}
+		spec.Skills = append(coordSpec.Skills, spec.Skills...)
+	}
+
 	if flags.role != "" {
 		role, err := config.ResolveRole(cfg, flags.role)
 		if err != nil {
@@ -139,6 +166,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if spec.Model == "" {
 		spec.Model = cfg.Defaults.Model
+	}
+	if spec.Effort == "" {
+		spec.Effort = cfg.Defaults.Effort
+	}
+	if spec.Effort == "" {
+		spec.Effort = "high"
 	}
 	if spec.ResponseMaxChars == 0 {
 		spec.ResponseMaxChars = cfg.Defaults.ResponseMaxChars
@@ -166,6 +199,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	spec.EngineOpts["heartbeat_interval_sec"] = cfg.Liveness.HeartbeatIntervalSec
 	spec.EngineOpts["silence_warn_seconds"] = cfg.Liveness.SilenceWarnSeconds
 	spec.EngineOpts["silence_kill_seconds"] = cfg.Liveness.SilenceKillSeconds
+	// Apply default permission mode from config if not set by CLI.
+	if _, ok := spec.EngineOpts["permission-mode"]; !ok || spec.EngineOpts["permission-mode"] == "" {
+		if !flagsSet["permission-mode"] && cfg.Defaults.PermissionMode != "" {
+			spec.EngineOpts["permission-mode"] = cfg.Defaults.PermissionMode
+		}
+	}
+
+	if len(spec.Skills) > 0 {
+		skillPrompt, pathDirs, err := config.LoadSkills(spec.Skills, spec.Cwd)
+		if err != nil {
+			return failResult(spec, "config_error", err.Error(), "")
+		}
+		if skillPrompt != "" {
+			spec.Prompt = skillPrompt + "\n" + spec.Prompt
+		}
+		if len(pathDirs) > 0 {
+			existing := anySliceOrEmpty(spec.EngineOpts["add-dir"])
+			spec.EngineOpts["add-dir"] = append(pathDirs, existing...)
+		}
+	}
 
 	if spec.Engine == "" {
 		return failResult(spec, "invalid_args", "No engine specified.", "Use --engine codex, --engine claude, or --engine gemini.")
@@ -210,6 +263,19 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return failResult(spec, "model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText)
 	}
 
+	if spec.ContextFile != "" {
+		if _, err := os.Stat(spec.ContextFile); err != nil {
+			if os.IsNotExist(err) {
+				return failResult(spec, "config_error",
+					fmt.Sprintf("context file not found: %s", spec.ContextFile),
+					"Check the --context-file path exists before dispatching.")
+			}
+			return failResult(spec, "config_error",
+				fmt.Sprintf("cannot stat context file %s: %v", spec.ContextFile, err), "")
+		}
+		spec.Prompt = contextFilePromptPreamble + "\n" + spec.Prompt
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -227,6 +293,23 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		writeResult(stdout, result)
 	}
 	return 0
+}
+
+func anySliceOrEmpty(v any) []string {
+	switch value := v.(type) {
+	case []string:
+		return append([]string(nil), value...)
+	case []any:
+		out := make([]string, 0, len(value))
+		for _, item := range value {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func writeResult(w io.Writer, result *types.DispatchResult) {
@@ -261,7 +344,7 @@ func writeTextResult(w io.Writer, result *types.DispatchResult) {
 
 func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	flags := &cliFlags{
-		effort:    "high",
+		effort:    "",
 		full:      true,
 		maxDepth:  2,
 		output:    "json",
@@ -274,6 +357,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 
 	bindStr(fs, &flags.engine, "Engine name", "", "engine", "E")
 	bindStr(fs, &flags.role, "Role", "", "role", "R")
+	fs.StringVar(&flags.coordinator, "coordinator", "", "Coordinator")
 	bindStr(fs, &flags.cwd, "Working directory", "", "cwd", "C")
 	bindStr(fs, &flags.model, "Model", "", "model", "m")
 	bindStr(fs, &flags.effort, "Effort", flags.effort, "effort", "e")
@@ -381,6 +465,7 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 		SystemPrompt:     systemPrompt,
 		Cwd:              cwd,
 		Skills:           append([]string(nil), flags.skills...),
+		Coordinator:      flags.coordinator,
 		ContextFile:      flags.contextFile,
 		ArtifactDir:      artifactDir,
 		TimeoutSec:       flags.timeout,
