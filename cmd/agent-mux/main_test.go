@@ -143,6 +143,27 @@ func TestRepeatableSkillFlag(t *testing.T) {
 	}
 }
 
+func TestNormalizeArgsAllowsFlagsAfterPrompt(t *testing.T) {
+	t.Parallel()
+
+	fs, parsed := newFlagSet(ioDiscard{})
+	err := fs.Parse(normalizeArgs([]string{"--recover", "NONEXISTENT", "continue", "--engine", "codex"}))
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	flags, positional := *parsed, fs.Args()
+	if flags.recover != "NONEXISTENT" {
+		t.Fatalf("recover = %q, want %q", flags.recover, "NONEXISTENT")
+	}
+	if flags.engine != "codex" {
+		t.Fatalf("engine = %q, want %q", flags.engine, "codex")
+	}
+	if len(positional) != 1 || positional[0] != "continue" {
+		t.Fatalf("positional = %#v, want []string{\"continue\"}", positional)
+	}
+}
+
 func TestStdinMode(t *testing.T) {
 	t.Parallel()
 

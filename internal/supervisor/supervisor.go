@@ -14,6 +14,7 @@ type Process struct {
 	cmd      *exec.Cmd
 	pgid     int
 	started  bool
+	stateMu  sync.RWMutex
 	waitDone chan struct{}
 	waitErr  error
 	waitOnce sync.Once
@@ -32,8 +33,10 @@ func (p *Process) Start() error {
 	if err := p.cmd.Start(); err != nil {
 		return fmt.Errorf("start process: %w", err)
 	}
+	p.stateMu.Lock()
 	p.started = true
 	if p.cmd.Process == nil {
+		p.stateMu.Unlock()
 		return nil
 	}
 	if pgid, err := syscall.Getpgid(p.cmd.Process.Pid); err == nil {
@@ -41,6 +44,7 @@ func (p *Process) Start() error {
 	} else {
 		p.pgid = p.cmd.Process.Pid
 	}
+	p.stateMu.Unlock()
 	return nil
 }
 
@@ -54,7 +58,11 @@ func (p *Process) Wait() error {
 }
 
 func (p *Process) GracefulStop(graceSec int) error {
-	if !p.started || p.cmd.Process == nil {
+	p.stateMu.RLock()
+	started := p.started
+	hasProcess := p.cmd.Process != nil
+	p.stateMu.RUnlock()
+	if !started || !hasProcess {
 		return nil
 	}
 	if err := p.signalGroup(syscall.SIGTERM); err != nil {
@@ -73,19 +81,27 @@ func (p *Process) GracefulStop(graceSec int) error {
 }
 
 func (p *Process) Kill() error {
-	if !p.started || p.cmd.Process == nil {
+	p.stateMu.RLock()
+	started := p.started
+	hasProcess := p.cmd.Process != nil
+	p.stateMu.RUnlock()
+	if !started || !hasProcess {
 		return nil
 	}
 	return p.signalGroup(syscall.SIGKILL)
 }
 
 func (p *Process) signalGroup(sig syscall.Signal) error {
+	p.stateMu.RLock()
+	pgid := p.pgid
+	proc := p.cmd.Process
+	p.stateMu.RUnlock()
 	send := func() error {
-		if p.pgid > 0 {
-			return syscall.Kill(-p.pgid, sig)
+		if pgid > 0 {
+			return syscall.Kill(-pgid, sig)
 		}
-		if p.cmd.Process != nil {
-			return p.cmd.Process.Signal(sig)
+		if proc != nil {
+			return proc.Signal(sig)
 		}
 		return nil
 	}

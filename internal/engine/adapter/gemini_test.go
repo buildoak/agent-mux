@@ -295,15 +295,21 @@ func TestGeminiParseEmptyLine(t *testing.T) {
 
 func TestGeminiSupportsResume(t *testing.T) {
 	a := &GeminiAdapter{}
-	if a.SupportsResume() {
-		t.Fatal("Gemini should not support resume")
+	if !a.SupportsResume() {
+		t.Fatal("Gemini should support resume")
 	}
 }
 
 func TestGeminiResumeArgs(t *testing.T) {
 	a := &GeminiAdapter{}
 	args := a.ResumeArgs("gem-session-789xyz", "resume")
-	if len(args) != 0 {
-		t.Fatalf("args = %v, want empty", args)
+	want := []string{"--resume", "gem-session-789xyz", "-p", "resume"}
+	if len(args) != len(want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("args[%d] = %q, want %q", i, args[i], want[i])
+		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/event"
+	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/supervisor"
 	"github.com/buildoak/agent-mux/internal/types"
 )
@@ -25,7 +26,6 @@ type LoopEngine struct {
 }
 
 func NewLoopEngine(engineName string, adapter types.HarnessAdapter, validModels []string, eventWriter io.Writer) *LoopEngine {
-	_, _ = engineName, validModels
 	return &LoopEngine{
 		adapter:     adapter,
 		eventWriter: eventWriter,
@@ -38,6 +38,11 @@ func (e *LoopEngine) SetVerbose(v bool) {
 
 func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*types.DispatchResult, error) {
 	startTime := time.Now()
+	dispatchSpec := *spec
+	if dispatchSpec.ArtifactDir != "" {
+		dispatchSpec.Prompt = "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.\n\n" + dispatchSpec.Prompt
+	}
+
 	metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}}
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
 		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."), nil
@@ -45,15 +50,28 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	if err := dispatch.WriteDispatchMeta(spec.ArtifactDir, spec); err != nil {
 		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write dispatch metadata in %q: %v", spec.ArtifactDir, err), "Ensure the artifact directory is writable."), nil
 	}
+	inboxCreateErr := inbox.CreateInbox(spec.ArtifactDir)
+	if inboxCreateErr != nil {
+		if e.verbose && e.eventWriter != nil {
+			fmt.Fprintf(e.eventWriter, "[engine] create inbox: %v\n", inboxCreateErr)
+		}
+	}
 	eventLogPath := filepath.Join(spec.ArtifactDir, "events.jsonl")
 	emitter, err := event.NewEmitter(spec.DispatchID, spec.Salt, e.eventWriter, eventLogPath)
 	if err != nil {
 		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create event log %q: %v", eventLogPath, err), "Ensure the artifact directory is writable."), nil
 	}
 	defer emitter.Close()
+	if inboxCreateErr != nil {
+		_ = emitter.Emit(event.Event{
+			Type:      "warning",
+			ErrorCode: "coordinator_inbox_create_failed",
+			Message:   fmt.Sprintf("Create coordinator inbox failed: %v", inboxCreateErr),
+		})
+	}
 
 	_ = emitter.EmitDispatchStart(spec)
-	args := e.adapter.BuildArgs(spec)
+	args := e.adapter.BuildArgs(&dispatchSpec)
 	binary := e.adapter.Binary()
 	if _, err := exec.LookPath(binary); err != nil {
 		return buildFailureResult(
@@ -213,6 +231,25 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			case types.EventRawPassthrough:
 			}
 			mu.Unlock()
+
+			if inbox.HasMessages(spec.ArtifactDir) {
+				messages, err := inbox.ReadInbox(spec.ArtifactDir)
+				if err != nil {
+					_ = emitter.EmitError("coordinator_inbox_read_failed", fmt.Sprintf("Read coordinator inbox: %v", err))
+					continue
+				}
+				for _, msg := range messages {
+					_ = emitter.Emit(event.Event{Type: "coordinator_inject", Message: msg})
+
+					mu.Lock()
+					sid := sessionID
+					mu.Unlock()
+
+					if e.adapter.SupportsResume() && sid != "" {
+						_ = emitter.EmitProgress("Coordinator injection queued; resume-based injection is not implemented in this loop yet.")
+					}
+				}
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			streamScanErr = err

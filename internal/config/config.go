@@ -8,15 +8,17 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/buildoak/agent-mux/internal/pipeline"
 )
 
 type Config struct {
-	Defaults DefaultsConfig        `toml:"defaults"`
-	Models   map[string][]string   `toml:"models"`
-	Roles    map[string]RoleConfig `toml:"roles"`
-	Liveness LivenessConfig        `toml:"liveness"`
-	Timeout  TimeoutConfig         `toml:"timeout"`
-	Hooks    HooksConfig           `toml:"hooks"`
+	Defaults  DefaultsConfig                     `toml:"defaults"`
+	Models    map[string][]string                `toml:"models"`
+	Roles     map[string]RoleConfig              `toml:"roles"`
+	Pipelines map[string]pipeline.PipelineConfig `toml:"pipelines"`
+	Liveness  LivenessConfig                     `toml:"liveness"`
+	Timeout   TimeoutConfig                      `toml:"timeout"`
+	Hooks     HooksConfig                        `toml:"hooks"`
 
 	meta *toml.MetaData
 }
@@ -68,8 +70,9 @@ func DefaultConfig() *Config {
 			MaxDepth:         2,
 			AllowSubdispatch: true,
 		},
-		Models: make(map[string][]string),
-		Roles:  make(map[string]RoleConfig),
+		Models:    make(map[string][]string),
+		Roles:     make(map[string]RoleConfig),
+		Pipelines: make(map[string]pipeline.PipelineConfig),
 		Liveness: LivenessConfig{
 			HeartbeatIntervalSec: 15,
 			SilenceWarnSeconds:   90,
@@ -153,6 +156,14 @@ func mergeConfig(base, overlay *Config) {
 		}
 		for name, role := range overlay.Roles {
 			base.Roles[name] = role
+		}
+	}
+	if len(overlay.Pipelines) > 0 {
+		if base.Pipelines == nil {
+			base.Pipelines = make(map[string]pipeline.PipelineConfig, len(overlay.Pipelines))
+		}
+		for name, cfg := range overlay.Pipelines {
+			base.Pipelines[name] = cfg
 		}
 	}
 	merge(&base.Liveness.HeartbeatIntervalSec, overlay.Liveness.HeartbeatIntervalSec, overlay.defined("liveness", "heartbeat_interval_sec"))

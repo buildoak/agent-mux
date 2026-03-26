@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/buildoak/agent-mux/internal/types"
@@ -28,14 +29,17 @@ var (
 		"one", "two", "three", "four", "five",
 		"six", "seven", "eight", "nine", "zero",
 	}
+	saltRand = rand.New(rand.NewSource(time.Now().UnixNano()))
+	saltMu   sync.Mutex
 )
 
 func GenerateSalt() string {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	saltMu.Lock()
+	defer saltMu.Unlock()
 	return fmt.Sprintf("%s-%s-%s",
-		adjectives[r.Intn(len(adjectives))],
-		nouns[r.Intn(len(nouns))],
-		digits[r.Intn(len(digits))],
+		adjectives[saltRand.Intn(len(adjectives))],
+		nouns[saltRand.Intn(len(nouns))],
+		digits[saltRand.Intn(len(digits))],
 	)
 }
 func EnsureArtifactDir(dir string) error {

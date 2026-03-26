@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -18,6 +19,9 @@ import (
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/engine"
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
+	"github.com/buildoak/agent-mux/internal/inbox"
+	"github.com/buildoak/agent-mux/internal/pipeline"
+	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/types"
 	"github.com/oklog/ulid/v2"
 )
@@ -41,9 +45,10 @@ func (s *stringSlice) Set(value string) error {
 
 type cliFlags struct {
 	engine, role, coordinator, cwd, model, effort, systemPrompt, systemPromptFile string
-	contextFile, artifactDir, salt, config, promptFile                            string
+	contextFile, artifactDir, salt, config, promptFile, recover                   string
+	signal                                                                        string
 	permissionMode, sandbox, reasoning                                            string
-	output                                                                        string
+	output, pipeline                                                              string
 	timeout, maxDepth, responseMaxChars, maxTurns                                 int
 	full, noFull, noSubdispatch, stdin, version, verbose                          bool
 	skills, addDirs                                                               stringSlice
@@ -55,7 +60,7 @@ func main() {
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs, parsed := newFlagSet(stderr)
-	err := fs.Parse(args)
+	err := fs.Parse(normalizeArgs(args))
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -68,6 +73,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	if flags.version {
 		fmt.Fprintln(stdout, version)
+		return 0
+	}
+	if flags.signal != "" {
+		if len(positional) == 0 {
+			fmt.Fprintln(stderr, "--signal requires a message as the first positional argument")
+			return 2
+		}
+		msg := positional[0]
+		artifactDir := filepath.Join("/tmp/agent-mux", flags.signal)
+		if err := inbox.WriteInbox(artifactDir, msg); err != nil {
+			fmt.Fprintf(stderr, "signal: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(
+			stdout,
+			`{"status":"ok","dispatch_id":%q,"artifact_dir":%q,"message":"Signal delivered to inbox","note":"Signals are written to /tmp/agent-mux/<dispatch_id>/inbox.md; dispatches started with custom --artifact-dir may not receive this signal."}`,
+			flags.signal,
+			artifactDir,
+		)
+		fmt.Fprintln(stdout)
 		return 0
 	}
 
@@ -119,6 +144,29 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	applyPreset := func(engine, model, effort string) {
+		if !flagsSet["engine"] && !flagsSet["E"] && engine != "" {
+			spec.Engine = engine
+		}
+		if !flagsSet["model"] && !flagsSet["m"] && model != "" {
+			spec.Model = model
+		}
+		if !flagsSet["effort"] && !flagsSet["e"] && effort != "" {
+			spec.Effort = effort
+		}
+	}
+	applyDefaults := func() {
+		if spec.Engine == "" {
+			spec.Engine = cfg.Defaults.Engine
+		}
+		if spec.Model == "" {
+			spec.Model = cfg.Defaults.Model
+		}
+		if spec.Effort == "" {
+			spec.Effort = cfg.Defaults.Effort
+		}
+	}
+
 	if flags.coordinator != "" {
 		coordSpec, companionCfg, err := config.LoadCoordinator(flags.coordinator, spec.Cwd)
 		if err != nil {
@@ -127,15 +175,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if companionCfg != nil {
 			config.MergeConfigInto(cfg, companionCfg)
 		}
-		if !flagsSet["engine"] && !flagsSet["E"] && coordSpec.Engine != "" {
-			spec.Engine = coordSpec.Engine
-		}
-		if !flagsSet["model"] && !flagsSet["m"] && coordSpec.Model != "" {
-			spec.Model = coordSpec.Model
-		}
-		if !flagsSet["effort"] && !flagsSet["e"] && coordSpec.Effort != "" {
-			spec.Effort = coordSpec.Effort
-		}
+		applyPreset(coordSpec.Engine, coordSpec.Model, coordSpec.Effort)
 		if !flagsSet["timeout"] && !flagsSet["t"] && coordSpec.Timeout > 0 {
 			spec.TimeoutSec = coordSpec.Timeout
 		}
@@ -150,26 +190,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
-		if !flagsSet["engine"] && !flagsSet["E"] && role.Engine != "" {
-			spec.Engine = role.Engine
-		}
-		if !flagsSet["model"] && !flagsSet["m"] && role.Model != "" {
-			spec.Model = role.Model
-		}
-		if !flagsSet["effort"] && !flagsSet["e"] && role.Effort != "" {
-			spec.Effort = role.Effort
-		}
+		applyPreset(role.Engine, role.Model, role.Effort)
 	}
 
-	if spec.Engine == "" {
-		spec.Engine = cfg.Defaults.Engine
-	}
-	if spec.Model == "" {
-		spec.Model = cfg.Defaults.Model
-	}
-	if spec.Effort == "" {
-		spec.Effort = cfg.Defaults.Effort
-	}
+	applyDefaults()
 	if spec.Effort == "" {
 		spec.Effort = "high"
 	}
@@ -224,45 +248,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return failResult(spec, "invalid_args", "No engine specified.", "Use --engine codex, --engine claude, or --engine gemini.")
 	}
 
-	codexModels := cfg.Models["codex"]
-	if len(codexModels) == 0 {
-		codexModels = []string{"gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2-codex"}
-	}
-	var (
-		adp         types.HarnessAdapter
-		validModels []string
-	)
-	switch spec.Engine {
-	case "codex":
-		adp = &adapter.CodexAdapter{}
-		validModels = codexModels
-	case "claude":
-		adp = &adapter.ClaudeAdapter{}
-		claudeModels := cfg.Models["claude"]
-		if len(claudeModels) == 0 {
-			claudeModels = []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
-		}
-		validModels = claudeModels
-	case "gemini":
-		adp = &adapter.GeminiAdapter{}
-		geminiModels := cfg.Models["gemini"]
-		if len(geminiModels) == 0 {
-			geminiModels = []string{"gemini-3.1-pro", "gemini-3.1-flash"}
-		}
-		validModels = geminiModels
-	default:
-		return failResult(spec, "engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]")
-	}
-
-	if spec.Model != "" && len(validModels) > 0 && !slices.Contains(validModels, spec.Model) {
-		suggestion := dispatch.FuzzyMatchModel(spec.Model, validModels)
-		suggestionText := fmt.Sprintf("Valid models for %s: %v", spec.Engine, validModels)
-		if suggestion != "" {
-			suggestionText = fmt.Sprintf("Did you mean %q? %s", suggestion, suggestionText)
-		}
-		return failResult(spec, "model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText)
-	}
-
 	if spec.ContextFile != "" {
 		if _, err := os.Stat(spec.ContextFile); err != nil {
 			if os.IsNotExist(err) {
@@ -276,12 +261,39 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		spec.Prompt = contextFilePromptPreamble + "\n" + spec.Prompt
 	}
 
+	if flags.recover != "" {
+		recoveryCtx, err := recovery.RecoverDispatch(flags.recover)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		spec.ContinuesDispatchID = flags.recover
+		spec.Prompt = recovery.BuildRecoveryPrompt(recoveryCtx, spec.Prompt)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	eng := engine.NewLoopEngine(spec.Engine, adp, validModels, stderr)
-	eng.SetVerbose(flags.verbose)
-	result, err := eng.Dispatch(ctx, spec)
+	if flags.pipeline != "" {
+		pipelineCfg, ok := cfg.Pipelines[flags.pipeline]
+		if !ok {
+			return failResult(spec, "config_error",
+				fmt.Sprintf("Pipeline %q not found in config.", flags.pipeline),
+				fmt.Sprintf("Available pipelines: %v", availablePipelines(cfg)))
+		}
+		if err := pipeline.ValidatePipeline(pipelineCfg); err != nil {
+			return failResult(spec, "config_error",
+				fmt.Sprintf("Pipeline %q validation failed: %v", flags.pipeline, err), "")
+		}
+		result, err := runPipeline(ctx, pipelineCfg, spec, cfg, stderr, flags.verbose)
+		if err != nil {
+			return failResult(spec, "config_error", err.Error(), "")
+		}
+		writePipelineResult(stdout, result)
+		return 0
+	}
+
+	result, err := dispatchSpec(ctx, spec, cfg, stderr, flags.verbose)
 	if err != nil {
 		fmt.Fprintf(stderr, "dispatch error: %v\n", err)
 		return 1
@@ -313,10 +325,14 @@ func anySliceOrEmpty(v any) []string {
 }
 
 func writeResult(w io.Writer, result *types.DispatchResult) {
+	writeJSON(w, result)
+}
+
+func writeJSON(w io.Writer, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	enc.Encode(result)
+	_ = enc.Encode(v)
 }
 
 func writeTextResult(w io.Writer, result *types.DispatchResult) {
@@ -368,8 +384,11 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	fs.Var(&flags.skills, "skill", "Skill name")
 	fs.StringVar(&flags.contextFile, "context-file", "", "Context file")
 	fs.StringVar(&flags.artifactDir, "artifact-dir", "", "Artifact directory")
+	fs.StringVar(&flags.recover, "recover", "", "Previous dispatch ID to continue")
+	fs.StringVar(&flags.signal, "signal", "", "Dispatch ID to send signal to")
 	fs.StringVar(&flags.salt, "salt", "", "Dispatch salt")
 	fs.StringVar(&flags.config, "config", "", "Config path")
+	bindStr(fs, &flags.pipeline, "Pipeline name", "", "pipeline", "P")
 	bindBool(fs, &flags.full, "Full access mode", flags.full, "full", "f")
 	fs.BoolVar(&flags.noFull, "no-full", false, "Disable full access mode")
 	fs.StringVar(&flags.promptFile, "prompt-file", "", "Prompt file")
@@ -483,6 +502,72 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 	return spec, nil
 }
 
+func normalizeArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positionals = append(positionals, arg)
+			continue
+		}
+
+		flags = append(flags, arg)
+		if strings.Contains(arg, "=") || !flagTakesValue(arg) {
+			continue
+		}
+		if i+1 < len(args) {
+			flags = append(flags, args[i+1])
+			i++
+		}
+	}
+
+	return append(flags, positionals...)
+}
+
+func flagTakesValue(name string) bool {
+	switch name {
+	case "--engine", "-E",
+		"--role", "-R",
+		"--coordinator",
+		"--cwd", "-C",
+		"--model", "-m",
+		"--effort", "-e",
+		"--timeout", "-t",
+		"--system-prompt", "-s",
+		"--system-prompt-file",
+		"--skill",
+		"--context-file",
+		"--artifact-dir",
+		"--recover",
+		"--signal",
+		"--salt",
+		"--config",
+		"--pipeline", "-P",
+		"--prompt-file",
+		"--max-depth",
+		"--permission-mode",
+		"--response-max-chars",
+		"--sandbox",
+		"--reasoning", "-r",
+		"--max-turns",
+		"--add-dir",
+		"--output", "-o":
+		return true
+	default:
+		return false
+	}
+}
+
 func bindStr(fs *flag.FlagSet, dst *string, usage, def string, names ...string) {
 	for _, name := range names {
 		fs.StringVar(dst, name, def, usage)
@@ -493,4 +578,117 @@ func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...stri
 	for _, name := range names {
 		fs.BoolVar(dst, name, def, usage)
 	}
+}
+
+func writePipelineResult(w io.Writer, result *pipeline.PipelineResult) {
+	writeJSON(w, result)
+}
+
+func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseSpec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool) (*pipeline.PipelineResult, error) {
+	for i, step := range pipelineCfg.Steps {
+		if step.Role == "" {
+			continue
+		}
+		roleCfg, err := config.ResolveRole(cfg, step.Role)
+		if err != nil {
+			return nil, fmt.Errorf("resolve pipeline step[%d] role %q: %w", i, step.Role, err)
+		}
+		if pipelineCfg.Steps[i].Engine == "" {
+			pipelineCfg.Steps[i].Engine = roleCfg.Engine
+		}
+		if pipelineCfg.Steps[i].Model == "" {
+			pipelineCfg.Steps[i].Model = roleCfg.Model
+		}
+		if pipelineCfg.Steps[i].Effort == "" {
+			pipelineCfg.Steps[i].Effort = roleCfg.Effort
+		}
+	}
+
+	pipelineArtifactDir := filepath.Join(baseSpec.ArtifactDir, "pipeline")
+	if err := dispatch.EnsureArtifactDir(pipelineArtifactDir); err != nil {
+		return nil, fmt.Errorf("create pipeline artifact dir: %w", err)
+	}
+
+	dispatchFn := func(ctx context.Context, spec *types.DispatchSpec) *types.DispatchResult {
+		result, err := dispatchSpec(ctx, spec, cfg, stderr, verbose)
+		if err != nil {
+			return dispatch.BuildFailedResult(
+				spec,
+				dispatch.NewDispatchError("process_killed", err.Error(), ""),
+				&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+				&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}, PipelineID: spec.PipelineID, ParentDispatchID: spec.ParentDispatchID},
+				0,
+			)
+		}
+		if result != nil && result.Metadata != nil {
+			result.Metadata.PipelineID = spec.PipelineID
+			result.Metadata.ParentDispatchID = spec.ParentDispatchID
+		}
+		return result
+	}
+
+	return pipeline.ExecutePipeline(ctx, pipelineCfg, baseSpec, pipelineArtifactDir, dispatchFn)
+}
+
+func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool) (*types.DispatchResult, error) {
+	reg := adapter.NewRegistry(configuredModels(cfg))
+
+	adp, err := reg.Get(spec.Engine)
+	if err != nil {
+		return dispatch.BuildFailedResult(
+			spec,
+			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]"),
+			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+			0,
+		), nil
+	}
+	validModels := reg.ValidModels(spec.Engine)
+	if spec.Model != "" && len(validModels) > 0 && !slices.Contains(validModels, spec.Model) {
+		suggestion := dispatch.FuzzyMatchModel(spec.Model, validModels)
+		suggestionText := fmt.Sprintf("Valid models for %s: %v", spec.Engine, validModels)
+		if suggestion != "" {
+			suggestionText = fmt.Sprintf("Did you mean %q? %s", suggestion, suggestionText)
+		}
+		return dispatch.BuildFailedResult(
+			spec,
+			dispatch.NewDispatchError("model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText),
+			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+			0,
+		), nil
+	}
+
+	eng := engine.NewLoopEngine(spec.Engine, adp, validModels, stderr)
+	eng.SetVerbose(verbose)
+	return eng.Dispatch(ctx, spec)
+}
+
+func configuredModels(cfg *config.Config) map[string][]string {
+	models := make(map[string][]string, len(cfg.Models)+3)
+	for engineName, engineModels := range cfg.Models {
+		models[engineName] = append([]string(nil), engineModels...)
+	}
+	if len(models["codex"]) == 0 {
+		models["codex"] = []string{"gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2-codex"}
+	}
+	if len(models["claude"]) == 0 {
+		models["claude"] = []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
+	}
+	if len(models["gemini"]) == 0 {
+		models["gemini"] = []string{"gemini-3.1-pro", "gemini-3.1-flash"}
+	}
+	return models
+}
+
+func availablePipelines(cfg *config.Config) []string {
+	if cfg == nil || len(cfg.Pipelines) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.Pipelines))
+	for name := range cfg.Pipelines {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

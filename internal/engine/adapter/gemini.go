@@ -194,9 +194,9 @@ func geminiStatsToTokens(stats *geminiStats) *types.TokenUsage {
 }
 
 func (a *GeminiAdapter) SupportsResume() bool {
-	return false
+	return true
 }
 
 func (a *GeminiAdapter) ResumeArgs(sessionID string, message string) []string {
-	return []string{}
+	return []string{"--resume", sessionID, "-p", message}
 }
