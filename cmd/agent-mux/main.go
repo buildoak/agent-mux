@@ -19,6 +19,7 @@ import (
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/engine"
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
+	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/pipeline"
 	"github.com/buildoak/agent-mux/internal/recovery"
@@ -137,6 +138,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.Visit(func(f *flag.Flag) {
 		flagsSet[f.Name] = true
 	})
+	if flags.stdin && stdinDispatchFlagsSet(flagsSet) {
+		fmt.Fprintf(os.Stderr, "Warning: --stdin mode active; CLI dispatch flags are ignored.\n")
+	}
 
 	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
 	if err != nil {
@@ -271,6 +275,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		spec.Prompt = recovery.BuildRecoveryPrompt(recoveryCtx, spec.Prompt)
 	}
 
+	hookEval := hooks.NewEvaluator(cfg.Hooks)
+	if denied, matched := hookEval.CheckPrompt(spec.Prompt); denied {
+		return failResult(spec, "prompt_denied",
+			fmt.Sprintf("prompt blocked by hooks policy (matched: %q)", matched),
+			"Remove the matching content from your prompt or adjust hook configuration.")
+	}
+	if hookEval.HasRules() {
+		if inj := hookEval.PromptInjection(); inj != "" {
+			spec.Prompt = inj + "\n\n" + spec.Prompt
+		}
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -293,7 +309,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	result, err := dispatchSpec(ctx, spec, cfg, stderr, flags.verbose)
+	result, err := dispatchSpec(ctx, spec, cfg, stderr, flags.verbose, hookEval)
 	if err != nil {
 		fmt.Fprintf(stderr, "dispatch error: %v\n", err)
 		return 1
@@ -585,6 +601,7 @@ func writePipelineResult(w io.Writer, result *pipeline.PipelineResult) {
 }
 
 func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseSpec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool) (*pipeline.PipelineResult, error) {
+	hookEval := hooks.NewEvaluator(cfg.Hooks)
 	for i, step := range pipelineCfg.Steps {
 		if step.Role == "" {
 			continue
@@ -610,7 +627,7 @@ func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseS
 	}
 
 	dispatchFn := func(ctx context.Context, spec *types.DispatchSpec) *types.DispatchResult {
-		result, err := dispatchSpec(ctx, spec, cfg, stderr, verbose)
+		result, err := dispatchSpec(ctx, spec, cfg, stderr, verbose, hookEval)
 		if err != nil {
 			return dispatch.BuildFailedResult(
 				spec,
@@ -630,7 +647,7 @@ func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseS
 	return pipeline.ExecutePipeline(ctx, pipelineCfg, baseSpec, pipelineArtifactDir, dispatchFn)
 }
 
-func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool) (*types.DispatchResult, error) {
+func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
 	reg := adapter.NewRegistry(configuredModels(cfg))
 
 	adp, err := reg.Get(spec.Engine)
@@ -659,9 +676,46 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 		), nil
 	}
 
-	eng := engine.NewLoopEngine(spec.Engine, adp, validModels, stderr)
+	eng := engine.NewLoopEngine(adp, stderr, hookEval)
 	eng.SetVerbose(verbose)
 	return eng.Dispatch(ctx, spec)
+}
+
+func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {
+	for _, name := range []string{
+		"engine", "E",
+		"role", "R",
+		"coordinator",
+		"cwd", "C",
+		"model", "m",
+		"effort", "e",
+		"timeout", "t",
+		"system-prompt", "s",
+		"system-prompt-file",
+		"skill",
+		"context-file",
+		"artifact-dir",
+		"recover",
+		"salt",
+		"config",
+		"pipeline", "P",
+		"full", "f",
+		"no-full",
+		"prompt-file",
+		"max-depth",
+		"no-subdispatch",
+		"permission-mode",
+		"response-max-chars",
+		"sandbox",
+		"reasoning", "r",
+		"max-turns",
+		"add-dir",
+	} {
+		if flagsSet[name] {
+			return true
+		}
+	}
+	return false
 }
 
 func configuredModels(cfg *config.Config) map[string][]string {

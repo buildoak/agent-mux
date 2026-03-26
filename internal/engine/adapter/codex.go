@@ -57,6 +57,10 @@ func (a *CodexAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	return args
 }
 
+func (a *CodexAdapter) EnvVars(spec *types.DispatchSpec) []string {
+	return nil
+}
+
 type codexEvent struct {
 	Type         string      `json:"type"`
 	ThreadID     string      `json:"thread_id,omitempty"`
@@ -73,6 +77,14 @@ type codexEvent struct {
 	Code         string      `json:"code,omitempty"`
 	Message      string      `json:"message,omitempty"`
 	Model        string      `json:"model,omitempty"`
+	Item         *codexItem  `json:"item,omitempty"`
+}
+
+type codexItem struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Command  string `json:"command"`
+	FilePath string `json:"file_path"`
 }
 
 type codexUsage struct {
@@ -115,11 +127,22 @@ func (a *CodexAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {
 	case "item.started":
 		return parseItemStarted(&raw, evt), nil
 	case "item.updated":
-		if raw.ItemType != "agent_message" || raw.ContentDelta == "" {
+		itemType := raw.ItemType
+		if itemType == "" && raw.Item != nil {
+			itemType = raw.Item.Type
+		}
+		if itemType != "agent_message" {
+			return nil, nil
+		}
+		text := raw.ContentDelta
+		if text == "" && raw.Item != nil {
+			text = raw.Item.Text
+		}
+		if text == "" {
 			return nil, nil
 		}
 		evt.Kind = types.EventProgress
-		evt.Text = raw.ContentDelta
+		evt.Text = text
 	case "item.completed":
 		return parseItemCompleted(&raw, evt), nil
 	case "turn.completed":
@@ -144,22 +167,38 @@ func (a *CodexAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {
 }
 
 func parseItemStarted(raw *codexEvent, evt *types.HarnessEvent) *types.HarnessEvent {
-	switch raw.ItemType {
+	itemType := raw.ItemType
+	command := raw.Command
+	filePath := raw.FilePath
+	if raw.Item != nil {
+		if itemType == "" {
+			itemType = raw.Item.Type
+		}
+		if command == "" {
+			command = raw.Item.Command
+		}
+		if filePath == "" {
+			filePath = raw.Item.FilePath
+		}
+	}
+
+	switch itemType {
 	case "command_execution":
 		evt.Kind = types.EventCommandRun
+		evt.SecondaryKind = types.EventToolStart
 		evt.Tool = "command_execution"
-		evt.Command = raw.Command
+		evt.Command = command
 	case "file_change":
 		evt.Kind = types.EventToolStart
 		evt.Tool = "file_change"
 	case "web_search", "mcp_tool_call", "collab_tool_call":
 		evt.Kind = types.EventToolStart
-		evt.Tool = raw.ItemType
+		evt.Tool = itemType
 	case "agent_message":
 		return nil
 	default:
 		evt.Kind = types.EventToolStart
-		evt.Tool = raw.ItemType
+		evt.Tool = itemType
 	}
 	return evt
 }
@@ -182,25 +221,44 @@ func anySliceToStrings(value any) []string {
 }
 
 func parseItemCompleted(raw *codexEvent, evt *types.HarnessEvent) *types.HarnessEvent {
-	switch raw.ItemType {
+	itemType := raw.ItemType
+	text := raw.Content
+	command := raw.Command
+	filePath := raw.FilePath
+	if raw.Item != nil {
+		if itemType == "" {
+			itemType = raw.Item.Type
+		}
+		if text == "" {
+			text = raw.Item.Text
+		}
+		if command == "" {
+			command = raw.Item.Command
+		}
+		if filePath == "" {
+			filePath = raw.Item.FilePath
+		}
+	}
+
+	switch itemType {
 	case "agent_message":
 		evt.Kind = types.EventResponse
-		evt.Text = raw.Content
+		evt.Text = text
 	case "command_execution":
 		evt.Kind = types.EventToolEnd
 		evt.Tool = "command_execution"
-		evt.Command = raw.Command
+		evt.Command = command
 		evt.DurationMS = raw.DurationMS
 	case "file_change":
 		evt.Kind = types.EventFileWrite
-		evt.FilePath = raw.FilePath
+		evt.FilePath = filePath
 		evt.DurationMS = raw.DurationMS
 	case "reasoning":
 		evt.Kind = types.EventProgress
-		evt.Text = raw.Content
+		evt.Text = text
 	default:
 		evt.Kind = types.EventToolEnd
-		evt.Tool = raw.ItemType
+		evt.Tool = itemType
 		evt.DurationMS = raw.DurationMS
 	}
 	return evt

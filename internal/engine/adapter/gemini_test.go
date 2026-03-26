@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/buildoak/agent-mux/internal/types"
@@ -24,8 +25,12 @@ func TestGeminiBuildArgs(t *testing.T) {
 	assertContains(t, args, "gemini-3.1-pro")
 	assertContains(t, args, "--approval-mode")
 	assertContains(t, args, "yolo")
-	if args[len(args)-1] != "Build the parser" {
-		t.Fatalf("last arg = %q, want prompt", args[len(args)-1])
+	promptIndex := indexOf(args, "-p")
+	if promptIndex == -1 || promptIndex+1 >= len(args) {
+		t.Fatalf("missing -p prompt position in args: %#v", args)
+	}
+	if args[promptIndex+1] != "Build the parser" {
+		t.Fatalf("prompt arg = %q, want prompt", args[promptIndex+1])
 	}
 }
 
@@ -60,6 +65,32 @@ func TestGeminiBuildArgsEmptyPermissionModeDefaultsToYolo(t *testing.T) {
 	assertContains(t, args, "--approval-mode")
 	assertContains(t, args, "yolo")
 	assertNotContains(t, args, "plan")
+}
+
+func TestGeminiEnvVarsWritesSystemPromptFile(t *testing.T) {
+	a := &GeminiAdapter{}
+	spec := &types.DispatchSpec{
+		SystemPrompt: "You are a Go expert.",
+		ArtifactDir:  t.TempDir(),
+	}
+
+	env := a.EnvVars(spec)
+	if len(env) != 1 {
+		t.Fatalf("env = %#v, want single GEMINI_SYSTEM_MD", env)
+	}
+	want := "GEMINI_SYSTEM_MD=" + filepath.Join(spec.ArtifactDir, "system_prompt.md")
+	if env[0] != want {
+		t.Fatalf("env[0] = %q, want %q", env[0], want)
+	}
+}
+
+func indexOf(values []string, want string) int {
+	for i, value := range values {
+		if value == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestGeminiParseInit(t *testing.T) {
@@ -203,6 +234,9 @@ func TestGeminiParseToolResultShell(t *testing.T) {
 	}
 	if evt.Kind != types.EventToolEnd {
 		t.Fatalf("kind = %d, want EventToolEnd", evt.Kind)
+	}
+	if evt.SecondaryKind != types.EventCommandRun {
+		t.Fatalf("secondary kind = %d, want EventCommandRun", evt.SecondaryKind)
 	}
 	if evt.Tool != "shell" {
 		t.Fatalf("tool = %q", evt.Tool)

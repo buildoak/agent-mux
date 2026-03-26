@@ -38,6 +38,7 @@ func LoadCoordinator(name, cwd string) (*CoordinatorSpec, *Config, error) {
 
 	searchDirs := []string{
 		filepath.Join(cwd, ".claude", "agents"),
+		filepath.Join(cwd, "agents"),
 		filepath.Join(homeDir, ".config", "agent-mux", "agents"),
 	}
 

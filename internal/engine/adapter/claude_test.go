@@ -101,7 +101,7 @@ func TestClaudeParseSystemInit(t *testing.T) {
 func TestClaudeParseAssistantText(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"assistant","subtype":"text","text":"I'll start by reading the main configuration file."}`
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"I'll start by reading the main configuration file."}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -117,13 +117,16 @@ func TestClaudeParseAssistantText(t *testing.T) {
 func TestClaudeParseToolUseRead(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"assistant","subtype":"tool_use","id":"tool_01ABC","name":"Read","input":{"file_path":"/path/to/project/src/main.go"}}`
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool_01ABC","name":"Read","input":{"file_path":"/path/to/project/src/main.go"}}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
 	}
 	if evt.Kind != types.EventFileRead {
 		t.Fatalf("kind = %d, want %d", evt.Kind, types.EventFileRead)
+	}
+	if evt.SecondaryKind != types.EventToolStart {
+		t.Fatalf("secondary kind = %d, want %d", evt.SecondaryKind, types.EventToolStart)
 	}
 	if evt.FilePath != "/path/to/project/src/main.go" {
 		t.Fatalf("file_path = %q", evt.FilePath)
@@ -133,7 +136,7 @@ func TestClaudeParseToolUseRead(t *testing.T) {
 func TestClaudeParseToolUseGlob(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"assistant","subtype":"tool_use","id":"tool_01ABC","name":"Glob","input":{}}`
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool_01ABC","name":"Glob","input":{}}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -146,7 +149,7 @@ func TestClaudeParseToolUseGlob(t *testing.T) {
 func TestClaudeParseToolUseGrep(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"assistant","subtype":"tool_use","id":"tool_01ABC","name":"Grep","input":{}}`
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool_01ABC","name":"Grep","input":{}}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -159,7 +162,7 @@ func TestClaudeParseToolUseGrep(t *testing.T) {
 func TestClaudeParseToolUseEdit(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"assistant","subtype":"tool_use","id":"tool_01ABC","name":"Edit","input":{"file_path":"/path/to/project/src/main.go"}}`
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool_01ABC","name":"Edit","input":{"file_path":"/path/to/project/src/main.go"}}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -175,7 +178,7 @@ func TestClaudeParseToolUseEdit(t *testing.T) {
 func TestClaudeParseToolUseWrite(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"assistant","subtype":"tool_use","id":"tool_01ABC","name":"Write","input":{"file_path":"/path/to/project/src/main.go"}}`
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool_01ABC","name":"Write","input":{"file_path":"/path/to/project/src/main.go"}}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -191,7 +194,7 @@ func TestClaudeParseToolUseWrite(t *testing.T) {
 func TestClaudeParseToolUseBash(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"assistant","subtype":"tool_use","id":"tool_01ABC","name":"Bash","input":{"command":"go test ./..."}}`
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool_01ABC","name":"Bash","input":{"command":"go test ./..."}}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -207,7 +210,7 @@ func TestClaudeParseToolUseBash(t *testing.T) {
 func TestClaudeParseToolUseOther(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"assistant","subtype":"tool_use","id":"tool_01ABC","name":"WebSearch","input":{}}`
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool_01ABC","name":"WebSearch","input":{}}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -223,12 +226,12 @@ func TestClaudeParseToolUseOther(t *testing.T) {
 func TestClaudeParseToolResultEditSuccess(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	_, err := a.ParseEvent(`{"type":"assistant","subtype":"tool_use","id":"tool_01ABC","name":"Edit","input":{"file_path":"/path/to/project/src/main.go"}}`)
+	_, err := a.ParseEvent(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool_01ABC","name":"Edit","input":{"file_path":"/path/to/project/src/main.go"}}]}}`)
 	if err != nil {
 		t.Fatalf("ParseEvent tool_use: %v", err)
 	}
 
-	line := `{"type":"assistant","subtype":"tool_result","id":"tool_01ABC","name":"Edit","output":"file written","is_error":false}`
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_result","tool_use_id":"tool_01ABC","content":"file written","is_error":false}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent tool_result: %v", err)
@@ -244,7 +247,7 @@ func TestClaudeParseToolResultEditSuccess(t *testing.T) {
 func TestClaudeParseToolResultReadOther(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"assistant","subtype":"tool_result","id":"tool_01ABC","name":"Read","output":"package main...","is_error":false}`
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_result","tool_use_id":"tool_01ABC","name":"Read","content":"package main...","is_error":false}]}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -260,7 +263,7 @@ func TestClaudeParseToolResultReadOther(t *testing.T) {
 func TestClaudeParseResultSuccess(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	line := `{"type":"result","subtype":"success","result":"Built the parser. 3 files modified.","session_id":"abc123-def456","cost":{"input_tokens":45000,"output_tokens":8200,"cache_read_tokens":12000,"cache_write_tokens":3000},"duration_ms":45200,"turns":12}`
+	line := `{"type":"result","subtype":"success","result":"Built the parser. 3 files modified.","session_id":"abc123-def456","usage":{"input_tokens":45000,"output_tokens":8200,"cache_read_input_tokens":12000,"cache_creation_input_tokens":3000},"duration_ms":45200,"num_turns":12}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -282,6 +285,12 @@ func TestClaudeParseResultSuccess(t *testing.T) {
 	}
 	if evt.Tokens.Output != 8200 {
 		t.Fatalf("tokens.output = %d", evt.Tokens.Output)
+	}
+	if evt.Tokens.CacheRead != 12000 || evt.Tokens.CacheWrite != 3000 {
+		t.Fatalf("cache tokens = %+v", evt.Tokens)
+	}
+	if evt.Turns != 12 {
+		t.Fatalf("turns = %d, want 12", evt.Turns)
 	}
 }
 

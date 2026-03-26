@@ -16,8 +16,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Defaults.Sandbox != "danger-full-access" {
 		t.Fatalf("Defaults.Sandbox = %q, want %q", cfg.Defaults.Sandbox, "danger-full-access")
 	}
-	if cfg.Defaults.PermissionMode != "bypassPermissions" {
-		t.Fatalf("Defaults.PermissionMode = %q, want %q", cfg.Defaults.PermissionMode, "bypassPermissions")
+	if cfg.Defaults.PermissionMode != "" {
+		t.Fatalf("Defaults.PermissionMode = %q, want %q", cfg.Defaults.PermissionMode, "")
 	}
 	if cfg.Defaults.ResponseMaxChars != 2000 {
 		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 2000)

@@ -2,6 +2,8 @@ package adapter
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -46,7 +48,7 @@ func (a *GeminiAdapter) Binary() string {
 }
 
 func (a *GeminiAdapter) BuildArgs(spec *types.DispatchSpec) []string {
-	args := []string{"-p", "-o", "stream-json"}
+	args := []string{"-p", spec.Prompt, "-o", "stream-json"}
 	if spec.Model != "" {
 		args = append(args, "-m", spec.Model)
 	}
@@ -54,8 +56,19 @@ func (a *GeminiAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	if mode, ok := spec.EngineOpts["permission-mode"].(string); ok && mode != "" {
 		approvalMode = mode
 	}
-	args = append(args, "--approval-mode", approvalMode, spec.Prompt)
+	args = append(args, "--approval-mode", approvalMode)
 	return args
+}
+
+func (a *GeminiAdapter) EnvVars(spec *types.DispatchSpec) []string {
+	if spec == nil || spec.SystemPrompt == "" || spec.ArtifactDir == "" {
+		return nil
+	}
+	path := filepath.Join(spec.ArtifactDir, "system_prompt.md")
+	if err := os.WriteFile(path, []byte(spec.SystemPrompt), 0644); err != nil {
+		return nil
+	}
+	return []string{"GEMINI_SYSTEM_MD=" + path}
 }
 
 func (a *GeminiAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {
@@ -166,6 +179,9 @@ func (a *GeminiAdapter) parseToolResult(raw *geminiEvent, evt *types.HarnessEven
 		}
 	default:
 		evt.Kind = types.EventToolEnd
+		if raw.Name == "shell" {
+			evt.SecondaryKind = types.EventCommandRun
+		}
 		evt.Tool = raw.Name
 		evt.DurationMS = raw.DurationMS
 	}

@@ -161,6 +161,7 @@ var ErrorCatalog = map[string]ErrorInfo{
 	"prompt_file_missing":     {Retryable: true},
 	"artifact_dir_unwritable": {Retryable: false},
 	"interrupted":             {Suggestion: "Caller cancellation stopped the dispatch. Resume manually if you still need the work completed.", Retryable: false},
+	"max_depth_exceeded":      {Message: "Max dispatch depth reached.", Suggestion: "Complete work directly in the current dispatch instead of spawning another one.", Retryable: false},
 }
 
 func NewDispatchError(code string, message string, suggestion string) *types.DispatchError {

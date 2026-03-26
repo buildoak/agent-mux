@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/buildoak/agent-mux/internal/config"
+	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -408,6 +409,39 @@ func TestRunLeavesPromptUnchangedWithoutContextFile(t *testing.T) {
 	}
 	if meta.PromptHash == promptHash(contextFilePromptPreamble+"\n"+prompt) {
 		t.Fatalf("prompt_hash = %q, should not include context preamble", meta.PromptHash)
+	}
+}
+
+func TestRunInjectsHookRulesWithoutSelfDenying(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
+	cfgPath := writeTempConfig(t, "[hooks]\ndeny = [\"rm -rf\"]\n")
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	prompt := "summarize the current repository state"
+	exitCode := run([]string{
+		"--engine", "codex",
+		"--artifact-dir", artifactDir,
+		"--config", cfgPath,
+		prompt,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 && exitCode != 1 {
+		t.Fatalf("exit code = %d, want 0 or 1; stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
+	}
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found", result.Error)
+	}
+
+	meta := readDispatchMeta(t, artifactDir)
+	injectedPrompt := hooks.NewEvaluator(config.HooksConfig{Deny: []string{"rm -rf"}}).PromptInjection() + "\n\n" + prompt
+	if meta.PromptHash != promptHash(injectedPrompt) {
+		t.Fatalf("prompt_hash = %q, want %q", meta.PromptHash, promptHash(injectedPrompt))
 	}
 }
 

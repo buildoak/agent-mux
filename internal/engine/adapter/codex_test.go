@@ -139,7 +139,7 @@ func TestCodexParseTurnStarted(t *testing.T) {
 func TestCodexParseItemStartedCommand(t *testing.T) {
 	a := &CodexAdapter{}
 
-	line := `{"type":"item.started","item_id":"item_001","item_type":"command_execution","command":"go test ./..."}`
+	line := `{"type":"item.started","item_id":"item_001","item":{"type":"command_execution","command":"go test ./..."}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -147,6 +147,9 @@ func TestCodexParseItemStartedCommand(t *testing.T) {
 
 	if evt.Kind != types.EventCommandRun {
 		t.Errorf("kind = %d, want EventCommandRun", evt.Kind)
+	}
+	if evt.SecondaryKind != types.EventToolStart {
+		t.Errorf("secondary kind = %d, want EventToolStart", evt.SecondaryKind)
 	}
 	if evt.Command != "go test ./..." {
 		t.Errorf("command = %q, want 'go test ./...'", evt.Command)
@@ -172,7 +175,7 @@ func TestCodexBuildArgsAcceptsJSONDecodedAddDir(t *testing.T) {
 func TestCodexParseItemUpdatedMessage(t *testing.T) {
 	a := &CodexAdapter{}
 
-	line := `{"type":"item.updated","item_id":"item_002","item_type":"agent_message","content_delta":"I'll run the tests"}`
+	line := `{"type":"item.updated","item_id":"item_002","item":{"type":"agent_message","text":"I'll run the tests"}}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -189,7 +192,7 @@ func TestCodexParseItemUpdatedMessage(t *testing.T) {
 func TestCodexParseItemCompletedMessage(t *testing.T) {
 	a := &CodexAdapter{}
 
-	line := `{"type":"item.completed","item_id":"item_002","item_type":"agent_message","content":"Done building the parser.","duration_ms":2300}`
+	line := `{"type":"item.completed","item_id":"item_002","item":{"type":"agent_message","text":"Done building the parser."},"duration_ms":2300}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -206,7 +209,7 @@ func TestCodexParseItemCompletedMessage(t *testing.T) {
 func TestCodexParseItemCompletedCommand(t *testing.T) {
 	a := &CodexAdapter{}
 
-	line := `{"type":"item.completed","item_id":"item_001","item_type":"command_execution","command":"go test ./...","exit_code":0,"duration_ms":1200}`
+	line := `{"type":"item.completed","item_id":"item_001","item":{"type":"command_execution","command":"go test ./..."},"exit_code":0,"duration_ms":1200}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)
@@ -223,7 +226,7 @@ func TestCodexParseItemCompletedCommand(t *testing.T) {
 func TestCodexParseItemCompletedFileChange(t *testing.T) {
 	a := &CodexAdapter{}
 
-	line := `{"type":"item.completed","item_id":"item_003","item_type":"file_change","file_path":"internal/parser/parser.go","change_type":"modified","duration_ms":150}`
+	line := `{"type":"item.completed","item_id":"item_003","item":{"type":"file_change","file_path":"internal/parser/parser.go"},"change_type":"modified","duration_ms":150}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)

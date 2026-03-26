@@ -59,9 +59,11 @@ type DispatchMetadata struct {
 }
 
 type TokenUsage struct {
-	Input     int `json:"input"`
-	Output    int `json:"output"`
-	Reasoning int `json:"reasoning,omitempty"`
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	Reasoning  int `json:"reasoning,omitempty"`
+	CacheRead  int `json:"cache_read,omitempty"`
+	CacheWrite int `json:"cache_write,omitempty"`
 }
 
 type DispatchSpec struct {
@@ -99,37 +101,41 @@ type DispatchSpec struct {
 type EventKind int
 
 const (
-	EventToolStart      EventKind = iota
-	EventToolEnd                  // Harness finished a tool call
-	EventFileWrite                // Harness wrote a file
-	EventFileRead                 // Harness read a file
-	EventCommandRun               // Harness ran a shell command
-	EventProgress                 // Free-form progress
-	EventResponse                 // Final or partial response text
-	EventError                    // Harness-reported error
-	EventSessionStart             // Session initialized (carries session ID)
-	EventTurnComplete             // Turn finished (carries token counts)
-	EventTurnFailed               // Turn failed
-	EventRawPassthrough           // Unclassifiable line
+	EventUnknown EventKind = iota
+	EventToolStart
+	EventToolEnd        // Harness finished a tool call
+	EventFileWrite      // Harness wrote a file
+	EventFileRead       // Harness read a file
+	EventCommandRun     // Harness ran a shell command
+	EventProgress       // Free-form progress
+	EventResponse       // Final or partial response text
+	EventError          // Harness-reported error
+	EventSessionStart   // Session initialized (carries session ID)
+	EventTurnComplete   // Turn finished (carries token counts)
+	EventTurnFailed     // Turn failed
+	EventRawPassthrough // Unclassifiable line
 )
 
 type HarnessEvent struct {
-	Kind       EventKind
-	Timestamp  time.Time
-	Tool       string      // Set for ToolStart/ToolEnd
-	FilePath   string      // Set for FileWrite/FileRead
-	Command    string      // Set for CommandRun
-	Text       string      // Set for Progress/Response/Error
-	SessionID  string      // Set for SessionStart
-	DurationMS int64       // Set for ToolEnd/TurnComplete
-	Tokens     *TokenUsage // Set for TurnComplete
-	ErrorCode  string      // Set for Error
-	Raw        []byte      // Always set (original harness line)
+	Kind          EventKind
+	SecondaryKind EventKind
+	Timestamp     time.Time
+	Tool          string      // Set for ToolStart/ToolEnd
+	FilePath      string      // Set for FileWrite/FileRead
+	Command       string      // Set for CommandRun
+	Text          string      // Set for Progress/Response/Error
+	SessionID     string      // Set for SessionStart
+	DurationMS    int64       // Set for ToolEnd/TurnComplete
+	Tokens        *TokenUsage // Set for TurnComplete
+	Turns         int         // Set for Response
+	ErrorCode     string      // Set for Error
+	Raw           []byte      // Always set (original harness line)
 }
 
 type HarnessAdapter interface {
 	Binary() string
 	BuildArgs(spec *DispatchSpec) []string
+	EnvVars(spec *DispatchSpec) []string
 	ParseEvent(line string) (*HarnessEvent, error)
 	SupportsResume() bool
 	ResumeArgs(sessionID string, message string) []string

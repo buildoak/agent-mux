@@ -65,7 +65,7 @@ func DefaultConfig() *Config {
 		Defaults: DefaultsConfig{
 			Effort:           "high",
 			Sandbox:          "danger-full-access",
-			PermissionMode:   "bypassPermissions",
+			PermissionMode:   "",
 			ResponseMaxChars: 2000,
 			MaxDepth:         2,
 			AllowSubdispatch: true,

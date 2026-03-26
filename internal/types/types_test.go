@@ -323,6 +323,12 @@ func TestTokenUsageOmitempty(t *testing.T) {
 	if _, exists := raw["reasoning"]; exists {
 		t.Error("reasoning should be omitted when zero")
 	}
+	if _, exists := raw["cache_read"]; exists {
+		t.Error("cache_read should be omitted when zero")
+	}
+	if _, exists := raw["cache_write"]; exists {
+		t.Error("cache_write should be omitted when zero")
+	}
 
 	// With reasoning set
 	tok.Reasoning = 1200
@@ -335,5 +341,20 @@ func TestTokenUsageOmitempty(t *testing.T) {
 	}
 	if _, exists := raw["reasoning"]; !exists {
 		t.Error("reasoning should be present when non-zero")
+	}
+	tok.CacheRead = 12
+	tok.CacheWrite = 34
+	data, err = json.Marshal(tok)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	if _, exists := raw["cache_read"]; !exists {
+		t.Error("cache_read should be present when non-zero")
+	}
+	if _, exists := raw["cache_write"]; !exists {
+		t.Error("cache_write should be present when non-zero")
 	}
 }
