@@ -29,14 +29,16 @@ func TestVersionFlag(t *testing.T) {
 func TestBuildDispatchSpecDefaults(t *testing.T) {
 	t.Parallel()
 
-	flags, positional, _, err := parseFlags([]string{"--engine", "codex", "implement feature"}, ioDiscard{})
+	fs, parsed := newFlagSet(ioDiscard{})
+	err := fs.Parse([]string{"--engine", "codex", "implement feature"})
 	if err != nil {
 		t.Fatalf("parse flags: %v", err)
 	}
+	flags, positional := *parsed, fs.Args()
 
-	spec := buildDispatchSpec(flags, positional)
-	if spec == nil {
-		t.Fatal("buildDispatchSpec returned nil")
+	spec, err := buildDispatchSpecE(flags, positional)
+	if err != nil {
+		t.Fatalf("buildDispatchSpecE: %v", err)
 	}
 
 	if spec.DispatchID == "" {
@@ -70,8 +72,8 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 	if spec.GraceSec != 60 {
 		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
 	}
-	if spec.HandoffMode != string(types.HandoffSummaryAndRefs) {
-		t.Fatalf("handoff_mode = %q, want %q", spec.HandoffMode, types.HandoffSummaryAndRefs)
+	if spec.HandoffMode != "summary_and_refs" {
+		t.Fatalf("handoff_mode = %q, want %q", spec.HandoffMode, "summary_and_refs")
 	}
 	wantArtifactDir := filepath.ToSlash(filepath.Join("/tmp/agent-mux", spec.DispatchID)) + "/"
 	if spec.ArtifactDir != wantArtifactDir {
@@ -102,14 +104,16 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 func TestNoFullFlag(t *testing.T) {
 	t.Parallel()
 
-	flags, positional, _, err := parseFlags([]string{"--engine", "codex", "--no-full", "implement feature"}, ioDiscard{})
+	fs, parsed := newFlagSet(ioDiscard{})
+	err := fs.Parse([]string{"--engine", "codex", "--no-full", "implement feature"})
 	if err != nil {
 		t.Fatalf("parse flags: %v", err)
 	}
+	flags, positional := *parsed, fs.Args()
 
-	spec := buildDispatchSpec(flags, positional)
-	if spec == nil {
-		t.Fatal("buildDispatchSpec returned nil")
+	spec, err := buildDispatchSpecE(flags, positional)
+	if err != nil {
+		t.Fatalf("buildDispatchSpecE: %v", err)
 	}
 	if spec.FullAccess {
 		t.Fatal("full_access = true, want false")
@@ -119,14 +123,16 @@ func TestNoFullFlag(t *testing.T) {
 func TestRepeatableSkillFlag(t *testing.T) {
 	t.Parallel()
 
-	flags, positional, _, err := parseFlags([]string{"--engine", "codex", "--skill", "a", "--skill", "b", "implement feature"}, ioDiscard{})
+	fs, parsed := newFlagSet(ioDiscard{})
+	err := fs.Parse([]string{"--engine", "codex", "--skill", "a", "--skill", "b", "implement feature"})
 	if err != nil {
 		t.Fatalf("parse flags: %v", err)
 	}
+	flags, positional := *parsed, fs.Args()
 
-	spec := buildDispatchSpec(flags, positional)
-	if spec == nil {
-		t.Fatal("buildDispatchSpec returned nil")
+	spec, err := buildDispatchSpecE(flags, positional)
+	if err != nil {
+		t.Fatalf("buildDispatchSpecE: %v", err)
 	}
 	if len(spec.Skills) != 2 || spec.Skills[0] != "a" || spec.Skills[1] != "b" {
 		t.Fatalf("skills = %#v, want []string{\"a\", \"b\"}", spec.Skills)
@@ -147,7 +153,7 @@ func TestStdinMode(t *testing.T) {
 		AllowSubdispatch: true,
 		PipelineStep:     -1,
 		GraceSec:         60,
-		HandoffMode:      string(types.HandoffSummaryAndRefs),
+		HandoffMode:      "summary_and_refs",
 		FullAccess:       true,
 		TimeoutSec:       5,
 	}

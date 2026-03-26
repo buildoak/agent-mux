@@ -11,13 +11,12 @@ import (
 )
 
 type Config struct {
-	Defaults  DefaultsConfig            `toml:"defaults"`
-	Models    map[string][]string       `toml:"models"`
-	Roles     map[string]RoleConfig     `toml:"roles"`
-	Pipelines map[string]PipelineConfig `toml:"pipelines"`
-	Liveness  LivenessConfig            `toml:"liveness"`
-	Timeout   TimeoutConfig             `toml:"timeout"`
-	Hooks     HooksConfig               `toml:"hooks"`
+	Defaults DefaultsConfig        `toml:"defaults"`
+	Models   map[string][]string   `toml:"models"`
+	Roles    map[string]RoleConfig `toml:"roles"`
+	Liveness LivenessConfig        `toml:"liveness"`
+	Timeout  TimeoutConfig         `toml:"timeout"`
+	Hooks    HooksConfig           `toml:"hooks"`
 
 	meta *toml.MetaData
 }
@@ -39,26 +38,10 @@ type RoleConfig struct {
 	Effort string `toml:"effort"`
 }
 
-type PipelineConfig struct {
-	MaxParallel int          `toml:"max_parallel"`
-	Steps       []StepConfig `toml:"steps"`
-}
-
-type StepConfig struct {
-	Name          string   `toml:"name"`
-	Role          string   `toml:"role"`
-	PassOutputAs  string   `toml:"pass_output_as"`
-	Receives      string   `toml:"receives"`
-	HandoffMode   string   `toml:"handoff_mode"`
-	Parallel      int      `toml:"parallel"`
-	WorkerPrompts []string `toml:"worker_prompts"`
-}
-
 type LivenessConfig struct {
-	HeartbeatIntervalSec int  `toml:"heartbeat_interval_sec"`
-	SilenceWarnSeconds   int  `toml:"silence_warn_seconds"`
-	SilenceKillSeconds   int  `toml:"silence_kill_seconds"`
-	RepeatEscalation     bool `toml:"repeat_escalation"`
+	HeartbeatIntervalSec int `toml:"heartbeat_interval_sec"`
+	SilenceWarnSeconds   int `toml:"silence_warn_seconds"`
+	SilenceKillSeconds   int `toml:"silence_kill_seconds"`
 }
 
 type TimeoutConfig struct {
@@ -81,17 +64,16 @@ func DefaultConfig() *Config {
 			Effort:           "high",
 			Sandbox:          "danger-full-access",
 			PermissionMode:   "bypassPermissions",
+			ResponseMaxChars: 2000,
 			MaxDepth:         2,
 			AllowSubdispatch: true,
 		},
-		Models:    make(map[string][]string),
-		Roles:     make(map[string]RoleConfig),
-		Pipelines: make(map[string]PipelineConfig),
+		Models: make(map[string][]string),
+		Roles:  make(map[string]RoleConfig),
 		Liveness: LivenessConfig{
 			HeartbeatIntervalSec: 15,
 			SilenceWarnSeconds:   90,
 			SilenceKillSeconds:   180,
-			RepeatEscalation:     true,
 		},
 		Timeout: TimeoutConfig{
 			Low:    120,
@@ -126,11 +108,13 @@ func LoadConfig(configPath string, cwd string) (*Config, error) {
 			return nil, fmt.Errorf("config path %q is a directory", path)
 		}
 
-		overlay, err := decodeConfig(path)
+		var overlay Config
+		meta, err := toml.DecodeFile(path, &overlay)
 		if err != nil {
 			return nil, fmt.Errorf("decode config %q: %w", path, err)
 		}
-		mergeConfig(cfg, overlay)
+		overlay.meta = &meta
+		mergeConfig(cfg, &overlay)
 	}
 
 	return cfg, nil
@@ -141,21 +125,21 @@ func mergeConfig(base, overlay *Config) {
 		return
 	}
 
-	mergeString(&base.Defaults.Engine, overlay.Defaults.Engine, overlay.defined("defaults", "engine"))
-	mergeString(&base.Defaults.Model, overlay.Defaults.Model, overlay.defined("defaults", "model"))
-	mergeString(&base.Defaults.Effort, overlay.Defaults.Effort, overlay.defined("defaults", "effort"))
-	mergeString(&base.Defaults.Sandbox, overlay.Defaults.Sandbox, overlay.defined("defaults", "sandbox"))
-	mergeString(&base.Defaults.PermissionMode, overlay.Defaults.PermissionMode, overlay.defined("defaults", "permission_mode"))
-	mergeInt(&base.Defaults.ResponseMaxChars, overlay.Defaults.ResponseMaxChars, overlay.defined("defaults", "response_max_chars"))
-	mergeInt(&base.Defaults.MaxDepth, overlay.Defaults.MaxDepth, overlay.defined("defaults", "max_depth"))
-	mergeBool(&base.Defaults.AllowSubdispatch, overlay.Defaults.AllowSubdispatch, overlay.defined("defaults", "allow_subdispatch"))
+	merge(&base.Defaults.Engine, overlay.Defaults.Engine, overlay.defined("defaults", "engine"))
+	merge(&base.Defaults.Model, overlay.Defaults.Model, overlay.defined("defaults", "model"))
+	merge(&base.Defaults.Effort, overlay.Defaults.Effort, overlay.defined("defaults", "effort"))
+	merge(&base.Defaults.Sandbox, overlay.Defaults.Sandbox, overlay.defined("defaults", "sandbox"))
+	merge(&base.Defaults.PermissionMode, overlay.Defaults.PermissionMode, overlay.defined("defaults", "permission_mode"))
+	merge(&base.Defaults.ResponseMaxChars, overlay.Defaults.ResponseMaxChars, overlay.defined("defaults", "response_max_chars"))
+	merge(&base.Defaults.MaxDepth, overlay.Defaults.MaxDepth, overlay.defined("defaults", "max_depth"))
+	merge(&base.Defaults.AllowSubdispatch, overlay.Defaults.AllowSubdispatch, overlay.defined("defaults", "allow_subdispatch"))
 
 	if len(overlay.Models) > 0 {
 		if base.Models == nil {
 			base.Models = make(map[string][]string, len(overlay.Models))
 		}
 		for engine, models := range overlay.Models {
-			base.Models[engine] = append(base.Models[engine], cloneStrings(models)...)
+			base.Models[engine] = append([]string(nil), models...)
 		}
 	}
 
@@ -167,34 +151,22 @@ func mergeConfig(base, overlay *Config) {
 			base.Roles[name] = role
 		}
 	}
-
-	if len(overlay.Pipelines) > 0 {
-		if base.Pipelines == nil {
-			base.Pipelines = make(map[string]PipelineConfig, len(overlay.Pipelines))
-		}
-		for name, pipeline := range overlay.Pipelines {
-			base.Pipelines[name] = clonePipeline(pipeline)
-		}
-	}
-
-	mergeInt(&base.Liveness.HeartbeatIntervalSec, overlay.Liveness.HeartbeatIntervalSec, overlay.defined("liveness", "heartbeat_interval_sec"))
-	mergeInt(&base.Liveness.SilenceWarnSeconds, overlay.Liveness.SilenceWarnSeconds, overlay.defined("liveness", "silence_warn_seconds"))
-	mergeInt(&base.Liveness.SilenceKillSeconds, overlay.Liveness.SilenceKillSeconds, overlay.defined("liveness", "silence_kill_seconds"))
-	mergeBool(&base.Liveness.RepeatEscalation, overlay.Liveness.RepeatEscalation, overlay.defined("liveness", "repeat_escalation"))
-
-	mergeInt(&base.Timeout.Low, overlay.Timeout.Low, overlay.defined("timeout", "low"))
-	mergeInt(&base.Timeout.Medium, overlay.Timeout.Medium, overlay.defined("timeout", "medium"))
-	mergeInt(&base.Timeout.High, overlay.Timeout.High, overlay.defined("timeout", "high"))
-	mergeInt(&base.Timeout.XHigh, overlay.Timeout.XHigh, overlay.defined("timeout", "xhigh"))
-	mergeInt(&base.Timeout.Grace, overlay.Timeout.Grace, overlay.defined("timeout", "grace"))
+	merge(&base.Liveness.HeartbeatIntervalSec, overlay.Liveness.HeartbeatIntervalSec, overlay.defined("liveness", "heartbeat_interval_sec"))
+	merge(&base.Liveness.SilenceWarnSeconds, overlay.Liveness.SilenceWarnSeconds, overlay.defined("liveness", "silence_warn_seconds"))
+	merge(&base.Liveness.SilenceKillSeconds, overlay.Liveness.SilenceKillSeconds, overlay.defined("liveness", "silence_kill_seconds"))
+	merge(&base.Timeout.Low, overlay.Timeout.Low, overlay.defined("timeout", "low"))
+	merge(&base.Timeout.Medium, overlay.Timeout.Medium, overlay.defined("timeout", "medium"))
+	merge(&base.Timeout.High, overlay.Timeout.High, overlay.defined("timeout", "high"))
+	merge(&base.Timeout.XHigh, overlay.Timeout.XHigh, overlay.defined("timeout", "xhigh"))
+	merge(&base.Timeout.Grace, overlay.Timeout.Grace, overlay.defined("timeout", "grace"))
 
 	if overlay.defined("hooks", "deny") || len(overlay.Hooks.Deny) > 0 {
-		base.Hooks.Deny = cloneStrings(overlay.Hooks.Deny)
+		base.Hooks.Deny = append([]string(nil), overlay.Hooks.Deny...)
 	}
 	if overlay.defined("hooks", "warn") || len(overlay.Hooks.Warn) > 0 {
-		base.Hooks.Warn = cloneStrings(overlay.Hooks.Warn)
+		base.Hooks.Warn = append([]string(nil), overlay.Hooks.Warn...)
 	}
-	mergeString(&base.Hooks.EventDenyAction, overlay.Hooks.EventDenyAction, overlay.defined("hooks", "event_deny_action"))
+	merge(&base.Hooks.EventDenyAction, overlay.Hooks.EventDenyAction, overlay.defined("hooks", "event_deny_action"))
 }
 
 func ResolveRole(cfg *Config, roleName string) (*RoleConfig, error) {
@@ -205,7 +177,7 @@ func ResolveRole(cfg *Config, roleName string) (*RoleConfig, error) {
 		}
 	}
 
-	available := make([]string, 0)
+	var available []string
 	if cfg != nil {
 		available = make([]string, 0, len(cfg.Roles))
 		for name := range cfg.Roles {
@@ -250,82 +222,24 @@ func configPaths(configPath string, cwd string) ([]string, error) {
 	}
 
 	paths := make([]string, 0, 2)
-	if globalPath, err := globalConfigPath(); err != nil {
-		return nil, err
-	} else if globalPath != "" {
-		paths = append(paths, globalPath)
+	if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); xdgConfigHome != "" {
+		paths = append(paths, filepath.Join(xdgConfigHome, "agent-mux", "config.toml"))
+	} else if homeDir, err := os.UserHomeDir(); err != nil {
+		return nil, fmt.Errorf("get home directory: %w", err)
+	} else {
+		paths = append(paths, filepath.Join(homeDir, ".config", "agent-mux", "config.toml"))
 	}
 	paths = append(paths, filepath.Join(cwd, ".agent-mux.toml"))
 	return paths, nil
-}
-
-func globalConfigPath() (string, error) {
-	if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); xdgConfigHome != "" {
-		return filepath.Join(xdgConfigHome, "agent-mux", "config.toml"), nil
-	}
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("get home directory: %w", err)
-	}
-
-	return filepath.Join(homeDir, ".config", "agent-mux", "config.toml"), nil
-}
-
-func decodeConfig(path string) (*Config, error) {
-	var cfg Config
-	meta, err := toml.DecodeFile(path, &cfg)
-	if err != nil {
-		return nil, err
-	}
-	cfg.meta = &meta
-	return &cfg, nil
 }
 
 func (c *Config) defined(path ...string) bool {
 	return c != nil && c.meta != nil && c.meta.IsDefined(path...)
 }
 
-func mergeString(dst *string, value string, defined bool) {
-	if defined || value != "" {
+func merge[T comparable](dst *T, value T, defined bool) {
+	var zero T
+	if defined || value != zero {
 		*dst = value
 	}
-}
-
-func mergeInt(dst *int, value int, defined bool) {
-	if defined || value != 0 {
-		*dst = value
-	}
-}
-
-func mergeBool(dst *bool, value bool, defined bool) {
-	if defined || value {
-		*dst = value
-	}
-}
-
-func clonePipeline(pipeline PipelineConfig) PipelineConfig {
-	cloned := PipelineConfig{
-		MaxParallel: pipeline.MaxParallel,
-		Steps:       make([]StepConfig, 0, len(pipeline.Steps)),
-	}
-	for _, step := range pipeline.Steps {
-		cloned.Steps = append(cloned.Steps, StepConfig{
-			Name:          step.Name,
-			Role:          step.Role,
-			PassOutputAs:  step.PassOutputAs,
-			Receives:      step.Receives,
-			HandoffMode:   step.HandoffMode,
-			Parallel:      step.Parallel,
-			WorkerPrompts: cloneStrings(step.WorkerPrompts),
-		})
-	}
-	return cloned
-}
-
-func cloneStrings(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	return append([]string(nil), values...)
 }

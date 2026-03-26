@@ -1,15 +1,13 @@
 package supervisor
 
 import (
-	"context"
 	"os"
 	"testing"
 	"time"
 )
 
 func TestNewProcess(t *testing.T) {
-	ctx := context.Background()
-	p := NewProcess(ctx, "echo", []string{"hello"}, "/tmp", os.Environ())
+	p := NewProcess("echo", []string{"hello"}, "/tmp", os.Environ())
 
 	if p.cmd == nil {
 		t.Fatal("cmd should not be nil")
@@ -23,8 +21,7 @@ func TestNewProcess(t *testing.T) {
 }
 
 func TestStartAndWait(t *testing.T) {
-	ctx := context.Background()
-	p := NewProcess(ctx, "echo", []string{"hello"}, "/tmp", os.Environ())
+	p := NewProcess("echo", []string{"hello"}, "/tmp", os.Environ())
 
 	if err := p.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -44,9 +41,8 @@ func TestStartAndWait(t *testing.T) {
 }
 
 func TestGracefulStop(t *testing.T) {
-	ctx := context.Background()
 	// sleep 60 will be killed by GracefulStop
-	p := NewProcess(ctx, "sleep", []string{"60"}, "/tmp", os.Environ())
+	p := NewProcess("sleep", []string{"60"}, "/tmp", os.Environ())
 
 	if err := p.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -63,8 +59,7 @@ func TestGracefulStop(t *testing.T) {
 }
 
 func TestKill(t *testing.T) {
-	ctx := context.Background()
-	p := NewProcess(ctx, "sleep", []string{"60"}, "/tmp", os.Environ())
+	p := NewProcess("sleep", []string{"60"}, "/tmp", os.Environ())
 
 	if err := p.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -78,8 +73,7 @@ func TestKill(t *testing.T) {
 }
 
 func TestKillUnstartedProcess(t *testing.T) {
-	ctx := context.Background()
-	p := NewProcess(ctx, "echo", []string{"hello"}, "/tmp", os.Environ())
+	p := NewProcess("echo", []string{"hello"}, "/tmp", os.Environ())
 
 	// Should not panic or error
 	if err := p.Kill(); err != nil {
@@ -88,8 +82,7 @@ func TestKillUnstartedProcess(t *testing.T) {
 }
 
 func TestPidBeforeStart(t *testing.T) {
-	ctx := context.Background()
-	p := NewProcess(ctx, "echo", []string{"hello"}, "/tmp", os.Environ())
+	p := NewProcess("echo", []string{"hello"}, "/tmp", os.Environ())
 
 	if p.Pid() != 0 {
 		t.Errorf("Pid before start = %d, want 0", p.Pid())

@@ -19,6 +19,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Defaults.PermissionMode != "bypassPermissions" {
 		t.Fatalf("Defaults.PermissionMode = %q, want %q", cfg.Defaults.PermissionMode, "bypassPermissions")
 	}
+	if cfg.Defaults.ResponseMaxChars != 2000 {
+		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 2000)
+	}
 	if cfg.Defaults.MaxDepth != 2 {
 		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 2)
 	}
@@ -33,9 +36,6 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.Liveness.SilenceKillSeconds != 180 {
 		t.Fatalf("Liveness.SilenceKillSeconds = %d, want %d", cfg.Liveness.SilenceKillSeconds, 180)
-	}
-	if !cfg.Liveness.RepeatEscalation {
-		t.Fatal("Liveness.RepeatEscalation = false, want true")
 	}
 	if cfg.Timeout.Low != 120 {
 		t.Fatalf("Timeout.Low = %d, want %d", cfg.Timeout.Low, 120)
@@ -77,23 +77,10 @@ engine = "claude"
 model = "claude-sonnet-4-6"
 effort = "high"
 
-[pipelines.audit]
-max_parallel = 2
-
-[[pipelines.audit.steps]]
-name = "inspect"
-role = "reviewer"
-pass_output_as = "report"
-receives = "input"
-handoff_mode = "summary_and_refs"
-parallel = 1
-worker_prompts = ["Look for regressions"]
-
 [liveness]
 heartbeat_interval_sec = 30
 silence_warn_seconds = 120
 silence_kill_seconds = 240
-repeat_escalation = false
 
 [timeout]
 low = 30
@@ -154,24 +141,6 @@ event_deny_action = "block"
 		t.Fatalf("Roles[reviewer] = %#v, want engine/model/effort set", role)
 	}
 
-	pipeline, ok := cfg.Pipelines["audit"]
-	if !ok {
-		t.Fatal("Pipelines[audit] missing")
-	}
-	if pipeline.MaxParallel != 2 {
-		t.Fatalf("Pipelines[audit].MaxParallel = %d, want %d", pipeline.MaxParallel, 2)
-	}
-	if len(pipeline.Steps) != 1 {
-		t.Fatalf("len(Pipelines[audit].Steps) = %d, want %d", len(pipeline.Steps), 1)
-	}
-	step := pipeline.Steps[0]
-	if step.Name != "inspect" || step.Role != "reviewer" || step.PassOutputAs != "report" || step.Receives != "input" || step.HandoffMode != "summary_and_refs" || step.Parallel != 1 {
-		t.Fatalf("step = %#v, want decoded values", step)
-	}
-	if len(step.WorkerPrompts) != 1 || step.WorkerPrompts[0] != "Look for regressions" {
-		t.Fatalf("step.WorkerPrompts = %#v, want %#v", step.WorkerPrompts, []string{"Look for regressions"})
-	}
-
 	if cfg.Liveness.HeartbeatIntervalSec != 30 {
 		t.Fatalf("Liveness.HeartbeatIntervalSec = %d, want %d", cfg.Liveness.HeartbeatIntervalSec, 30)
 	}
@@ -181,10 +150,6 @@ event_deny_action = "block"
 	if cfg.Liveness.SilenceKillSeconds != 240 {
 		t.Fatalf("Liveness.SilenceKillSeconds = %d, want %d", cfg.Liveness.SilenceKillSeconds, 240)
 	}
-	if cfg.Liveness.RepeatEscalation {
-		t.Fatal("Liveness.RepeatEscalation = true, want false")
-	}
-
 	if cfg.Timeout.Low != 30 || cfg.Timeout.Medium != 300 || cfg.Timeout.High != 900 || cfg.Timeout.XHigh != 1200 || cfg.Timeout.Grace != 15 {
 		t.Fatalf("Timeout = %#v, want low=30 medium=300 high=900 xhigh=1200 grace=15", cfg.Timeout)
 	}
@@ -262,6 +227,19 @@ silence_warn_seconds = 45
 	}
 	if cfg.Timeout.High != 1800 {
 		t.Fatalf("Timeout.High = %d, want default %d", cfg.Timeout.High, 1800)
+	}
+}
+
+func TestModelOverridesReplaceEarlierList(t *testing.T) {
+	base := DefaultConfig()
+	base.Models["codex"] = []string{"old-a", "old-b"}
+	overlay := &Config{Models: map[string][]string{"codex": []string{"new-a"}}}
+
+	mergeConfig(base, overlay)
+
+	got := base.Models["codex"]
+	if len(got) != 1 || got[0] != "new-a" {
+		t.Fatalf("Models[codex] = %#v, want %#v", got, []string{"new-a"})
 	}
 }
 

@@ -1,5 +1,3 @@
-// Package dispatch handles DispatchResult construction, error catalog,
-// response truncation, and artifact directory lifecycle.
 package dispatch
 
 import (
@@ -13,10 +11,7 @@ import (
 	"time"
 
 	"github.com/buildoak/agent-mux/internal/types"
-	"github.com/oklog/ulid/v2"
 )
-
-// ── Salt Generation ──────────────────────────────────────────
 
 var (
 	adjectives = []string{
@@ -35,7 +30,6 @@ var (
 	}
 )
 
-// GenerateSalt returns a human-greppable three-word phrase.
 func GenerateSalt() string {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return fmt.Sprintf("%s-%s-%s",
@@ -44,38 +38,25 @@ func GenerateSalt() string {
 		digits[r.Intn(len(digits))],
 	)
 }
-
-// GenerateDispatchID returns a new ULID string.
-func GenerateDispatchID() string {
-	return ulid.Make().String()
-}
-
-// ── Artifact Directory ───────────────────────────────────────
-
-// EnsureArtifactDir creates the artifact directory with mode 0755.
 func EnsureArtifactDir(dir string) error {
 	return os.MkdirAll(dir, 0755)
 }
 
-// ── Dispatch Metadata File ───────────────────────────────────
-
-// DispatchMeta is the _dispatch_meta.json written at dispatch start.
 type DispatchMeta struct {
-	DispatchID          string  `json:"dispatch_id"`
-	DispatchSalt        string  `json:"dispatch_salt"`
-	StartedAt           string  `json:"started_at"`
-	Engine              string  `json:"engine"`
-	Model               string  `json:"model"`
-	Role                string  `json:"role,omitempty"`
-	PromptHash          string  `json:"prompt_hash"`
-	Cwd                 string  `json:"cwd"`
-	ContinuesDispatchID *string `json:"continues_dispatch_id"`
-	EndedAt             string  `json:"ended_at,omitempty"`
-	Status              string  `json:"status,omitempty"`
+	DispatchID          string   `json:"dispatch_id"`
+	DispatchSalt        string   `json:"dispatch_salt"`
+	StartedAt           string   `json:"started_at"`
+	Engine              string   `json:"engine"`
+	Model               string   `json:"model"`
+	Role                string   `json:"role,omitempty"`
+	PromptHash          string   `json:"prompt_hash"`
+	Cwd                 string   `json:"cwd"`
+	ContinuesDispatchID *string  `json:"continues_dispatch_id"`
+	EndedAt             string   `json:"ended_at,omitempty"`
+	Status              string   `json:"status,omitempty"`
 	Artifacts           []string `json:"artifacts,omitempty"`
 }
 
-// WriteDispatchMeta writes the _dispatch_meta.json to the artifact dir.
 func WriteDispatchMeta(artifactDir string, spec *types.DispatchSpec) error {
 	hash := sha256.Sum256([]byte(spec.Prompt))
 	meta := DispatchMeta{
@@ -92,16 +73,8 @@ func WriteDispatchMeta(artifactDir string, spec *types.DispatchSpec) error {
 		meta.ContinuesDispatchID = &spec.ContinuesDispatchID
 	}
 
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal meta: %w", err)
-	}
-
-	path := filepath.Join(artifactDir, "_dispatch_meta.json")
-	return os.WriteFile(path, data, 0644)
+	return writeMetaFile(filepath.Join(artifactDir, "_dispatch_meta.json"), &meta)
 }
-
-// UpdateDispatchMeta updates the metadata file with completion info.
 func UpdateDispatchMeta(artifactDir string, status string, artifacts []string) error {
 	path := filepath.Join(artifactDir, "_dispatch_meta.json")
 	data, err := os.ReadFile(path)
@@ -118,34 +91,15 @@ func UpdateDispatchMeta(artifactDir string, status string, artifacts []string) e
 	meta.Status = status
 	meta.Artifacts = artifacts
 
-	data, err = json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal meta: %w", err)
-	}
-
-	return os.WriteFile(path, data, 0644)
+	return writeMetaFile(path, &meta)
 }
-
-// ── Response Truncation ──────────────────────────────────────
-
-// TruncateResponse truncates a response at a sentence boundary.
-// Returns (truncated, wasTruncated).
 func TruncateResponse(response string, maxChars int) (string, bool) {
 	if maxChars <= 0 || len(response) <= maxChars {
 		return response, false
 	}
 
-	// Find last sentence boundary before maxChars
-	truncated := response[:maxChars]
-	lastPeriod := strings.LastIndexAny(truncated, ".!?\n")
-	if lastPeriod > maxChars/2 {
-		truncated = truncated[:lastPeriod+1]
-	}
-
-	return truncated, true
+	return truncateAtBoundary(response, maxChars), true
 }
-
-// WriteFullOutput writes the full response to artifact dir and returns the path.
 func WriteFullOutput(artifactDir, response string) (string, error) {
 	path := filepath.Join(artifactDir, "full_output.md")
 	if err := os.WriteFile(path, []byte(response), 0644); err != nil {
@@ -153,21 +107,14 @@ func WriteFullOutput(artifactDir, response string) (string, error) {
 	}
 	return path, nil
 }
-
-// ── Handoff Summary Extraction ───────────────────────────────
-
-// ExtractHandoffSummary extracts a handoff summary from the response.
 func ExtractHandoffSummary(response string, maxChars int) string {
 	if maxChars <= 0 {
 		maxChars = 2000
 	}
-
-	// Try to find ## Summary or ## Handoff section
 	for _, header := range []string{"## Summary", "## Handoff"} {
 		idx := strings.Index(response, header)
 		if idx >= 0 {
 			section := response[idx+len(header):]
-			// Find the end of the section (next ## header or end of text)
 			nextHeader := strings.Index(section, "\n## ")
 			if nextHeader >= 0 {
 				section = section[:nextHeader]
@@ -179,114 +126,43 @@ func ExtractHandoffSummary(response string, maxChars int) string {
 			return section
 		}
 	}
-
-	// Fallback: first maxChars chars, truncated at sentence boundary
 	if len(response) <= maxChars {
 		return response
 	}
 
-	truncated := response[:maxChars]
-	lastPeriod := strings.LastIndexAny(truncated, ".!?\n")
-	if lastPeriod > maxChars/2 {
-		truncated = truncated[:lastPeriod+1]
-	}
-
-	return truncated
+	return truncateAtBoundary(response, maxChars)
 }
 
-// ── Error Code Catalog ───────────────────────────────────────
-
-// ErrorInfo holds metadata about an error code.
 type ErrorInfo struct {
-	Code       string
 	Message    string
 	Suggestion string
 	Retryable  bool
 }
 
-// ErrorCatalog maps error codes to their templates.
 var ErrorCatalog = map[string]ErrorInfo{
-	"model_not_found": {
-		Code:      "model_not_found",
-		Retryable: true,
-	},
-	"engine_not_found": {
-		Code:       "engine_not_found",
-		Message:    "Unknown engine name.",
-		Suggestion: "Valid engines: codex, claude, gemini",
-		Retryable:  true,
-	},
-	"binary_not_found": {
-		Code:      "binary_not_found",
-		Retryable: false,
-	},
-	"api_key_missing": {
-		Code:      "api_key_missing",
-		Retryable: false,
-	},
-	"api_overloaded": {
-		Code:       "api_overloaded",
-		Message:    "Provider overloaded (429/529).",
-		Suggestion: "Retry in 30s or try --engine with a different provider.",
-		Retryable:  true,
-	},
-	"api_error": {
-		Code:      "api_error",
-		Retryable: true,
-	},
-	"frozen_tool_call": {
-		Code:       "frozen_tool_call",
-		Retryable:  true,
-	},
-	"invalid_args": {
-		Code:      "invalid_args",
-		Retryable: true,
-	},
-	"config_error": {
-		Code:      "config_error",
-		Retryable: true,
-	},
-	"process_killed": {
-		Code:      "process_killed",
-		Retryable: true,
-	},
-	"recovery_failed": {
-		Code:       "recovery_failed",
-		Message:    "No artifacts found for the given dispatch ID.",
-		Suggestion: "Previous dispatch may not have written artifacts. Check the artifact directory.",
-		Retryable:  false,
-	},
-	"output_parse_error": {
-		Code:       "output_parse_error",
-		Retryable:  false,
-	},
-	"skill_not_found": {
-		Code:      "skill_not_found",
-		Retryable: true,
-	},
-	"coordinator_not_found": {
-		Code:      "coordinator_not_found",
-		Retryable: true,
-	},
-	"prompt_file_missing": {
-		Code:      "prompt_file_missing",
-		Retryable: true,
-	},
-	"artifact_dir_unwritable": {
-		Code:      "artifact_dir_unwritable",
-		Retryable: false,
-	},
-	"interrupted": {
-		Code:       "interrupted",
-		Retryable:  false,
-	},
+	"model_not_found":         {Retryable: true},
+	"engine_not_found":        {Message: "Unknown engine name.", Suggestion: "Valid engines: codex, claude, gemini", Retryable: true},
+	"binary_not_found":        {Suggestion: "Install the requested harness binary and verify it is on PATH before retrying.", Retryable: false},
+	"api_key_missing":         {Suggestion: "Set the provider API key in the environment expected by the harness, then retry.", Retryable: false},
+	"api_overloaded":          {Message: "Provider overloaded (429/529).", Suggestion: "Retry in 30s or try --engine with a different provider.", Retryable: true},
+	"api_error":               {Suggestion: "Retry once. If it repeats, switch model or provider and include the provider error details.", Retryable: true},
+	"frozen_tool_call":        {Suggestion: "Worker may be stuck in a hanging command or tool call. Retry with a narrower task or longer timeout. Partial work was preserved.", Retryable: true},
+	"invalid_args":            {Suggestion: "Fix the dispatch arguments and retry. Check required fields such as engine, prompt, and working directory.", Retryable: true},
+	"config_error":            {Suggestion: "Fix the referenced config or role definition, then retry the dispatch.", Retryable: true},
+	"process_killed":          {Suggestion: "Check harness stderr and recent events, then retry once the underlying process issue is resolved.", Retryable: true},
+	"recovery_failed":         {Message: "No artifacts found for the given dispatch ID.", Suggestion: "Previous dispatch may not have written artifacts. Check the artifact directory.", Retryable: false},
+	"output_parse_error":      {Suggestion: "The harness emitted output agent-mux could not parse cleanly. Retry once; if it repeats, inspect raw harness output.", Retryable: false},
+	"skill_not_found":         {Retryable: true},
+	"coordinator_not_found":   {Retryable: true},
+	"prompt_file_missing":     {Retryable: true},
+	"artifact_dir_unwritable": {Retryable: false},
+	"interrupted":             {Suggestion: "Caller cancellation stopped the dispatch. Resume manually if you still need the work completed.", Retryable: false},
 }
 
-// NewDispatchError creates a DispatchError from the catalog with custom message/suggestion.
 func NewDispatchError(code string, message string, suggestion string) *types.DispatchError {
 	info, ok := ErrorCatalog[code]
 	if !ok {
-		info = ErrorInfo{Code: code, Retryable: false}
+		info = ErrorInfo{Retryable: false}
 	}
 
 	if message == "" {
@@ -303,10 +179,6 @@ func NewDispatchError(code string, message string, suggestion string) *types.Dis
 		Retryable:  info.Retryable,
 	}
 }
-
-// ── Fuzzy Model Matching ─────────────────────────────────────
-
-// FuzzyMatchModel suggests the closest valid model.
 func FuzzyMatchModel(input string, validModels []string) string {
 	if len(validModels) == 0 {
 		return ""
@@ -322,15 +194,11 @@ func FuzzyMatchModel(input string, validModels []string) string {
 			bestMatch = model
 		}
 	}
-
-	// Only suggest if within reasonable distance
 	if bestDist <= 3 {
 		return bestMatch
 	}
 	return ""
 }
-
-// levenshtein computes the edit distance between two strings.
 func levenshtein(a, b string) int {
 	la, lb := len(a), len(b)
 	if la == 0 {
@@ -361,29 +229,8 @@ func levenshtein(a, b string) int {
 
 	return prev[lb]
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// ── Result Builders ──────────────────────────────────────────
-
-// BuildCompletedResult builds a DispatchResult for a completed dispatch.
 func BuildCompletedResult(spec *types.DispatchSpec, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, responseMaxChars int) *types.DispatchResult {
-	result := &types.DispatchResult{
-		SchemaVersion:  1,
-		Status:         types.StatusCompleted,
-		DispatchID:     spec.DispatchID,
-		DispatchSalt:   spec.Salt,
-		Response:       response,
-		HandoffSummary: ExtractHandoffSummary(response, 2000),
-		Activity:       activity,
-		Metadata:       metadata,
-		DurationMS:     durationMS,
-	}
+	result := baseResult(spec, types.StatusCompleted, response, activity, metadata, durationMS)
 
 	if responseMaxChars > 0 {
 		truncated, wasTruncated := TruncateResponse(response, responseMaxChars)
@@ -397,76 +244,81 @@ func BuildCompletedResult(spec *types.DispatchSpec, response string, activity *t
 		}
 	}
 
-	// Scan artifact directory
-	result.Artifacts = scanArtifacts(spec.ArtifactDir)
-
+	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
 	return result
 }
-
-// BuildTimedOutResult builds a DispatchResult for a timed-out dispatch.
 func BuildTimedOutResult(spec *types.DispatchSpec, response, reason string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := &types.DispatchResult{
+	result := baseResult(spec, types.StatusTimedOut, response, activity, metadata, durationMS)
+	result.Partial = true
+	result.Recoverable = true
+	result.Reason = reason
+	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
+	return result
+}
+func BuildFailedResult(spec *types.DispatchSpec, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := baseResult(spec, types.StatusFailed, "", activity, metadata, durationMS)
+	result.HandoffSummary = dispatchErr.Message
+	result.Error = dispatchErr
+	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
+	return result
+}
+func ScanArtifacts(dir string) []string {
+	empty := []string{}
+	if dir == "" {
+		return empty
+	}
+
+	var artifacts []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if name == "_dispatch_meta.json" || name == "events.jsonl" || name == "inbox.md" {
+			return nil
+		}
+		artifacts = append(artifacts, path)
+		return nil
+	})
+	if err != nil {
+		return empty
+	}
+	if len(artifacts) == 0 {
+		return empty
+	}
+	return artifacts
+}
+
+func writeMetaFile(path string, meta *DispatchMeta) error {
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal meta: %w", err)
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func truncateAtBoundary(s string, maxChars int) string {
+	truncated := s[:maxChars]
+	lastBoundary := strings.LastIndexAny(truncated, ".!?\n")
+	if lastBoundary > maxChars/2 {
+		return truncated[:lastBoundary+1]
+	}
+	return truncated
+}
+
+func baseResult(spec *types.DispatchSpec, status types.DispatchStatus, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	return &types.DispatchResult{
 		SchemaVersion:  1,
-		Status:         types.StatusTimedOut,
+		Status:         status,
 		DispatchID:     spec.DispatchID,
 		DispatchSalt:   spec.Salt,
 		Response:       response,
 		HandoffSummary: ExtractHandoffSummary(response, 2000),
-		Partial:        true,
-		Recoverable:    true,
-		Reason:         reason,
 		Activity:       activity,
 		Metadata:       metadata,
 		DurationMS:     durationMS,
 	}
-
-	result.Artifacts = scanArtifacts(spec.ArtifactDir)
-
-	return result
-}
-
-// BuildFailedResult builds a DispatchResult for a failed dispatch.
-func BuildFailedResult(spec *types.DispatchSpec, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := &types.DispatchResult{
-		SchemaVersion:  1,
-		Status:         types.StatusFailed,
-		DispatchID:     spec.DispatchID,
-		DispatchSalt:   spec.Salt,
-		Response:       "",
-		HandoffSummary: dispatchErr.Message,
-		Error:          dispatchErr,
-		Activity:       activity,
-		Metadata:       metadata,
-		DurationMS:     durationMS,
-	}
-
-	result.Artifacts = scanArtifacts(spec.ArtifactDir)
-
-	return result
-}
-
-// scanArtifacts lists files in the artifact directory (non-recursive, excludes meta files).
-func scanArtifacts(dir string) []string {
-	if dir == "" {
-		return []string{}
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return []string{}
-	}
-
-	var artifacts []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if name == "_dispatch_meta.json" || name == "events.jsonl" || name == "inbox.md" {
-			continue
-		}
-		artifacts = append(artifacts, filepath.Join(dir, name))
-	}
-
-	if artifacts == nil {
-		return []string{}
-	}
-	return artifacts
 }

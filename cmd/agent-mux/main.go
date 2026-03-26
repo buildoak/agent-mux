@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -38,39 +39,12 @@ func (s *stringSlice) Set(value string) error {
 }
 
 type cliFlags struct {
-	engine           string
-	role             string
-	cwd              string
-	model            string
-	effort           string
-	timeout          int
-	systemPrompt     string
-	systemPromptFile string
-	coordinator      string
-	skills           stringSlice
-	pipeline         string
-	recover          string
-	contextFile      string
-	artifactDir      string
-	salt             string
-	config           string
-	output           string
-	full             bool
-	noFull           bool
-	promptFile       string
-	maxDepth         int
-	noSubdispatch    bool
-	signals          stringSlice
-	permissionMode   string
-	stdin            bool
-	responseMaxChars int
-	verbose          bool
-	version          bool
-	help             bool
-	sandbox          string
-	reasoning        string
-	maxTurns         int
-	addDirs          stringSlice
+	engine, role, cwd, model, effort, systemPrompt, systemPromptFile string
+	contextFile, artifactDir, salt, config, promptFile               string
+	permissionMode, sandbox, reasoning                               string
+	timeout, maxDepth, responseMaxChars, maxTurns                    int
+	full, noFull, noSubdispatch, stdin, version                      bool
+	skills, addDirs                                                  stringSlice
 }
 
 func main() {
@@ -78,7 +52,8 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	flags, positional, fs, err := parseFlags(args, stderr)
+	fs, parsed := newFlagSet(stderr)
+	err := fs.Parse(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -86,15 +61,24 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-
-	if flags.help {
-		fs.Usage()
-		return 0
-	}
+	flags := *parsed
+	positional := fs.Args()
 
 	if flags.version {
 		fmt.Fprintln(stdout, version)
 		return 0
+	}
+
+	failResult := func(spec *types.DispatchSpec, code, msg, suggestion string) int {
+		result := dispatch.BuildFailedResult(
+			spec,
+			dispatch.NewDispatchError(code, msg, suggestion),
+			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Tokens: &types.TokenUsage{}},
+			0,
+		)
+		writeResult(stdout, result)
+		return 1
 	}
 
 	var spec *types.DispatchSpec
@@ -118,25 +102,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// Load config
 	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
 	if err != nil {
 		fmt.Fprintf(stderr, "load config: %v\n", err)
 		return 1
 	}
 
-	// Resolve role if specified
 	if flags.role != "" {
 		role, err := config.ResolveRole(cfg, flags.role)
 		if err != nil {
-			result := dispatch.BuildFailedResult(spec,
-				dispatch.NewDispatchError("config_error", err.Error(), ""),
-				&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-				&types.DispatchMetadata{Engine: spec.Engine, Tokens: &types.TokenUsage{}}, 0)
-			writeResult(stdout, result)
-			return 1
+			return failResult(spec, "config_error", err.Error(), "")
 		}
-		// Role fills in missing values (CLI flags override)
 		if spec.Engine == "" && role.Engine != "" {
 			spec.Engine = role.Engine
 		}
@@ -144,20 +120,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			spec.Model = role.Model
 		}
 		if spec.Effort == "high" && role.Effort != "" {
-			// Only override if effort wasn't explicitly set
 			spec.Effort = role.Effort
 		}
 	}
 
-	// Apply config defaults for missing values
 	if spec.Engine == "" {
 		spec.Engine = cfg.Defaults.Engine
 	}
 	if spec.Model == "" {
 		spec.Model = cfg.Defaults.Model
 	}
+	if spec.ResponseMaxChars == 0 {
+		spec.ResponseMaxChars = cfg.Defaults.ResponseMaxChars
+	}
+	if spec.MaxDepth == 0 {
+		spec.MaxDepth = cfg.Defaults.MaxDepth
+	}
+	if !flags.stdin && !flags.noSubdispatch {
+		spec.AllowSubdispatch = cfg.Defaults.AllowSubdispatch
+	}
 
-	// Resolve timeout
 	if spec.TimeoutSec == 0 {
 		spec.TimeoutSec = config.TimeoutForEffort(cfg, spec.Effort)
 	}
@@ -165,87 +147,47 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		spec.GraceSec = cfg.Timeout.Grace
 	}
 
-	// Generate salt if not provided
 	if spec.Salt == "" {
 		spec.Salt = dispatch.GenerateSalt()
 	}
+	if spec.EngineOpts == nil {
+		spec.EngineOpts = map[string]any{}
+	}
+	spec.EngineOpts["heartbeat_interval_sec"] = cfg.Liveness.HeartbeatIntervalSec
+	spec.EngineOpts["silence_warn_seconds"] = cfg.Liveness.SilenceWarnSeconds
+	spec.EngineOpts["silence_kill_seconds"] = cfg.Liveness.SilenceKillSeconds
 
-	// Validate engine
 	if spec.Engine == "" {
-		result := dispatch.BuildFailedResult(spec,
-			dispatch.NewDispatchError("invalid_args", "No engine specified.", "Use --engine codex, --engine claude, or --engine gemini."),
-			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Tokens: &types.TokenUsage{}}, 0)
-		writeResult(stdout, result)
-		return 1
+		return failResult(spec, "invalid_args", "No engine specified.", "Use --engine codex, --engine claude, or --engine gemini.")
 	}
 
-	// Build engine registry
-	registry := engine.NewRegistry()
-
-	// Register Codex adapter
 	codexModels := cfg.Models["codex"]
 	if len(codexModels) == 0 {
 		codexModels = []string{"gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2-codex"}
 	}
-	registry.Register("codex", adapter.NewCodexAdapter(), codexModels)
-
-	// Get adapter for requested engine
-	adp, err := registry.GetAdapter(spec.Engine)
-	if err != nil {
-		validEngines := registry.EngineNames()
-		result := dispatch.BuildFailedResult(spec,
-			dispatch.NewDispatchError("engine_not_found",
-				fmt.Sprintf("Engine %q not found.", spec.Engine),
-				fmt.Sprintf("Valid engines: %v", validEngines)),
-			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Tokens: &types.TokenUsage{}}, 0)
-		writeResult(stdout, result)
-		return 1
+	var (
+		adp         types.HarnessAdapter
+		validModels []string
+	)
+	if spec.Engine != "codex" {
+		return failResult(spec, "engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex]")
 	}
+	adp = &adapter.CodexAdapter{}
+	validModels = codexModels
 
-	// Validate model if specified
-	if spec.Model != "" {
-		validModels := registry.ValidModels(spec.Engine)
-		if len(validModels) > 0 {
-			found := false
-			for _, m := range validModels {
-				if m == spec.Model {
-					found = true
-					break
-				}
-			}
-			if !found {
-				suggestion := dispatch.FuzzyMatchModel(spec.Model, validModels)
-				suggestionText := fmt.Sprintf("Valid models for %s: %v", spec.Engine, validModels)
-				if suggestion != "" {
-					suggestionText = fmt.Sprintf("Did you mean %q? %s", suggestion, suggestionText)
-				}
-				result := dispatch.BuildFailedResult(spec,
-					dispatch.NewDispatchError("model_not_found",
-						fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine),
-						suggestionText),
-					&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-					&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Tokens: &types.TokenUsage{}}, 0)
-				writeResult(stdout, result)
-				return 1
-			}
+	if spec.Model != "" && len(validModels) > 0 && !slices.Contains(validModels, spec.Model) {
+		suggestion := dispatch.FuzzyMatchModel(spec.Model, validModels)
+		suggestionText := fmt.Sprintf("Valid models for %s: %v", spec.Engine, validModels)
+		if suggestion != "" {
+			suggestionText = fmt.Sprintf("Did you mean %q? %s", suggestion, suggestionText)
 		}
+		return failResult(spec, "model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText)
 	}
 
-	// Set up context with signal handling
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		cancel()
-	}()
-
-	// Create LoopEngine and dispatch
-	eng := engine.NewLoopEngine(spec.Engine, adp, registry)
+	eng := engine.NewLoopEngine(spec.Engine, adp, validModels, stderr)
 	result, err := eng.Dispatch(ctx, spec)
 	if err != nil {
 		fmt.Fprintf(stderr, "dispatch error: %v\n", err)
@@ -266,7 +208,6 @@ func writeResult(w io.Writer, result *types.DispatchResult) {
 func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	flags := &cliFlags{
 		effort:    "high",
-		output:    "json",
 		full:      true,
 		maxDepth:  2,
 		sandbox:   "danger-full-access",
@@ -275,97 +216,72 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 
 	fs := flag.NewFlagSet("agent-mux", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: agent-mux [options] <prompt>")
-		fs.PrintDefaults()
-	}
 
-	fs.StringVar(&flags.engine, "engine", "", "Engine name")
-	fs.StringVar(&flags.engine, "E", "", "Engine name")
-	fs.StringVar(&flags.role, "role", "", "Role")
-	fs.StringVar(&flags.role, "R", "", "Role")
-	fs.StringVar(&flags.cwd, "cwd", "", "Working directory")
-	fs.StringVar(&flags.cwd, "C", "", "Working directory")
-	fs.StringVar(&flags.model, "model", "", "Model")
-	fs.StringVar(&flags.model, "m", "", "Model")
-	fs.StringVar(&flags.effort, "effort", "high", "Effort")
-	fs.StringVar(&flags.effort, "e", "high", "Effort")
+	bindStr(fs, &flags.engine, "Engine name", "", "engine", "E")
+	bindStr(fs, &flags.role, "Role", "", "role", "R")
+	bindStr(fs, &flags.cwd, "Working directory", "", "cwd", "C")
+	bindStr(fs, &flags.model, "Model", "", "model", "m")
+	bindStr(fs, &flags.effort, "Effort", flags.effort, "effort", "e")
 	fs.IntVar(&flags.timeout, "timeout", 0, "Timeout seconds")
 	fs.IntVar(&flags.timeout, "t", 0, "Timeout seconds")
-	fs.StringVar(&flags.systemPrompt, "system-prompt", "", "System prompt")
-	fs.StringVar(&flags.systemPrompt, "s", "", "System prompt")
+	bindStr(fs, &flags.systemPrompt, "System prompt", "", "system-prompt", "s")
 	fs.StringVar(&flags.systemPromptFile, "system-prompt-file", "", "System prompt file")
-	fs.StringVar(&flags.coordinator, "coordinator", "", "Coordinator")
 	fs.Var(&flags.skills, "skill", "Skill name")
-	fs.StringVar(&flags.pipeline, "pipeline", "", "Pipeline ID")
-	fs.StringVar(&flags.pipeline, "P", "", "Pipeline ID")
-	fs.StringVar(&flags.recover, "recover", "", "Recover dispatch ID")
 	fs.StringVar(&flags.contextFile, "context-file", "", "Context file")
 	fs.StringVar(&flags.artifactDir, "artifact-dir", "", "Artifact directory")
 	fs.StringVar(&flags.salt, "salt", "", "Dispatch salt")
 	fs.StringVar(&flags.config, "config", "", "Config path")
-	fs.StringVar(&flags.output, "output", "json", "Output mode")
-	fs.StringVar(&flags.output, "o", "json", "Output mode")
-	fs.BoolVar(&flags.full, "full", true, "Full access mode")
-	fs.BoolVar(&flags.full, "f", true, "Full access mode")
+	bindBool(fs, &flags.full, "Full access mode", flags.full, "full", "f")
 	fs.BoolVar(&flags.noFull, "no-full", false, "Disable full access mode")
 	fs.StringVar(&flags.promptFile, "prompt-file", "", "Prompt file")
-	fs.IntVar(&flags.maxDepth, "max-depth", 2, "Maximum recursive depth")
+	fs.IntVar(&flags.maxDepth, "max-depth", flags.maxDepth, "Maximum recursive depth")
 	fs.BoolVar(&flags.noSubdispatch, "no-subdispatch", false, "Disable recursive dispatch")
-	fs.Var(&flags.signals, "signal", "Signal payload")
 	fs.StringVar(&flags.permissionMode, "permission-mode", "", "Permission mode")
 	fs.BoolVar(&flags.stdin, "stdin", false, "Read DispatchSpec JSON from stdin")
 	fs.IntVar(&flags.responseMaxChars, "response-max-chars", 0, "Maximum response characters")
-	fs.BoolVar(&flags.verbose, "verbose", false, "Verbose logging")
-	fs.BoolVar(&flags.verbose, "v", false, "Verbose logging")
-	fs.BoolVar(&flags.version, "version", false, "Show version")
-	fs.BoolVar(&flags.version, "V", false, "Show version")
-	fs.BoolVar(&flags.help, "help", false, "Show help")
-	fs.BoolVar(&flags.help, "h", false, "Show help")
-
-	fs.StringVar(&flags.sandbox, "sandbox", "danger-full-access", "Sandbox mode")
-	fs.StringVar(&flags.reasoning, "reasoning", "medium", "Reasoning effort")
-	fs.StringVar(&flags.reasoning, "r", "medium", "Reasoning effort")
+	bindBool(fs, &flags.version, "Show version", false, "version", "V")
+	fs.StringVar(&flags.sandbox, "sandbox", flags.sandbox, "Sandbox mode")
+	bindStr(fs, &flags.reasoning, "Reasoning effort", flags.reasoning, "reasoning", "r")
 	fs.IntVar(&flags.maxTurns, "max-turns", 0, "Maximum turns")
 	fs.Var(&flags.addDirs, "add-dir", "Additional writable directory")
 
 	return fs, flags
 }
 
-func parseFlags(args []string, stderr io.Writer) (cliFlags, []string, *flag.FlagSet, error) {
-	fs, flags := newFlagSet(stderr)
-	if err := fs.Parse(args); err != nil {
-		return cliFlags{}, nil, fs, err
-	}
-	return *flags, fs.Args(), fs, nil
-}
-
-func buildDispatchSpec(flags cliFlags, args []string) *types.DispatchSpec {
-	spec, err := buildDispatchSpecE(flags, args)
-	if err != nil {
-		return nil
-	}
-	return spec
-}
-
 func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, error) {
 	if flags.promptFile != "" && len(args) > 0 {
 		return nil, errors.New("prompt must come from either the first positional arg or --prompt-file, not both")
 	}
-
-	prompt, err := resolvePrompt(flags.promptFile, args)
-	if err != nil {
-		return nil, err
+	var (
+		prompt, systemPrompt string
+		err                  error
+	)
+	if flags.promptFile != "" {
+		data, readErr := os.ReadFile(flags.promptFile)
+		if readErr != nil {
+			return nil, fmt.Errorf("read prompt file %q: %w", flags.promptFile, readErr)
+		}
+		prompt = string(data)
+	} else if len(args) > 0 {
+		prompt = args[0]
 	}
 	if prompt == "" {
 		return nil, errors.New("missing prompt: provide the first positional arg or --prompt-file")
 	}
-
-	systemPrompt, err := resolveSystemPrompt(flags.systemPrompt, flags.systemPromptFile)
-	if err != nil {
-		return nil, err
+	if flags.systemPromptFile != "" {
+		data, readErr := os.ReadFile(flags.systemPromptFile)
+		if readErr != nil {
+			return nil, fmt.Errorf("read system prompt file %q: %w", flags.systemPromptFile, readErr)
+		}
+		systemPrompt = string(data)
 	}
-
+	if flags.systemPrompt != "" {
+		if systemPrompt == "" {
+			systemPrompt = flags.systemPrompt
+		} else {
+			systemPrompt = systemPrompt + "\n\n" + flags.systemPrompt
+		}
+	}
 	dispatchID := ulid.Make().String()
 	cwd := flags.cwd
 	if cwd == "" {
@@ -399,62 +315,40 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 	}
 
 	spec := &types.DispatchSpec{
-		DispatchID:          dispatchID,
-		Salt:                flags.salt,
-		Engine:              flags.engine,
-		Model:               flags.model,
-		Effort:              flags.effort,
-		Prompt:              prompt,
-		SystemPrompt:        systemPrompt,
-		Cwd:                 cwd,
-		Skills:              append([]string(nil), flags.skills...),
-		Coordinator:         flags.coordinator,
-		ContextFile:         flags.contextFile,
-		ArtifactDir:         artifactDir,
-		TimeoutSec:          flags.timeout,
-		GraceSec:            60,
-		Role:                flags.role,
-		MaxDepth:            flags.maxDepth,
-		AllowSubdispatch:    allowSubdispatch,
-		PipelineID:          flags.pipeline,
-		PipelineStep:        -1,
-		ContinuesDispatchID: flags.recover,
-		HandoffMode:         string(types.HandoffSummaryAndRefs),
-		ResponseMaxChars:    flags.responseMaxChars,
-		EngineOpts:          engineOpts,
-		FullAccess:          fullAccess,
+		DispatchID:       dispatchID,
+		Salt:             flags.salt,
+		Engine:           flags.engine,
+		Model:            flags.model,
+		Effort:           flags.effort,
+		Prompt:           prompt,
+		SystemPrompt:     systemPrompt,
+		Cwd:              cwd,
+		Skills:           append([]string(nil), flags.skills...),
+		ContextFile:      flags.contextFile,
+		ArtifactDir:      artifactDir,
+		TimeoutSec:       flags.timeout,
+		GraceSec:         60,
+		Role:             flags.role,
+		MaxDepth:         flags.maxDepth,
+		AllowSubdispatch: allowSubdispatch,
+		PipelineStep:     -1,
+		HandoffMode:      "summary_and_refs",
+		ResponseMaxChars: flags.responseMaxChars,
+		EngineOpts:       engineOpts,
+		FullAccess:       fullAccess,
 	}
 
 	return spec, nil
 }
 
-func resolvePrompt(promptFile string, args []string) (string, error) {
-	if promptFile != "" {
-		data, err := os.ReadFile(promptFile)
-		if err != nil {
-			return "", fmt.Errorf("read prompt file %q: %w", promptFile, err)
-		}
-		return string(data), nil
+func bindStr(fs *flag.FlagSet, dst *string, usage, def string, names ...string) {
+	for _, name := range names {
+		fs.StringVar(dst, name, def, usage)
 	}
-	if len(args) == 0 {
-		return "", nil
-	}
-	return args[0], nil
 }
 
-func resolveSystemPrompt(inline, file string) (string, error) {
-	parts := make([]string, 0, 2)
-	if file != "" {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return "", fmt.Errorf("read system prompt file %q: %w", file, err)
-		}
-		if len(data) > 0 {
-			parts = append(parts, string(data))
-		}
+func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...string) {
+	for _, name := range names {
+		fs.BoolVar(dst, name, def, usage)
 	}
-	if inline != "" {
-		parts = append(parts, inline)
-	}
-	return strings.Join(parts, "\n\n"), nil
 }

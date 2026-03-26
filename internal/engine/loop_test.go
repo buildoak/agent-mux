@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,12 +16,12 @@ type mockAdapter struct {
 	binary string
 }
 
-func (a *mockAdapter) Binary() string                         { return a.binary }
+func (a *mockAdapter) Binary() string { return a.binary }
 func (a *mockAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	return []string{"-c", spec.Prompt}
 }
-func (a *mockAdapter) SupportsResume() bool                   { return false }
-func (a *mockAdapter) ResumeArgs(sid, msg string) []string    { return nil }
+func (a *mockAdapter) SupportsResume() bool                { return false }
+func (a *mockAdapter) ResumeArgs(sid, msg string) []string { return nil }
 
 func (a *mockAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {
 	// Delegate to the real Codex adapter's ParseEvent for testing
@@ -101,7 +102,12 @@ func (h *codexParseHelper) ParseEvent(line string) (*types.HarnessEvent, error) 
 	}
 
 	if contains(line, `"type":"item.started"`) {
-		evt.Kind = types.EventToolStart
+		if contains(line, `"item_type":"command_execution"`) {
+			evt.Kind = types.EventCommandRun
+			evt.Tool = "command_execution"
+		} else {
+			evt.Kind = types.EventToolStart
+		}
 		return evt, nil
 	}
 
@@ -167,8 +173,7 @@ func TestLoopEngineHappyPath(t *testing.T) {
 	}
 
 	adapter := &mockAdapter{binary: "bash"}
-	registry := NewRegistry()
-	engine := NewLoopEngine("codex", adapter, registry)
+	engine := NewLoopEngine("codex", adapter, nil, io.Discard)
 
 	artifactDir := t.TempDir()
 	spec := &types.DispatchSpec{
@@ -226,8 +231,7 @@ func TestLoopEngineErrorPath(t *testing.T) {
 	}
 
 	adapter := &mockAdapter{binary: "bash"}
-	registry := NewRegistry()
-	engine := NewLoopEngine("codex", adapter, registry)
+	engine := NewLoopEngine("codex", adapter, nil, io.Discard)
 
 	artifactDir := t.TempDir()
 	spec := &types.DispatchSpec{
@@ -259,19 +263,8 @@ func TestLoopEngineErrorPath(t *testing.T) {
 }
 
 func TestLoopEngineTimeout(t *testing.T) {
-	fixtureDir, err := filepath.Abs("../../test/fixtures")
-	if err != nil {
-		t.Fatalf("abs path: %v", err)
-	}
-	mockScript := filepath.Join(fixtureDir, "mock-codex-slow.sh")
-
-	if _, err := os.Stat(mockScript); err != nil {
-		t.Skipf("mock script not found: %s", mockScript)
-	}
-
 	adapter := &mockAdapter{binary: "bash"}
-	registry := NewRegistry()
-	engine := NewLoopEngine("codex", adapter, registry)
+	engine := NewLoopEngine("codex", adapter, nil, io.Discard)
 
 	artifactDir := t.TempDir()
 	spec := &types.DispatchSpec{
@@ -280,11 +273,11 @@ func TestLoopEngineTimeout(t *testing.T) {
 		Engine:      "codex",
 		Model:       "gpt-5.4",
 		Effort:      "high",
-		Prompt:      mockScript,
+		Prompt:      "sleep 30",
 		Cwd:         "/tmp",
 		ArtifactDir: artifactDir,
-		TimeoutSec:  2,  // 2 second soft timeout
-		GraceSec:    1,  // 1 second grace
+		TimeoutSec:  2, // 2 second soft timeout
+		GraceSec:    1, // 1 second grace
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -303,10 +296,39 @@ func TestLoopEngineTimeout(t *testing.T) {
 	}
 }
 
+func TestLoopEngineSoftTimeoutCanStillCompleteWithinGrace(t *testing.T) {
+	adapter := &mockAdapter{binary: "bash"}
+	engine := NewLoopEngine("codex", adapter, nil, io.Discard)
+
+	artifactDir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID:  "01TESTSOFT",
+		Salt:        "test-fox-soft",
+		Engine:      "codex",
+		Model:       "gpt-5.4",
+		Effort:      "high",
+		Prompt:      "sleep 2; echo '{\"type\":\"item.completed\",\"item_type\":\"agent_message\",\"content\":\"done\"}'; echo '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}'",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		TimeoutSec:  1,
+		GraceSec:    3,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed", result.Status)
+	}
+}
+
 func TestLoopEngineBinaryNotFound(t *testing.T) {
 	adapter := &mockAdapter{binary: "nonexistent-binary-that-does-not-exist"}
-	registry := NewRegistry()
-	engine := NewLoopEngine("codex", adapter, registry)
+	engine := NewLoopEngine("codex", adapter, nil, io.Discard)
 
 	artifactDir := t.TempDir()
 	spec := &types.DispatchSpec{

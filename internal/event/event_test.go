@@ -2,24 +2,39 @@ package event
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/buildoak/agent-mux/internal/types"
 )
 
 func TestEmitEvent(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
-	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", false, logPath)
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", io.Discard, logPath)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
 	defer emitter.Close()
 
-	emitter.EmitDispatchStart("codex", "gpt-5.4")
+	if err := emitter.EmitDispatchStart(&types.DispatchSpec{
+		DispatchID: "01JQXYZ",
+		Salt:       "coral-fox-nine",
+		Engine:     "codex",
+		Model:      "gpt-5.4",
+		Effort:     "high",
+		TimeoutSec: 600,
+		GraceSec:   60,
+		Cwd:        "/tmp/project",
+		Skills:     []string{"go"},
+	}); err != nil {
+		t.Fatalf("EmitDispatchStart: %v", err)
+	}
 
 	// Read the event log
 	data, err := os.ReadFile(logPath)
@@ -52,6 +67,15 @@ func TestEmitEvent(t *testing.T) {
 	if evt.Engine != "codex" {
 		t.Errorf("engine = %q, want codex", evt.Engine)
 	}
+	if evt.TimeoutSec != 600 {
+		t.Errorf("timeout_sec = %d, want 600", evt.TimeoutSec)
+	}
+	if evt.Cwd != "/tmp/project" {
+		t.Errorf("cwd = %q, want /tmp/project", evt.Cwd)
+	}
+	if len(evt.Skills) != 1 || evt.Skills[0] != "go" {
+		t.Errorf("skills = %#v, want []string{\"go\"}", evt.Skills)
+	}
 	if evt.Timestamp == "" {
 		t.Error("ts should not be empty")
 	}
@@ -61,13 +85,13 @@ func TestEmitMultipleEvents(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
-	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", false, logPath)
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", io.Discard, logPath)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
 	defer emitter.Close()
 
-	emitter.EmitDispatchStart("codex", "gpt-5.4")
+	_ = emitter.EmitDispatchStart(&types.DispatchSpec{DispatchID: "01JQXYZ", Salt: "coral-fox-nine", Engine: "codex", Model: "gpt-5.4"})
 	emitter.EmitToolStart("Read", "src/main.go")
 	emitter.EmitToolEnd("Read", 120)
 	emitter.EmitFileWrite("src/parser.go")
@@ -100,7 +124,7 @@ func TestHeartbeatTicker(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
-	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", false, logPath)
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", io.Discard, logPath)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -139,12 +163,12 @@ func TestHeartbeatTicker(t *testing.T) {
 }
 
 func TestEmitterWithoutLog(t *testing.T) {
-	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", false, "")
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", io.Discard, "")
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
 	defer emitter.Close()
 
 	// Should not panic even without log file
-	emitter.EmitDispatchStart("codex", "gpt-5.4")
+	_ = emitter.EmitDispatchStart(&types.DispatchSpec{DispatchID: "01JQXYZ", Salt: "coral-fox-nine", Engine: "codex", Model: "gpt-5.4"})
 }

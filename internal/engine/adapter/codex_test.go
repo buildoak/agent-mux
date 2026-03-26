@@ -7,7 +7,7 @@ import (
 )
 
 func TestCodexBuildArgs(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	spec := &types.DispatchSpec{
 		Model:  "gpt-5.4",
@@ -35,7 +35,7 @@ func TestCodexBuildArgs(t *testing.T) {
 }
 
 func TestCodexBuildArgsDefaults(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	spec := &types.DispatchSpec{
 		Prompt:     "test prompt",
@@ -50,7 +50,7 @@ func TestCodexBuildArgsDefaults(t *testing.T) {
 }
 
 func TestCodexBuildArgsWithSystemPrompt(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	spec := &types.DispatchSpec{
 		Prompt:       "Build it",
@@ -68,7 +68,7 @@ func TestCodexBuildArgsWithSystemPrompt(t *testing.T) {
 }
 
 func TestCodexParseThreadStarted(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"thread.started","thread_id":"thread_abc123","model":"gpt-5.4"}`
 	evt, err := a.ParseEvent(line)
@@ -85,7 +85,7 @@ func TestCodexParseThreadStarted(t *testing.T) {
 }
 
 func TestCodexParseTurnStarted(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"turn.started","turn_index":0}`
 	evt, err := a.ParseEvent(line)
@@ -100,7 +100,7 @@ func TestCodexParseTurnStarted(t *testing.T) {
 }
 
 func TestCodexParseItemStartedCommand(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"item.started","item_id":"item_001","item_type":"command_execution","command":"go test ./..."}`
 	evt, err := a.ParseEvent(line)
@@ -108,16 +108,32 @@ func TestCodexParseItemStartedCommand(t *testing.T) {
 		t.Fatalf("ParseEvent: %v", err)
 	}
 
-	if evt.Kind != types.EventToolStart {
-		t.Errorf("kind = %d, want EventToolStart", evt.Kind)
+	if evt.Kind != types.EventCommandRun {
+		t.Errorf("kind = %d, want EventCommandRun", evt.Kind)
 	}
 	if evt.Command != "go test ./..." {
 		t.Errorf("command = %q, want 'go test ./...'", evt.Command)
 	}
 }
 
+func TestCodexBuildArgsAcceptsJSONDecodedAddDir(t *testing.T) {
+	a := &CodexAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt: "test prompt",
+		EngineOpts: map[string]any{
+			"add-dir": []any{"/tmp/a", "/tmp/b"},
+		},
+	}
+
+	args := a.BuildArgs(spec)
+	assertContains(t, args, "--add-dir")
+	assertContains(t, args, "/tmp/a")
+	assertContains(t, args, "/tmp/b")
+}
+
 func TestCodexParseItemUpdatedMessage(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"item.updated","item_id":"item_002","item_type":"agent_message","content_delta":"I'll run the tests"}`
 	evt, err := a.ParseEvent(line)
@@ -134,7 +150,7 @@ func TestCodexParseItemUpdatedMessage(t *testing.T) {
 }
 
 func TestCodexParseItemCompletedMessage(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"item.completed","item_id":"item_002","item_type":"agent_message","content":"Done building the parser.","duration_ms":2300}`
 	evt, err := a.ParseEvent(line)
@@ -151,7 +167,7 @@ func TestCodexParseItemCompletedMessage(t *testing.T) {
 }
 
 func TestCodexParseItemCompletedCommand(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"item.completed","item_id":"item_001","item_type":"command_execution","command":"go test ./...","exit_code":0,"duration_ms":1200}`
 	evt, err := a.ParseEvent(line)
@@ -168,7 +184,7 @@ func TestCodexParseItemCompletedCommand(t *testing.T) {
 }
 
 func TestCodexParseItemCompletedFileChange(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"item.completed","item_id":"item_003","item_type":"file_change","file_path":"internal/parser/parser.go","change_type":"modified","duration_ms":150}`
 	evt, err := a.ParseEvent(line)
@@ -185,7 +201,7 @@ func TestCodexParseItemCompletedFileChange(t *testing.T) {
 }
 
 func TestCodexParseTurnCompleted(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"turn.completed","turn_index":0,"usage":{"input_tokens":23000,"output_tokens":4500,"reasoning_tokens":1200},"duration_ms":34000}`
 	evt, err := a.ParseEvent(line)
@@ -211,7 +227,7 @@ func TestCodexParseTurnCompleted(t *testing.T) {
 }
 
 func TestCodexParseTurnFailed(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"turn.failed","turn_index":0,"error":{"code":"context_length_exceeded","message":"Conversation exceeded maximum context length."}}`
 	evt, err := a.ParseEvent(line)
@@ -228,7 +244,7 @@ func TestCodexParseTurnFailed(t *testing.T) {
 }
 
 func TestCodexParseError(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"error","code":"model_not_found","message":"Model 'gpt-99' is not available."}`
 	evt, err := a.ParseEvent(line)
@@ -245,7 +261,7 @@ func TestCodexParseError(t *testing.T) {
 }
 
 func TestCodexParseMalformedJSON(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `not json at all`
 	evt, err := a.ParseEvent(line)
@@ -258,7 +274,7 @@ func TestCodexParseMalformedJSON(t *testing.T) {
 }
 
 func TestCodexParseEmptyLine(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	evt, err := a.ParseEvent("")
 	if err != nil {
@@ -270,7 +286,7 @@ func TestCodexParseEmptyLine(t *testing.T) {
 }
 
 func TestCodexParseUnknownType(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 
 	line := `{"type":"future.new_event","data":"something"}`
 	evt, err := a.ParseEvent(line)
@@ -283,14 +299,14 @@ func TestCodexParseUnknownType(t *testing.T) {
 }
 
 func TestCodexSupportsResume(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 	if !a.SupportsResume() {
 		t.Error("Codex should support resume")
 	}
 }
 
 func TestCodexResumeArgs(t *testing.T) {
-	a := NewCodexAdapter()
+	a := &CodexAdapter{}
 	args := a.ResumeArgs("thread_abc123", "wrap up")
 	assertContains(t, args, "resume")
 	assertContains(t, args, "--id")

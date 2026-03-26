@@ -18,13 +18,6 @@ func TestGenerateSalt(t *testing.T) {
 	}
 }
 
-func TestGenerateDispatchID(t *testing.T) {
-	id := GenerateDispatchID()
-	if len(id) != 26 {
-		t.Errorf("ULID should be 26 chars, got %d: %q", len(id), id)
-	}
-}
-
 func TestEnsureArtifactDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "a", "b", "c")
 	if err := EnsureArtifactDir(dir); err != nil {
@@ -97,9 +90,9 @@ func TestWriteAndUpdateDispatchMeta(t *testing.T) {
 
 func TestTruncateResponse(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		max      int
+		name      string
+		input     string
+		max       int
 		wantTrunc bool
 	}{
 		{"no truncation needed", "short", 100, false},
@@ -150,10 +143,10 @@ func TestFuzzyMatchModel(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"gpt-5.4", "gpt-5.4"},          // exact match
-		{"gpt-5.3", "gpt-5.4"},          // close match
-		{"gpt-5.4-mni", "gpt-5.4-mini"}, // typo
-		{"completely-wrong-model-name-that-is-very-far", ""},  // too far
+		{"gpt-5.4", "gpt-5.4"},                               // exact match
+		{"gpt-5.3", "gpt-5.4"},                               // close match
+		{"gpt-5.4-mni", "gpt-5.4-mini"},                      // typo
+		{"completely-wrong-model-name-that-is-very-far", ""}, // too far
 	}
 
 	for _, tt := range tests {
@@ -284,6 +277,28 @@ func TestBuildFailedResult(t *testing.T) {
 	}
 	if result.Error.Code != "model_not_found" {
 		t.Errorf("error.code = %q, want model_not_found", result.Error.Code)
+	}
+}
+
+func TestScanArtifactsRecursive(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(dir, "_dispatch_meta.json"),
+		filepath.Join(dir, "events.jsonl"),
+		filepath.Join(nested, "result.txt"),
+	} {
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+
+	artifacts := ScanArtifacts(dir)
+	if len(artifacts) != 1 || artifacts[0] != filepath.Join(nested, "result.txt") {
+		t.Fatalf("ScanArtifacts = %#v, want nested artifact only", artifacts)
 	}
 }
 
