@@ -21,6 +21,7 @@ import (
 type LoopEngine struct {
 	adapter     types.HarnessAdapter
 	eventWriter io.Writer
+	verbose     bool
 }
 
 func NewLoopEngine(engineName string, adapter types.HarnessAdapter, validModels []string, eventWriter io.Writer) *LoopEngine {
@@ -30,6 +31,11 @@ func NewLoopEngine(engineName string, adapter types.HarnessAdapter, validModels 
 		eventWriter: eventWriter,
 	}
 }
+
+func (e *LoopEngine) SetVerbose(v bool) {
+	e.verbose = v
+}
+
 func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*types.DispatchResult, error) {
 	startTime := time.Now()
 	metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}}
@@ -124,6 +130,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		for scanner.Scan() {
 			line := scanner.Text()
+			if e.verbose {
+				fmt.Fprintf(e.eventWriter, "[engine] %s\n", line)
+			}
 
 			evt, err := e.adapter.ParseEvent(line)
 			if err != nil {
@@ -177,6 +186,12 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 			case types.EventResponse:
 				lastResponse = evt.Text
+				if evt.Tokens != nil {
+					totalTokens = evt.Tokens
+				}
+				if evt.SessionID != "" {
+					sessionID = evt.SessionID
+				}
 				updateActivity("received response")
 
 			case types.EventTurnComplete:

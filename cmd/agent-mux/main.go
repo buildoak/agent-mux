@@ -42,8 +42,9 @@ type cliFlags struct {
 	engine, role, cwd, model, effort, systemPrompt, systemPromptFile string
 	contextFile, artifactDir, salt, config, promptFile               string
 	permissionMode, sandbox, reasoning                               string
+	output                                                           string
 	timeout, maxDepth, responseMaxChars, maxTurns                    int
-	full, noFull, noSubdispatch, stdin, version                      bool
+	full, noFull, noSubdispatch, stdin, version, verbose             bool
 	skills, addDirs                                                  stringSlice
 }
 
@@ -77,7 +78,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Tokens: &types.TokenUsage{}},
 			0,
 		)
-		writeResult(stdout, result)
+		if flags.output == "text" {
+			writeTextResult(stdout, result)
+		} else {
+			writeResult(stdout, result)
+		}
 		return 1
 	}
 
@@ -102,6 +107,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 
+	flagsSet := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		flagsSet[f.Name] = true
+	})
+
 	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
 	if err != nil {
 		fmt.Fprintf(stderr, "load config: %v\n", err)
@@ -113,13 +123,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
-		if spec.Engine == "" && role.Engine != "" {
+		if !flagsSet["engine"] && !flagsSet["E"] && role.Engine != "" {
 			spec.Engine = role.Engine
 		}
-		if spec.Model == "" && role.Model != "" {
+		if !flagsSet["model"] && !flagsSet["m"] && role.Model != "" {
 			spec.Model = role.Model
 		}
-		if spec.Effort == "high" && role.Effort != "" {
+		if !flagsSet["effort"] && !flagsSet["e"] && role.Effort != "" {
 			spec.Effort = role.Effort
 		}
 	}
@@ -169,11 +179,27 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		adp         types.HarnessAdapter
 		validModels []string
 	)
-	if spec.Engine != "codex" {
-		return failResult(spec, "engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex]")
+	switch spec.Engine {
+	case "codex":
+		adp = &adapter.CodexAdapter{}
+		validModels = codexModels
+	case "claude":
+		adp = &adapter.ClaudeAdapter{}
+		claudeModels := cfg.Models["claude"]
+		if len(claudeModels) == 0 {
+			claudeModels = []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
+		}
+		validModels = claudeModels
+	case "gemini":
+		adp = &adapter.GeminiAdapter{}
+		geminiModels := cfg.Models["gemini"]
+		if len(geminiModels) == 0 {
+			geminiModels = []string{"gemini-3.1-pro", "gemini-3.1-flash"}
+		}
+		validModels = geminiModels
+	default:
+		return failResult(spec, "engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]")
 	}
-	adp = &adapter.CodexAdapter{}
-	validModels = codexModels
 
 	if spec.Model != "" && len(validModels) > 0 && !slices.Contains(validModels, spec.Model) {
 		suggestion := dispatch.FuzzyMatchModel(spec.Model, validModels)
@@ -188,13 +214,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	defer cancel()
 
 	eng := engine.NewLoopEngine(spec.Engine, adp, validModels, stderr)
+	eng.SetVerbose(flags.verbose)
 	result, err := eng.Dispatch(ctx, spec)
 	if err != nil {
 		fmt.Fprintf(stderr, "dispatch error: %v\n", err)
 		return 1
 	}
 
-	writeResult(stdout, result)
+	if flags.output == "text" {
+		writeTextResult(stdout, result)
+	} else {
+		writeResult(stdout, result)
+	}
 	return 0
 }
 
@@ -205,11 +236,35 @@ func writeResult(w io.Writer, result *types.DispatchResult) {
 	enc.Encode(result)
 }
 
+func writeTextResult(w io.Writer, result *types.DispatchResult) {
+	fmt.Fprintf(w, "Status: %s\n", result.Status)
+	if result.Metadata != nil {
+		fmt.Fprintf(w, "Engine: %s\n", result.Metadata.Engine)
+		if result.Metadata.Model != "" {
+			fmt.Fprintf(w, "Model: %s\n", result.Metadata.Model)
+		}
+		if result.Metadata.Tokens != nil {
+			fmt.Fprintf(w, "Tokens: input=%d output=%d\n", result.Metadata.Tokens.Input, result.Metadata.Tokens.Output)
+		}
+	}
+	fmt.Fprintf(w, "Duration: %dms\n", result.DurationMS)
+	if result.Response != "" {
+		fmt.Fprintf(w, "\n--- Response ---\n%s\n", result.Response)
+	}
+	if result.Error != nil {
+		fmt.Fprintf(w, "\n--- Error ---\n%s: %s\n", result.Error.Code, result.Error.Message)
+		if result.Error.Suggestion != "" {
+			fmt.Fprintf(w, "Suggestion: %s\n", result.Error.Suggestion)
+		}
+	}
+}
+
 func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	flags := &cliFlags{
 		effort:    "high",
 		full:      true,
 		maxDepth:  2,
+		output:    "json",
 		sandbox:   "danger-full-access",
 		reasoning: "medium",
 	}
@@ -244,6 +299,8 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	bindStr(fs, &flags.reasoning, "Reasoning effort", flags.reasoning, "reasoning", "r")
 	fs.IntVar(&flags.maxTurns, "max-turns", 0, "Maximum turns")
 	fs.Var(&flags.addDirs, "add-dir", "Additional writable directory")
+	bindStr(fs, &flags.output, "Output format (json, text)", "json", "output", "o")
+	bindBool(fs, &flags.verbose, "Verbose mode", false, "verbose", "v")
 
 	return fs, flags
 }
