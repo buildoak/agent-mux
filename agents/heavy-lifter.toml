@@ -1,0 +1,20 @@
+[defaults]
+timeout_low = 120
+timeout_medium = 600
+timeout_high = 2400
+timeout_xhigh = 3600
+sandbox = "workspace-write"
+
+[liveness]
+silence_warn = 120
+silence_kill = 240
+heartbeat_interval_sec = 15
+silence_warn_seconds = 120
+silence_kill_seconds = 240
+
+[timeout]
+low = 120
+medium = 600
+high = 2400
+xhigh = 3600
+grace = 90
