@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
+	"github.com/buildoak/agent-mux/internal/types"
 )
 
 func TestRecoverDispatch_NotFound(t *testing.T) {
@@ -24,7 +26,7 @@ func TestRecoverDispatch_NotFound(t *testing.T) {
 
 func TestRecoverDispatch_ValidDir(t *testing.T) {
 	dispatchID := "valid-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
-	dir := filepath.Join("/tmp/agent-mux", dispatchID)
+	dir := DefaultArtifactDir(dispatchID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -68,6 +70,93 @@ func TestRecoverDispatch_ValidDir(t *testing.T) {
 	}
 	if ctx.Artifacts[0] != artifactPath {
 		t.Fatalf("Artifacts[0] = %q, want %q", ctx.Artifacts[0], artifactPath)
+	}
+}
+
+func TestResolveArtifactDirUsesAbsoluteRegisteredPath(t *testing.T) {
+	startDir := t.TempDir()
+	otherDir := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(startDir); err != nil {
+		t.Fatalf("chdir startDir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(prevWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	}()
+
+	dispatchID := "relative-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
+	relativeDir := filepath.Join("artifacts", "custom")
+	absoluteDir := filepath.Join(startDir, relativeDir)
+	if err := os.MkdirAll(absoluteDir, 0755); err != nil {
+		t.Fatalf("mkdir absoluteDir: %v", err)
+	}
+	if err := RegisterDispatch(dispatchID, relativeDir); err != nil {
+		t.Fatalf("RegisterDispatch: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(controlRecordPath(dispatchID))
+	})
+
+	if err := os.Chdir(otherDir); err != nil {
+		t.Fatalf("chdir otherDir: %v", err)
+	}
+
+	resolved, err := ResolveArtifactDir(dispatchID)
+	if err != nil {
+		t.Fatalf("ResolveArtifactDir: %v", err)
+	}
+	resolvedReal, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(resolved): %v", err)
+	}
+	absoluteReal, err := filepath.EvalSymlinks(absoluteDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(absoluteDir): %v", err)
+	}
+	if resolvedReal != absoluteReal {
+		t.Fatalf("resolved = %q (%q), want %q (%q)", resolved, resolvedReal, absoluteDir, absoluteReal)
+	}
+}
+
+func TestRegisterDispatchSpecPersistsTraceability(t *testing.T) {
+	artifactDir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID:  "traceable-dispatch",
+		Salt:        "coral-fox-nine",
+		TraceToken:  "AGENT_MUX_GO_traceable-dispatch",
+		ArtifactDir: artifactDir,
+	}
+
+	if err := RegisterDispatchSpec(spec); err != nil {
+		t.Fatalf("RegisterDispatchSpec: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(controlRecordPath(spec.DispatchID))
+	})
+
+	data, err := os.ReadFile(controlRecordPath(spec.DispatchID))
+	if err != nil {
+		t.Fatalf("ReadFile(controlRecord): %v", err)
+	}
+	var record struct {
+		DispatchID   string `json:"dispatch_id"`
+		ArtifactDir  string `json:"artifact_dir"`
+		DispatchSalt string `json:"dispatch_salt"`
+		TraceToken   string `json:"trace_token"`
+	}
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatalf("Unmarshal(controlRecord): %v", err)
+	}
+	if record.DispatchSalt != spec.Salt {
+		t.Fatalf("dispatch_salt = %q, want %q", record.DispatchSalt, spec.Salt)
+	}
+	if record.TraceToken != spec.TraceToken {
+		t.Fatalf("trace_token = %q, want %q", record.TraceToken, spec.TraceToken)
 	}
 }
 

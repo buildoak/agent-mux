@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/buildoak/agent-mux/internal/types"
@@ -345,12 +346,22 @@ func TestCodexSupportsResume(t *testing.T) {
 	}
 }
 
-func TestCodexResumeArgs(t *testing.T) {
+func TestCodexResumeArgsIncludesInitialModel(t *testing.T) {
 	a := &CodexAdapter{}
-	args := a.ResumeArgs("thread_abc123", "wrap up")
-	assertContains(t, args, "resume")
-	assertContains(t, args, "--id")
-	assertContains(t, args, "thread_abc123")
+	args := a.ResumeArgs(&types.DispatchSpec{Model: "gpt-5.4-mini"}, "thread_abc123", "wrap up")
+	want := []string{"exec", "resume", "-m", "gpt-5.4-mini", "--json", "thread_abc123", "wrap up"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
+func TestCodexResumeArgsOmitsModelWhenUnset(t *testing.T) {
+	a := &CodexAdapter{}
+	args := a.ResumeArgs(&types.DispatchSpec{}, "thread_abc123", "wrap up")
+	want := []string{"exec", "resume", "--json", "thread_abc123", "wrap up"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
 }
 
 func assertContains(t *testing.T, slice []string, want string) {

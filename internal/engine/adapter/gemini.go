@@ -213,6 +213,6 @@ func (a *GeminiAdapter) SupportsResume() bool {
 	return true
 }
 
-func (a *GeminiAdapter) ResumeArgs(sessionID string, message string) []string {
+func (a *GeminiAdapter) ResumeArgs(_ *types.DispatchSpec, sessionID string, message string) []string {
 	return []string{"--resume", sessionID, "-p", message}
 }

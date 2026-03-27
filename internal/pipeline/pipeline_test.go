@@ -97,6 +97,25 @@ func TestExecutePipeline_FanOut(t *testing.T) {
 	}
 }
 
+func TestBuildWorkerSpecResetsPerDispatchTraceability(t *testing.T) {
+	tmp := t.TempDir()
+	baseSpec := testBaseSpec(tmp)
+	baseSpec.Salt = "shared-salt"
+	baseSpec.TraceToken = "AGENT_MUX_GO_base-dispatch"
+
+	spec := buildWorkerSpec(baseSpec, PipelineStep{Name: "plan"}, "pipeline-123", 0, 0, filepath.Join(tmp, "worker-0"), "worker prompt")
+
+	if spec.DispatchID == baseSpec.DispatchID {
+		t.Fatalf("dispatch_id = %q, want a new worker dispatch ID", spec.DispatchID)
+	}
+	if spec.Salt != "" {
+		t.Fatalf("salt = %q, want empty so worker dispatch derives its own salt", spec.Salt)
+	}
+	if spec.TraceToken != "" {
+		t.Fatalf("trace_token = %q, want empty so worker dispatch derives its own trace token", spec.TraceToken)
+	}
+}
+
 func TestExecutePipeline_PartialFailure(t *testing.T) {
 	t.Parallel()
 

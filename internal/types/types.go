@@ -17,6 +17,7 @@ type DispatchResult struct {
 	Status            DispatchStatus    `json:"status"`
 	DispatchID        string            `json:"dispatch_id"`
 	DispatchSalt      string            `json:"dispatch_salt"`
+	TraceToken        string            `json:"trace_token"`
 	Response          string            `json:"response"`
 	ResponseTruncated bool              `json:"response_truncated"`
 	FullOutput        *string           `json:"full_output"`
@@ -69,6 +70,7 @@ type TokenUsage struct {
 type DispatchSpec struct {
 	DispatchID          string         `json:"dispatch_id"`
 	Salt                string         `json:"salt,omitempty"`
+	TraceToken          string         `json:"trace_token,omitempty"`
 	Engine              string         `json:"engine"`
 	Model               string         `json:"model,omitempty"`
 	Effort              string         `json:"effort"`
@@ -77,6 +79,7 @@ type DispatchSpec struct {
 	Cwd                 string         `json:"cwd"`
 	Skills              []string       `json:"skills,omitempty"`
 	Coordinator         string         `json:"coordinator,omitempty"`
+	Pipeline            string         `json:"pipeline,omitempty"`
 	ContextFile         string         `json:"context_file,omitempty"`
 	ArtifactDir         string         `json:"artifact_dir"`
 	TimeoutSec          int            `json:"timeout_sec,omitempty"`
@@ -138,5 +141,5 @@ type HarnessAdapter interface {
 	EnvVars(spec *DispatchSpec) []string
 	ParseEvent(line string) (*HarnessEvent, error)
 	SupportsResume() bool
-	ResumeArgs(sessionID string, message string) []string
+	ResumeArgs(spec *DispatchSpec, sessionID string, message string) []string
 }

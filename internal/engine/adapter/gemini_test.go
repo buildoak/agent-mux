@@ -336,7 +336,7 @@ func TestGeminiSupportsResume(t *testing.T) {
 
 func TestGeminiResumeArgs(t *testing.T) {
 	a := &GeminiAdapter{}
-	args := a.ResumeArgs("gem-session-789xyz", "resume")
+	args := a.ResumeArgs(nil, "gem-session-789xyz", "resume")
 	want := []string{"--resume", "gem-session-789xyz", "-p", "resume"}
 	if len(args) != len(want) {
 		t.Fatalf("args = %v, want %v", args, want)

@@ -11,6 +11,7 @@ func TestDispatchResultCompleted(t *testing.T) {
 		Status:            StatusCompleted,
 		DispatchID:        "01JQXYZ",
 		DispatchSalt:      "coral-fox-nine",
+		TraceToken:        "AGENT_MUX_GO_01JQXYZ",
 		Response:          "Built the parser.",
 		ResponseTruncated: false,
 		FullOutput:        nil,
@@ -48,6 +49,9 @@ func TestDispatchResultCompleted(t *testing.T) {
 	if decoded.DispatchID != "01JQXYZ" {
 		t.Errorf("dispatch_id = %q, want %q", decoded.DispatchID, "01JQXYZ")
 	}
+	if decoded.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
+		t.Errorf("trace_token = %q, want %q", decoded.TraceToken, "AGENT_MUX_GO_01JQXYZ")
+	}
 	if decoded.FullOutput != nil {
 		t.Errorf("full_output should be nil")
 	}
@@ -65,6 +69,7 @@ func TestDispatchResultTimedOut(t *testing.T) {
 		Status:         StatusTimedOut,
 		DispatchID:     "01JQXYZ",
 		DispatchSalt:   "coral-fox-nine",
+		TraceToken:     "AGENT_MUX_GO_01JQXYZ",
 		Response:       "Was building parser when timeout hit.",
 		HandoffSummary: "Parser partially built.",
 		Artifacts:      []string{"/tmp/agent-mux/01JQXYZ/src/parser.go"},
@@ -89,6 +94,9 @@ func TestDispatchResultTimedOut(t *testing.T) {
 	if decoded.Status != StatusTimedOut {
 		t.Errorf("status = %q, want %q", decoded.Status, StatusTimedOut)
 	}
+	if decoded.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
+		t.Errorf("trace_token = %q, want %q", decoded.TraceToken, "AGENT_MUX_GO_01JQXYZ")
+	}
 	if !decoded.Partial {
 		t.Error("partial should be true for timed_out")
 	}
@@ -103,6 +111,7 @@ func TestDispatchResultFailed(t *testing.T) {
 		Status:         StatusFailed,
 		DispatchID:     "01JQXYZ",
 		DispatchSalt:   "coral-fox-nine",
+		TraceToken:     "AGENT_MUX_GO_01JQXYZ",
 		Response:       "",
 		HandoffSummary: "",
 		Artifacts:      []string{},
@@ -129,6 +138,9 @@ func TestDispatchResultFailed(t *testing.T) {
 
 	if decoded.Status != StatusFailed {
 		t.Errorf("status = %q, want %q", decoded.Status, StatusFailed)
+	}
+	if decoded.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
+		t.Errorf("trace_token = %q, want %q", decoded.TraceToken, "AGENT_MUX_GO_01JQXYZ")
 	}
 	if decoded.Error == nil {
 		t.Fatal("error should not be nil for failed")
@@ -218,7 +230,7 @@ func TestOmitemptyFields(t *testing.T) {
 	}
 
 	// These should always be present (no omitempty)
-	for _, key := range []string{"schema_version", "status", "dispatch_id", "response", "response_truncated", "full_output", "handoff_summary", "artifacts", "activity", "metadata", "duration_ms"} {
+	for _, key := range []string{"schema_version", "status", "dispatch_id", "trace_token", "response", "response_truncated", "full_output", "handoff_summary", "artifacts", "activity", "metadata", "duration_ms"} {
 		if _, exists := raw[key]; !exists {
 			t.Errorf("%q should always be present", key)
 		}
@@ -229,11 +241,13 @@ func TestDispatchSpecRoundTrip(t *testing.T) {
 	spec := &DispatchSpec{
 		DispatchID:       "01JQXYZ",
 		Salt:             "coral-fox-nine",
+		TraceToken:       "AGENT_MUX_GO_01JQXYZ",
 		Engine:           "codex",
 		Model:            "gpt-5.4",
 		Effort:           "high",
 		Prompt:           "Build the parser",
 		Cwd:              "/path/to/project",
+		Pipeline:         "review",
 		ArtifactDir:      "/tmp/agent-mux/01JQXYZ/",
 		MaxDepth:         2,
 		AllowSubdispatch: true,
@@ -257,6 +271,12 @@ func TestDispatchSpecRoundTrip(t *testing.T) {
 	if decoded.Engine != "codex" {
 		t.Errorf("engine = %q, want %q", decoded.Engine, "codex")
 	}
+	if decoded.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
+		t.Errorf("trace_token = %q, want %q", decoded.TraceToken, "AGENT_MUX_GO_01JQXYZ")
+	}
+	if decoded.Pipeline != "review" {
+		t.Errorf("pipeline = %q, want %q", decoded.Pipeline, "review")
+	}
 	if decoded.PipelineStep != -1 {
 		t.Errorf("pipeline_step = %d, want -1", decoded.PipelineStep)
 	}
@@ -271,10 +291,12 @@ func TestDispatchSpecRoundTrip(t *testing.T) {
 func TestDispatchSpecJSONTagNames(t *testing.T) {
 	spec := &DispatchSpec{
 		DispatchID:          "01JQXYZ",
+		TraceToken:          "AGENT_MUX_GO_01JQXYZ",
 		Engine:              "codex",
 		Effort:              "high",
 		Prompt:              "test",
 		Cwd:                 "/tmp",
+		Pipeline:            "review",
 		ArtifactDir:         "/tmp/agent-mux/01JQXYZ/",
 		MaxDepth:            2,
 		AllowSubdispatch:    true,
@@ -295,7 +317,8 @@ func TestDispatchSpecJSONTagNames(t *testing.T) {
 	}
 
 	expectedKeys := []string{
-		"dispatch_id", "engine", "effort", "prompt", "cwd",
+		"dispatch_id", "trace_token", "engine", "effort", "prompt", "cwd",
+		"pipeline",
 		"artifact_dir", "max_depth", "allow_subdispatch", "depth",
 		"pipeline_step", "full_access", "continues_dispatch_id",
 		"response_max_chars",

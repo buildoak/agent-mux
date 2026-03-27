@@ -96,14 +96,14 @@ func (e *LoopEngine) SetVerbose(v bool) {
 
 func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*types.DispatchResult, error) {
 	startTime := time.Now()
+	dispatch.EnsureTraceability(spec)
 	if spec.MaxDepth > 0 && spec.Depth >= spec.MaxDepth {
 		metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}}
 		return buildFailureResult(spec, metadata, startTime, nil, "max_depth_exceeded", fmt.Sprintf("Max dispatch depth %d reached. Complete work directly.", spec.MaxDepth), ""), nil
 	}
 	dispatchSpec := *spec
-	if dispatchSpec.ArtifactDir != "" {
-		dispatchSpec.Prompt = "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.\n\n" + dispatchSpec.Prompt
-	}
+	dispatch.EnsureTraceability(&dispatchSpec)
+	dispatchSpec.Prompt = dispatch.WithPromptPreamble(dispatchSpec.Prompt, &dispatchSpec)
 
 	metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}}
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
@@ -119,7 +119,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		}
 	}
 	eventLogPath := filepath.Join(spec.ArtifactDir, "events.jsonl")
-	emitter, err := event.NewEmitter(spec.DispatchID, spec.Salt, e.eventWriter, eventLogPath)
+	emitter, err := event.NewEmitter(spec.DispatchID, spec.Salt, spec.TraceToken, e.eventWriter, eventLogPath)
 	if err != nil {
 		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create event log %q: %v", eventLogPath, err), "Ensure the artifact directory is writable."), nil
 	}
@@ -145,6 +145,8 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	}
 	env := append(os.Environ(),
 		fmt.Sprintf("AGENT_MUX_DISPATCH_ID=%s", spec.DispatchID),
+		fmt.Sprintf("AGENT_MUX_TRACE_TOKEN=%s", spec.TraceToken),
+		fmt.Sprintf("AGENT_MUX_SALT=%s", spec.Salt),
 		fmt.Sprintf("AGENT_MUX_ARTIFACT_DIR=%s", spec.ArtifactDir),
 		fmt.Sprintf("AGENT_MUX_DEPTH=%d", spec.Depth),
 	)
@@ -451,7 +453,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			<-currentRun.streamDone
 		}
 
-		resumeArgs := e.adapter.ResumeArgs(sid, message)
+		resumeArgs := e.adapter.ResumeArgs(spec, sid, message)
 		currentGen++
 		nextRun, nextStderr, err := startRun(currentGen, resumeArgs)
 		if err != nil {

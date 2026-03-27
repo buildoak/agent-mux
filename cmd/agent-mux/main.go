@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
@@ -25,10 +28,18 @@ import (
 	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/types"
 	"github.com/oklog/ulid/v2"
+	"golang.org/x/term"
 )
 
 const version = "agent-mux v2.0.0-dev"
 const contextFilePromptPreamble = "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting."
+
+type cliCommand string
+
+const (
+	commandDispatch cliCommand = "dispatch"
+	commandPreview  cliCommand = "preview"
+)
 
 type stringSlice []string
 
@@ -51,15 +62,73 @@ type cliFlags struct {
 	permissionMode, sandbox, reasoning                                            string
 	output, pipeline                                                              string
 	timeout, maxDepth, responseMaxChars, maxTurns                                 int
-	full, noFull, noSubdispatch, stdin, version, verbose                          bool
+	full, noFull, noSubdispatch, stdin, version, verbose, yes                     bool
 	skills, addDirs                                                               stringSlice
 }
+
+type previewResult struct {
+	SchemaVersion        int                 `json:"schema_version"`
+	Kind                 string              `json:"kind"`
+	DispatchSpec         previewDispatchSpec `json:"dispatch_spec"`
+	Prompt               previewPrompt       `json:"prompt"`
+	Control              previewControl      `json:"control"`
+	PromptPreamble       []string            `json:"prompt_preamble"`
+	Warnings             []string            `json:"warnings"`
+	ConfirmationRequired bool                `json:"confirmation_required"`
+}
+
+type previewDispatchSpec struct {
+	DispatchID          string   `json:"dispatch_id"`
+	Salt                string   `json:"salt,omitempty"`
+	TraceToken          string   `json:"trace_token,omitempty"`
+	Engine              string   `json:"engine"`
+	Model               string   `json:"model,omitempty"`
+	Effort              string   `json:"effort,omitempty"`
+	Role                string   `json:"role,omitempty"`
+	Coordinator         string   `json:"coordinator,omitempty"`
+	Pipeline            string   `json:"pipeline,omitempty"`
+	Cwd                 string   `json:"cwd"`
+	Skills              []string `json:"skills,omitempty"`
+	ContextFile         string   `json:"context_file,omitempty"`
+	ArtifactDir         string   `json:"artifact_dir"`
+	TimeoutSec          int      `json:"timeout_sec,omitempty"`
+	GraceSec            int      `json:"grace_sec,omitempty"`
+	MaxDepth            int      `json:"max_depth,omitempty"`
+	AllowSubdispatch    bool     `json:"allow_subdispatch"`
+	ContinuesDispatchID string   `json:"continues_dispatch_id,omitempty"`
+	ResponseMaxChars    int      `json:"response_max_chars,omitempty"`
+	FullAccess          bool     `json:"full_access"`
+}
+
+type previewPrompt struct {
+	Excerpt           string `json:"excerpt,omitempty"`
+	Chars             int    `json:"chars"`
+	Truncated         bool   `json:"truncated"`
+	SystemPromptChars int    `json:"system_prompt_chars,omitempty"`
+}
+
+type previewControl struct {
+	ControlRecord string `json:"control_record"`
+	ArtifactDir   string `json:"artifact_dir"`
+}
+
+type terminalChecker func(any) bool
+
+const (
+	exitCodeCancelled         = 130
+	previewPromptExcerptRunes = 280
+)
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runWithTerminalCheck(args, stdin, stdout, stderr, isTerminalStream)
+}
+
+func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writer, isTerminal terminalChecker) int {
+	command, args, explicitCommand := splitCommand(args)
 	fs, parsed := newFlagSet(stderr)
 	err := fs.Parse(normalizeArgs(args))
 	if err != nil {
@@ -82,19 +151,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 2
 		}
 		msg := positional[0]
-		artifactDir := filepath.Join("/tmp/agent-mux", flags.signal)
+		artifactDir, err := recovery.ResolveArtifactDir(flags.signal)
+		if err != nil {
+			fmt.Fprintf(stderr, "signal: %v\n", err)
+			return 1
+		}
 		if err := inbox.WriteInbox(artifactDir, msg); err != nil {
 			fmt.Fprintf(stderr, "signal: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(
-			stdout,
-			`{"status":"ok","dispatch_id":%q,"artifact_dir":%q,"message":"Signal delivered to inbox","note":"Signals are written to /tmp/agent-mux/<dispatch_id>/inbox.md; dispatches started with custom --artifact-dir may not receive this signal."}`,
-			flags.signal,
-			artifactDir,
-		)
-		fmt.Fprintln(stdout)
+		writeSignalResult(stdout, flags.signal, artifactDir)
 		return 0
+	}
+	if explicitCommand && !flags.stdin && flags.promptFile == "" && len(positional) == 0 {
+		fmt.Fprintf(stderr, "missing prompt: provide the first positional arg or --prompt-file\nIf you meant the literal prompt %q, pass it after -- (for example: agent-mux -- %s) or use --prompt-file/--stdin.\n", command, command)
+		return 1
 	}
 
 	failResult := func(spec *types.DispatchSpec, code, msg, suggestion string) int {
@@ -115,17 +186,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	var spec *types.DispatchSpec
 	if flags.stdin {
-		data, err := io.ReadAll(stdin)
+		spec, err = decodeStdinDispatchSpec(stdin)
 		if err != nil {
-			fmt.Fprintf(stderr, "read stdin: %v\n", err)
+			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		var parsed types.DispatchSpec
-		if err := json.Unmarshal(data, &parsed); err != nil {
-			fmt.Fprintf(stderr, "parse stdin JSON: %v\n", err)
-			return 1
-		}
-		spec = &parsed
 	} else {
 		spec, err = buildDispatchSpecE(flags, positional)
 		if err != nil {
@@ -139,7 +204,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		flagsSet[f.Name] = true
 	})
 	if flags.stdin && stdinDispatchFlagsSet(flagsSet) {
-		fmt.Fprintf(os.Stderr, "Warning: --stdin mode active; CLI dispatch flags are ignored.\n")
+		fmt.Fprintf(stderr, "Warning: --stdin mode active; CLI dispatch flags are ignored.\n")
 	}
 
 	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
@@ -171,16 +236,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if flags.coordinator != "" {
-		coordSpec, companionCfg, err := config.LoadCoordinator(flags.coordinator, spec.Cwd)
+	coordinatorName := flags.coordinator
+	if flags.stdin {
+		coordinatorName = spec.Coordinator
+	}
+	if coordinatorName != "" {
+		coordSpec, companionCfg, err := config.LoadCoordinator(coordinatorName, spec.Cwd)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
 		if companionCfg != nil {
 			config.MergeConfigInto(cfg, companionCfg)
 		}
-		applyPreset(coordSpec.Engine, coordSpec.Model, coordSpec.Effort)
-		if !flagsSet["timeout"] && !flagsSet["t"] && coordSpec.Timeout > 0 {
+		if flags.stdin {
+			if spec.Engine == "" && coordSpec.Engine != "" {
+				spec.Engine = coordSpec.Engine
+			}
+			if spec.Model == "" && coordSpec.Model != "" {
+				spec.Model = coordSpec.Model
+			}
+			if spec.Effort == "" && coordSpec.Effort != "" {
+				spec.Effort = coordSpec.Effort
+			}
+		} else {
+			applyPreset(coordSpec.Engine, coordSpec.Model, coordSpec.Effort)
+		}
+		if ((flags.stdin && spec.TimeoutSec == 0) || (!flags.stdin && !flagsSet["timeout"] && !flagsSet["t"])) && coordSpec.Timeout > 0 {
 			spec.TimeoutSec = coordSpec.Timeout
 		}
 		if spec.SystemPrompt == "" && coordSpec.SystemPrompt != "" {
@@ -189,12 +270,28 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		spec.Skills = append(coordSpec.Skills, spec.Skills...)
 	}
 
-	if flags.role != "" {
-		role, err := config.ResolveRole(cfg, flags.role)
+	roleName := flags.role
+	if flags.stdin {
+		roleName = spec.Role
+	}
+	if roleName != "" {
+		role, err := config.ResolveRole(cfg, roleName)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
-		applyPreset(role.Engine, role.Model, role.Effort)
+		if flags.stdin {
+			if spec.Engine == "" && role.Engine != "" {
+				spec.Engine = role.Engine
+			}
+			if spec.Model == "" && role.Model != "" {
+				spec.Model = role.Model
+			}
+			if spec.Effort == "" && role.Effort != "" {
+				spec.Effort = role.Effort
+			}
+		} else {
+			applyPreset(role.Engine, role.Model, role.Effort)
+		}
 	}
 
 	applyDefaults()
@@ -218,9 +315,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		spec.GraceSec = cfg.Timeout.Grace
 	}
 
-	if spec.Salt == "" {
-		spec.Salt = dispatch.GenerateSalt()
-	}
 	if spec.EngineOpts == nil {
 		spec.EngineOpts = map[string]any{}
 	}
@@ -265,13 +359,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		spec.Prompt = contextFilePromptPreamble + "\n" + spec.Prompt
 	}
 
-	if flags.recover != "" {
-		recoveryCtx, err := recovery.RecoverDispatch(flags.recover)
+	recoverDispatchID := flags.recover
+	if flags.stdin {
+		recoverDispatchID = spec.ContinuesDispatchID
+	}
+	if recoverDispatchID != "" {
+		recoveryCtx, err := recovery.RecoverDispatch(recoverDispatchID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		spec.ContinuesDispatchID = flags.recover
+		spec.ContinuesDispatchID = recoverDispatchID
 		spec.Prompt = recovery.BuildRecoveryPrompt(recoveryCtx, spec.Prompt)
 	}
 
@@ -287,20 +385,50 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	dispatch.EnsureTraceability(spec)
 
-	if flags.pipeline != "" {
-		pipelineCfg, ok := cfg.Pipelines[flags.pipeline]
+	var pipelineCfg pipeline.PipelineConfig
+	if spec.Pipeline != "" {
+		var ok bool
+		pipelineCfg, ok = cfg.Pipelines[spec.Pipeline]
 		if !ok {
 			return failResult(spec, "config_error",
-				fmt.Sprintf("Pipeline %q not found in config.", flags.pipeline),
+				fmt.Sprintf("Pipeline %q not found in config.", spec.Pipeline),
 				fmt.Sprintf("Available pipelines: %v", availablePipelines(cfg)))
 		}
 		if err := pipeline.ValidatePipeline(pipelineCfg); err != nil {
 			return failResult(spec, "config_error",
-				fmt.Sprintf("Pipeline %q validation failed: %v", flags.pipeline, err), "")
+				fmt.Sprintf("Pipeline %q validation failed: %v", spec.Pipeline, err), "")
 		}
+	}
+
+	preview := buildPreviewResult(spec, shouldRequireConfirmation(flags.yes, stdin, stdout, stderr, isTerminal))
+	if command == commandPreview {
+		writeJSON(stdout, preview)
+		return 0
+	}
+	if preview.ConfirmationRequired {
+		confirmed, err := confirmTTYDispatch(stdin, stderr, preview)
+		if err != nil {
+			fmt.Fprintf(stderr, "confirmation: %v\n", err)
+			return 1
+		}
+		if !confirmed {
+			result := buildCancelledResult(spec)
+			if flags.output == "text" {
+				writeTextResult(stdout, result)
+			} else {
+				writeResult(stdout, result)
+			}
+			fmt.Fprintln(stderr, "dispatch cancelled")
+			return exitCodeCancelled
+		}
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if spec.Pipeline != "" {
 		result, err := runPipeline(ctx, pipelineCfg, spec, cfg, stderr, flags.verbose)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
@@ -374,6 +502,234 @@ func writeTextResult(w io.Writer, result *types.DispatchResult) {
 	}
 }
 
+func writeSignalResult(w io.Writer, dispatchID, artifactDir string) {
+	writeJSON(w, map[string]any{
+		"status":       "ok",
+		"dispatch_id":  dispatchID,
+		"artifact_dir": artifactDir,
+		"message":      "Signal delivered to inbox",
+	})
+}
+
+func decodeStdinDispatchSpec(stdin io.Reader) (*types.DispatchSpec, error) {
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, fmt.Errorf("read stdin: %w", err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, errors.New("missing stdin JSON: pipe a DispatchSpec object when using --stdin")
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, fmt.Errorf("parse stdin JSON: %w", err)
+	}
+
+	var spec types.DispatchSpec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		return nil, fmt.Errorf("decode stdin DispatchSpec: %w", err)
+	}
+	if err := materializeStdinDispatchSpec(&spec, fields); err != nil {
+		return nil, err
+	}
+	return &spec, nil
+}
+
+func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]json.RawMessage) error {
+	if spec == nil {
+		return errors.New("missing DispatchSpec")
+	}
+
+	spec.DispatchID = strings.TrimSpace(spec.DispatchID)
+	if spec.DispatchID == "" {
+		spec.DispatchID = ulid.Make().String()
+	}
+
+	if strings.TrimSpace(spec.Prompt) == "" {
+		return errors.New("missing prompt: DispatchSpec.prompt is required in --stdin mode")
+	}
+
+	spec.Cwd = strings.TrimSpace(spec.Cwd)
+	if spec.Cwd == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get working directory: %w", err)
+		}
+		spec.Cwd = cwd
+	}
+
+	spec.ArtifactDir = strings.TrimSpace(spec.ArtifactDir)
+	if spec.ArtifactDir == "" {
+		spec.ArtifactDir = filepath.ToSlash(recovery.DefaultArtifactDir(spec.DispatchID)) + "/"
+	}
+
+	if !jsonFieldSet(fields, "allow_subdispatch") {
+		spec.AllowSubdispatch = true
+	}
+	if !jsonFieldSet(fields, "full_access") {
+		spec.FullAccess = true
+	}
+	if !jsonFieldSet(fields, "pipeline_step") {
+		spec.PipelineStep = -1
+	}
+	if !jsonFieldSet(fields, "grace_sec") {
+		spec.GraceSec = 60
+	}
+	if !jsonFieldSet(fields, "handoff_mode") && spec.HandoffMode == "" {
+		spec.HandoffMode = "summary_and_refs"
+	}
+
+	return nil
+}
+
+func jsonFieldSet(fields map[string]json.RawMessage, name string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	_, ok := fields[name]
+	return ok
+}
+
+func splitCommand(args []string) (cliCommand, []string, bool) {
+	if len(args) == 0 {
+		return commandDispatch, args, false
+	}
+	switch args[0] {
+	case string(commandPreview):
+		return commandPreview, args[1:], true
+	case string(commandDispatch):
+		return commandDispatch, args[1:], true
+	default:
+		return commandDispatch, args, false
+	}
+}
+
+func buildPreviewResult(spec *types.DispatchSpec, confirmationRequired bool) previewResult {
+	return previewResult{
+		SchemaVersion: 1,
+		Kind:          "preview",
+		DispatchSpec:  previewDispatchSpecFrom(spec),
+		Prompt:        previewPromptFrom(spec),
+		Control: previewControl{
+			ControlRecord: recovery.ControlRecordPath(spec.DispatchID),
+			ArtifactDir:   spec.ArtifactDir,
+		},
+		PromptPreamble:       dispatch.PromptPreamble(spec),
+		Warnings:             []string{},
+		ConfirmationRequired: confirmationRequired,
+	}
+}
+
+func previewDispatchSpecFrom(spec *types.DispatchSpec) previewDispatchSpec {
+	if spec == nil {
+		return previewDispatchSpec{}
+	}
+	return previewDispatchSpec{
+		DispatchID:          spec.DispatchID,
+		Salt:                spec.Salt,
+		TraceToken:          spec.TraceToken,
+		Engine:              spec.Engine,
+		Model:               spec.Model,
+		Effort:              spec.Effort,
+		Role:                spec.Role,
+		Coordinator:         spec.Coordinator,
+		Pipeline:            spec.Pipeline,
+		Cwd:                 spec.Cwd,
+		Skills:              append([]string(nil), spec.Skills...),
+		ContextFile:         spec.ContextFile,
+		ArtifactDir:         spec.ArtifactDir,
+		TimeoutSec:          spec.TimeoutSec,
+		GraceSec:            spec.GraceSec,
+		MaxDepth:            spec.MaxDepth,
+		AllowSubdispatch:    spec.AllowSubdispatch,
+		ContinuesDispatchID: spec.ContinuesDispatchID,
+		ResponseMaxChars:    spec.ResponseMaxChars,
+		FullAccess:          spec.FullAccess,
+	}
+}
+
+func previewPromptFrom(spec *types.DispatchSpec) previewPrompt {
+	if spec == nil {
+		return previewPrompt{}
+	}
+	excerpt, truncated := previewExcerpt(spec.Prompt, previewPromptExcerptRunes)
+	return previewPrompt{
+		Excerpt:           excerpt,
+		Chars:             utf8.RuneCountInString(spec.Prompt),
+		Truncated:         truncated,
+		SystemPromptChars: utf8.RuneCountInString(spec.SystemPrompt),
+	}
+}
+
+func previewExcerpt(text string, maxRunes int) (string, bool) {
+	compact := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if compact == "" {
+		return "", false
+	}
+	runes := []rune(compact)
+	if maxRunes <= 0 || len(runes) <= maxRunes {
+		return compact, false
+	}
+	ellipsis := []rune(" ... ")
+	if maxRunes <= len(ellipsis)+2 {
+		return string(runes[:maxRunes]), true
+	}
+	headLen := (maxRunes - len(ellipsis)) * 2 / 3
+	tailLen := maxRunes - len(ellipsis) - headLen
+	if headLen < 1 {
+		headLen = 1
+	}
+	if tailLen < 1 {
+		tailLen = 1
+		headLen = maxRunes - len(ellipsis) - tailLen
+	}
+	head := strings.TrimSpace(string(runes[:headLen]))
+	tail := strings.TrimSpace(string(runes[len(runes)-tailLen:]))
+	return head + string(ellipsis) + tail, true
+}
+
+func buildCancelledResult(spec *types.DispatchSpec) *types.DispatchResult {
+	return dispatch.BuildFailedResult(
+		spec,
+		dispatch.NewDispatchError("cancelled", "Dispatch cancelled at confirmation prompt before launch.", "Re-run with --yes to skip the confirmation prompt."),
+		&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+		&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+		0,
+	)
+}
+
+func shouldRequireConfirmation(skip bool, stdin io.Reader, stdout, stderr io.Writer, isTerminal terminalChecker) bool {
+	if skip || isTerminal == nil {
+		return false
+	}
+	return isTerminal(stdin) && isTerminal(stdout) && isTerminal(stderr)
+}
+
+func confirmTTYDispatch(stdin io.Reader, stderr io.Writer, preview previewResult) (bool, error) {
+	writeJSON(stderr, preview)
+	if _, err := fmt.Fprint(stderr, "Proceed with dispatch? [y/N]: "); err != nil {
+		return false, fmt.Errorf("write confirmation prompt: %w", err)
+	}
+	line, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read confirmation reply: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func isTerminalStream(stream any) bool {
+	fdStream, ok := stream.(interface{ Fd() uintptr })
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(fdStream.Fd()))
+}
+
 func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	flags := &cliFlags{
 		effort:    "",
@@ -412,6 +768,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	fs.BoolVar(&flags.noSubdispatch, "no-subdispatch", false, "Disable recursive dispatch")
 	fs.StringVar(&flags.permissionMode, "permission-mode", "", "Permission mode")
 	fs.BoolVar(&flags.stdin, "stdin", false, "Read DispatchSpec JSON from stdin")
+	fs.BoolVar(&flags.yes, "yes", false, "Skip interactive confirmation for TTY dispatches")
 	fs.IntVar(&flags.responseMaxChars, "response-max-chars", 0, "Maximum response characters")
 	bindBool(fs, &flags.version, "Show version", false, "version", "V")
 	fs.StringVar(&flags.sandbox, "sandbox", flags.sandbox, "Sandbox mode")
@@ -469,7 +826,7 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 
 	artifactDir := flags.artifactDir
 	if artifactDir == "" {
-		artifactDir = filepath.ToSlash(filepath.Join("/tmp/agent-mux", dispatchID)) + "/"
+		artifactDir = filepath.ToSlash(recovery.DefaultArtifactDir(dispatchID)) + "/"
 	}
 
 	fullAccess := flags.full
@@ -501,6 +858,7 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 		Cwd:              cwd,
 		Skills:           append([]string(nil), flags.skills...),
 		Coordinator:      flags.coordinator,
+		Pipeline:         flags.pipeline,
 		ContextFile:      flags.contextFile,
 		ArtifactDir:      artifactDir,
 		TimeoutSec:       flags.timeout,
@@ -648,6 +1006,7 @@ func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseS
 }
 
 func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
+	dispatch.EnsureTraceability(spec)
 	reg := adapter.NewRegistry(configuredModels(cfg))
 
 	adp, err := reg.Get(spec.Engine)
@@ -670,6 +1029,25 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 		return dispatch.BuildFailedResult(
 			spec,
 			dispatch.NewDispatchError("model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText),
+			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+			0,
+		), nil
+	}
+
+	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
+		return dispatch.BuildFailedResult(
+			spec,
+			dispatch.NewDispatchError("artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."),
+			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+			0,
+		), nil
+	}
+	if err := recovery.RegisterDispatchSpec(spec); err != nil {
+		return dispatch.BuildFailedResult(
+			spec,
+			dispatch.NewDispatchError("config_error", fmt.Sprintf("Register control path for dispatch %q: %v", spec.DispatchID, err), "Ensure the control path is writable."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
 			0,

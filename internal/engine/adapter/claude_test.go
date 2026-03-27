@@ -347,7 +347,7 @@ func TestClaudeSupportsResume(t *testing.T) {
 func TestClaudeResumeArgs(t *testing.T) {
 	a := &ClaudeAdapter{}
 
-	args := a.ResumeArgs("abc123-def456", "continue from there")
+	args := a.ResumeArgs(nil, "abc123-def456", "continue from there")
 	want := []string{"--resume", "abc123-def456", "--continue", "continue from there"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %#v, want %#v", args, want)

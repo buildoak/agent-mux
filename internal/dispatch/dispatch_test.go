@@ -32,11 +32,55 @@ func TestEnsureArtifactDir(t *testing.T) {
 	}
 }
 
+func TestDefaultTraceToken(t *testing.T) {
+	const dispatchID = "01JQXYZ"
+	if got := DefaultTraceToken(dispatchID); got != "AGENT_MUX_GO_01JQXYZ" {
+		t.Fatalf("DefaultTraceToken(%q) = %q, want %q", dispatchID, got, "AGENT_MUX_GO_01JQXYZ")
+	}
+}
+
+func TestEnsureTraceabilityDerivesMissingFields(t *testing.T) {
+	spec := &types.DispatchSpec{DispatchID: "01JQXYZ"}
+
+	EnsureTraceability(spec)
+
+	if spec.Salt == "" {
+		t.Fatal("salt should be populated")
+	}
+	if spec.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
+		t.Fatalf("trace_token = %q, want %q", spec.TraceToken, "AGENT_MUX_GO_01JQXYZ")
+	}
+}
+
+func TestPromptPreamble(t *testing.T) {
+	spec := &types.DispatchSpec{
+		DispatchID:  "01JQXYZ",
+		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
+		ArtifactDir: "/tmp/agent-mux/01JQXYZ",
+	}
+
+	lines := PromptPreamble(spec)
+	want := []string{
+		"Trace token: AGENT_MUX_GO_01JQXYZ",
+		"Dispatch ID: 01JQXYZ",
+		"Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.",
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("len(lines) = %d, want %d (%v)", len(lines), len(want), lines)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Fatalf("lines[%d] = %q, want %q", i, lines[i], want[i])
+		}
+	}
+}
+
 func TestWriteAndUpdateDispatchMeta(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID: "01JQXYZ",
 		Salt:       "coral-fox-nine",
+		TraceToken: "AGENT_MUX_GO_01JQXYZ",
 		Engine:     "codex",
 		Model:      "gpt-5.4",
 		Prompt:     "Build the parser",
@@ -63,6 +107,9 @@ func TestWriteAndUpdateDispatchMeta(t *testing.T) {
 	}
 	if meta.Engine != "codex" {
 		t.Errorf("engine = %q, want codex", meta.Engine)
+	}
+	if meta.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
+		t.Errorf("trace_token = %q, want AGENT_MUX_GO_01JQXYZ", meta.TraceToken)
 	}
 	if !strings.HasPrefix(meta.PromptHash, "sha256:") {
 		t.Errorf("prompt_hash should start with sha256:, got %q", meta.PromptHash)
@@ -187,6 +234,7 @@ func TestBuildCompletedResult(t *testing.T) {
 	spec := &types.DispatchSpec{
 		DispatchID:  "01JQXYZ",
 		Salt:        "coral-fox-nine",
+		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
 		ArtifactDir: dir,
 	}
 	activity := &types.DispatchActivity{
@@ -209,6 +257,9 @@ func TestBuildCompletedResult(t *testing.T) {
 	if result.SchemaVersion != 1 {
 		t.Errorf("schema_version = %d, want 1", result.SchemaVersion)
 	}
+	if result.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
+		t.Errorf("trace_token = %q, want AGENT_MUX_GO_01JQXYZ", result.TraceToken)
+	}
 	if result.Response != "Done." {
 		t.Errorf("response = %q, want 'Done.'", result.Response)
 	}
@@ -222,6 +273,7 @@ func TestBuildTimedOutResult(t *testing.T) {
 	spec := &types.DispatchSpec{
 		DispatchID:  "01JQXYZ",
 		Salt:        "coral-fox-nine",
+		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
 		ArtifactDir: dir,
 	}
 	activity := &types.DispatchActivity{
@@ -253,6 +305,7 @@ func TestBuildFailedResult(t *testing.T) {
 	spec := &types.DispatchSpec{
 		DispatchID:  "01JQXYZ",
 		Salt:        "coral-fox-nine",
+		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
 		ArtifactDir: dir,
 	}
 	activity := &types.DispatchActivity{

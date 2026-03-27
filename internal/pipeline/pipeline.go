@@ -158,6 +158,8 @@ func fanOut(ctx context.Context, specs []*types.DispatchSpec, dispatch DispatchF
 func buildWorkerSpec(base *types.DispatchSpec, step PipelineStep, pipelineID string, stepIdx, workerIdx int, artifactDir, prompt string) *types.DispatchSpec {
 	spec := *base
 	spec.DispatchID = ulid.Make().String()
+	spec.Salt = ""
+	spec.TraceToken = ""
 	spec.ArtifactDir = artifactDir
 	spec.PipelineID = pipelineID
 	spec.PipelineStep = stepIdx

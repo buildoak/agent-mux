@@ -148,7 +148,7 @@ func (a *ClaudeAdapter) SupportsResume() bool {
 	return true
 }
 
-func (a *ClaudeAdapter) ResumeArgs(sessionID string, message string) []string {
+func (a *ClaudeAdapter) ResumeArgs(_ *types.DispatchSpec, sessionID string, message string) []string {
 	return []string{"--resume", sessionID, "--continue", message}
 }
 

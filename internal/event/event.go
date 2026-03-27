@@ -19,6 +19,7 @@ type Event struct {
 	Type           string   `json:"type"`
 	DispatchID     string   `json:"dispatch_id,omitempty"`
 	Salt           string   `json:"salt,omitempty"`
+	TraceToken     string   `json:"trace_token,omitempty"`
 	Timestamp      string   `json:"ts"`
 	Engine         string   `json:"engine,omitempty"`
 	Model          string   `json:"model,omitempty"`
@@ -44,14 +45,16 @@ type Emitter struct {
 	mu          sync.Mutex
 	dispatchID  string
 	salt        string
+	traceToken  string
 	eventWriter io.Writer
 	eventLog    *os.File // append-only events.jsonl
 }
 
-func NewEmitter(dispatchID, salt string, eventWriter io.Writer, eventLogPath string) (*Emitter, error) {
+func NewEmitter(dispatchID, salt, traceToken string, eventWriter io.Writer, eventLogPath string) (*Emitter, error) {
 	e := &Emitter{
 		dispatchID:  dispatchID,
 		salt:        salt,
+		traceToken:  traceToken,
 		eventWriter: eventWriter,
 	}
 
@@ -75,6 +78,7 @@ func (e *Emitter) Emit(evt Event) error {
 	evt.SchemaVersion = SchemaVersion
 	evt.DispatchID = e.dispatchID
 	evt.Salt = e.salt
+	evt.TraceToken = e.traceToken
 	evt.Timestamp = time.Now().UTC().Format(time.RFC3339)
 
 	data, err := json.Marshal(evt)

@@ -16,7 +16,7 @@ func TestEmitEvent(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
-	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", io.Discard, logPath)
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", "AGENT_MUX_GO_01JQXYZ", io.Discard, logPath)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -25,6 +25,7 @@ func TestEmitEvent(t *testing.T) {
 	if err := emitter.EmitDispatchStart(&types.DispatchSpec{
 		DispatchID: "01JQXYZ",
 		Salt:       "coral-fox-nine",
+		TraceToken: "AGENT_MUX_GO_01JQXYZ",
 		Engine:     "codex",
 		Model:      "gpt-5.4",
 		Effort:     "high",
@@ -64,6 +65,9 @@ func TestEmitEvent(t *testing.T) {
 	if evt.Salt != "coral-fox-nine" {
 		t.Errorf("salt = %q, want coral-fox-nine", evt.Salt)
 	}
+	if evt.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
+		t.Errorf("trace_token = %q, want AGENT_MUX_GO_01JQXYZ", evt.TraceToken)
+	}
 	if evt.Engine != "codex" {
 		t.Errorf("engine = %q, want codex", evt.Engine)
 	}
@@ -85,13 +89,13 @@ func TestEmitMultipleEvents(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
-	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", io.Discard, logPath)
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", "AGENT_MUX_GO_01JQXYZ", io.Discard, logPath)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
 	defer emitter.Close()
 
-	_ = emitter.EmitDispatchStart(&types.DispatchSpec{DispatchID: "01JQXYZ", Salt: "coral-fox-nine", Engine: "codex", Model: "gpt-5.4"})
+	_ = emitter.EmitDispatchStart(&types.DispatchSpec{DispatchID: "01JQXYZ", Salt: "coral-fox-nine", TraceToken: "AGENT_MUX_GO_01JQXYZ", Engine: "codex", Model: "gpt-5.4"})
 	emitter.EmitToolStart("Read", "src/main.go")
 	emitter.EmitToolEnd("Read", 120)
 	emitter.EmitFileWrite("src/parser.go")
@@ -117,6 +121,9 @@ func TestEmitMultipleEvents(t *testing.T) {
 		if evt.Type != expectedTypes[i] {
 			t.Errorf("line %d: type = %q, want %q", i, evt.Type, expectedTypes[i])
 		}
+		if evt.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
+			t.Errorf("line %d: trace_token = %q, want AGENT_MUX_GO_01JQXYZ", i, evt.TraceToken)
+		}
 	}
 }
 
@@ -124,7 +131,7 @@ func TestHeartbeatTicker(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
-	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", io.Discard, logPath)
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", "AGENT_MUX_GO_01JQXYZ", io.Discard, logPath)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -163,12 +170,12 @@ func TestHeartbeatTicker(t *testing.T) {
 }
 
 func TestEmitterWithoutLog(t *testing.T) {
-	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", io.Discard, "")
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", "AGENT_MUX_GO_01JQXYZ", io.Discard, "")
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
 	defer emitter.Close()
 
 	// Should not panic even without log file
-	_ = emitter.EmitDispatchStart(&types.DispatchSpec{DispatchID: "01JQXYZ", Salt: "coral-fox-nine", Engine: "codex", Model: "gpt-5.4"})
+	_ = emitter.EmitDispatchStart(&types.DispatchSpec{DispatchID: "01JQXYZ", Salt: "coral-fox-nine", TraceToken: "AGENT_MUX_GO_01JQXYZ", Engine: "codex", Model: "gpt-5.4"})
 }

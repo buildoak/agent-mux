@@ -175,8 +175,8 @@ Same binary. Same harness. But LoopEngine reads the LIVE EVENT STREAM and can in
 | Harness | Binary | Event Stream Flag | Event Format | Resume Support |
 |---------|--------|-------------------|--------------|----------------|
 | Claude Code | `claude` | `--output-format stream-json` | JSON lines on stdout (tool_use, text, result, etc.) | `--resume` + `--continue` with session ID |
-| Codex CLI | `codex` | `--json` | NDJSON (thread.started, item.started, item.completed, turn.completed, etc.) | Session-based continuation |
-| Gemini CLI | `gemini` | `-o stream-json` / `--output-format stream-json` | NDJSON, 6 types: init, message, tool_use, tool_result, error, result | `--resume <latest\|index\|uuid>`, sessions at `~/.gemini/tmp/<project_hash>/chats/` |
+| Codex CLI | `codex` | `--json` | NDJSON (thread.started, item.started, item.completed, turn.completed, etc.) | `codex exec resume --id <thread_id> --json ...` after `thread.started` |
+| Gemini CLI | `gemini` | `-o stream-json` / `--output-format stream-json` | NDJSON, 6 types: init, message, tool_use, tool_result, error, result | `gemini --resume <session_id> -p ...` after `init` emits `session_id` |
 
 **Gemini CLI details:**
 - Batch mode: `-p <prompt>` or piped stdin
@@ -187,9 +187,9 @@ Same binary. Same harness. But LoopEngine reads the LIVE EVENT STREAM and can in
 - Tool events: tool_use + tool_result with tool_id correlation
 - Stats: result event carries total_tokens, input_tokens, output_tokens, duration_ms, tool_calls
 - Exit codes: 0=success, 41=auth, 42=input, 52=config, 130=cancel
-- InboxMode: InboxDeterministic (supports resume via --resume)
+- Resume path: agent-mux uses `gemini --resume <session_id> -p <message>` once the run has emitted an `init` event with `session_id`
 
-**For injection:** LoopEngine uses harness-native mechanisms. When an inbox message arrives at an event boundary, the engine gracefully stops the current harness process and resumes via the harness's own resume protocol (e.g., `claude --resume <session> --continue "Coordinator: <message>"`). This keeps injection deterministic without reimplementing the harness's conversation loop.
+**For injection:** LoopEngine uses harness-native mechanisms. When an inbox message arrives at an event boundary and the harness has already emitted a resumable session/thread ID, the engine gracefully stops the current process and resumes via the harness's own native continuation protocol (for example, `claude --resume <session> --continue "Coordinator: <message>"`). A successful `--signal` only confirms the inbox write; actual injection happens later at an event boundary.
 
 **Contrast with v1 SubprocessEngine:** v1 spawned the harness binary, waited for it to finish, then parsed the final output. Fully opaque — no visibility into what the harness was doing, no way to interact mid-flight, no liveness detection beyond process death. LoopEngine replaces this with a transparent, interactive communication layer.
 
@@ -198,19 +198,19 @@ Same binary. Same harness. But LoopEngine reads the LIVE EVENT STREAM and can in
 ```go
 type InboxMode int
 const (
-    InboxDeterministic InboxMode = iota  // harness supports resume — injected at event boundaries
-    InboxNone                             // engine does not support inbox
+    InboxResumeCapable InboxMode = iota  // adapter can resume once a session/thread ID has been observed
+    InboxNone                             // engine does not support inbox resume
 )
 
 type Engine interface {
     Name() string
     ValidModels() []string
     Dispatch(ctx context.Context, spec *DispatchSpec) (*DispatchResult, error)
-    InboxMode() InboxMode  // deterministic or none
+    InboxMode() InboxMode  // resume-capable or none
 }
 ```
 
-Callers use the same interface regardless of which harness runs underneath. `InboxMode()` tells the coordinator whether `--signal` delivery is deterministic (harness supports resume) or unsupported. All three v2 harnesses (Claude Code, Codex, Gemini CLI) are `InboxDeterministic`.
+Callers use the same interface regardless of which harness runs underneath. `InboxMode()` tells the coordinator whether `--signal` can use a harness-native resume path or is unsupported. Claude Code, Codex, and Gemini all sit in the resume-capable tier today, but `resume_session_missing` is still possible if no session/thread ID has been emitted yet.
 
 ---
 
@@ -246,7 +246,7 @@ allow_subdispatch = true             # Whether workers can invoke agent-mux
 # Known valid slugs per engine. Used for fuzzy matching on model_not_found.
 codex = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2-codex"]
 claude = ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
-gemini = ["gemini-3.1-pro", "gemini-3.1-flash"]
+gemini = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview"]
 
 # ─── Roles ───────────────────────────────────────
 # Named roles map to engine/model/effort defaults.
@@ -269,12 +269,12 @@ effort = "high"
 
 [roles.auditor]
 engine = "gemini"
-model = "gemini-3.1-pro"
+model = "gemini-2.5-pro"
 effort = "medium"
 
 [roles.scout]
 engine = "gemini"
-model = "gemini-3.1-flash"
+model = "gemini-2.5-flash"
 effort = "low"
 
 [roles.grunt]
@@ -379,52 +379,41 @@ grace = 60          # additional seconds after soft timeout signal
 
 ### 4.3 Coordinator Specs
 
-Coordinator specs remain markdown files with YAML frontmatter at `<cwd>/.claude/agents/<name>.md`. Enhanced frontmatter:
+Coordinator specs remain markdown files with YAML frontmatter at `<cwd>/.claude/agents/<name>.md`. In the current implementation that frontmatter is scalar-only:
 
 ```yaml
 ---
 skills: [satellite-data, pratchett-read]
+engine: claude
 model: claude-opus-4-6
-roles:                          # project-level role overrides
-  heavy_lifter:
-    model: gpt-5.4
-    effort: xhigh
-pipelines:                      # project-level pipeline overrides
-  research-synthesize:
-    steps:
-      - role: explorer
-        pass_output_as: findings
-      - role: architect
-        receives: findings
+effort: high
+timeout: 900
 ---
 
 System prompt body here...
 ```
 
-Coordinator frontmatter merges with (and overrides) global config. CLI flags override everything.
-
-**Config format separation:** `.toml` holds full definitions (role details, pipeline steps, timeouts, model lists). `.md` holds persona/system prompt text. Frontmatter in `.md` files serves as **light metadata pointers**: skill names, model name, role references, pipeline names. Frontmatter may define lightweight pipeline steps and role overrides — this is useful for project-specific agent customization without touching `.toml`. Full role definitions (with engine/model/effort) belong in `.toml` config. Frontmatter pipelines reference roles by name; the role definitions must exist in `.toml`.
+Frontmatter contributes only `skills`, `engine`, `model`, `effort`, and `timeout`. Optional companion `<name>.toml` is merged into config when the coordinator loads; that companion TOML is where role definitions, pipeline definitions, model lists, and other config blocks live.
 
 ### 4.4 Override Precedence
 
-One definitive merge chain (highest wins first):
+Normal CLI dispatches resolve scalar defaults with this merge chain (highest wins first):
 
 ```
 Explicit CLI flags (--engine, --model, --effort, etc.)
-  > --config file contents (if provided)
-  > Role config (resolved from --role name)
-  > Coordinator frontmatter (.md)
-  > Companion agent .toml
-  > Project .agent-mux.toml
-  > Global config.toml
+  > Role config (resolved from merged TOML config, including optional companion <coordinator>.toml)
+  > Coordinator frontmatter scalar defaults (.md)
+  > Merged config defaults (.toml chain: --config or global+project, then companion merge)
   > Hardcoded defaults
 ```
 
-**Role ↔ CLI flag interaction:** `--role` selects which defaults to load — it is a CLI flag that picks a config preset, not an override of engine/model/effort. The selected role's engine, model, and effort values enter the chain at the "Role config" tier. Explicit CLI flags for those fields (`--engine`, `--model`, `--effort`) sit above role config and override the role's values. So `--role heavy_lifter --model gpt-5.4-mini` means: use heavy_lifter's engine and effort, but override model with `gpt-5.4-mini`.
+`timeout` is separate:
 
-`--config <path>` always overrides at the CLI tier (highest precedence). The specified file's contents are loaded and its values take precedence over all other config sources except explicit CLI flags. This is equivalent to treating the file as if every value in it were passed as a CLI flag.
+```
+CLI --timeout > coordinator frontmatter timeout > timeout table from merged config for the chosen effort
+```
 
-Companion `.toml` sits above project config because it's the agent author's intent for that specific agent. Role definitions are looked up through the config chain: companion .toml → project .toml → global .toml (first found wins).
+`--config <path>` changes which base TOML config is loaded; it does not outrank coordinator frontmatter or role resolution. Role definitions and pipelines always come from merged TOML config, not from markdown frontmatter.
 
 Project always beats global. CLI always beats everything.
 
@@ -434,12 +423,31 @@ Project always beats global. CLI always beats everything.
 
 ### 5.1 Input (CLI)
 
+**Preferred machine interface:**
+
+```
+agent-mux preview --stdin
+agent-mux dispatch --stdin
+```
+
+`preview` is a non-executing preflight step. It resolves config, coordinator,
+role, pipeline, defaults, artifact paths, prompt preamble, and traceability
+fields into one JSON object without launching a harness process. Programmatic
+callers (bots, coordinators, wrappers) should prefer `preview` + `dispatch`
+with stdin JSON over positional prompt strings.
+
+**Compatibility interface (still supported):**
+
 ```
 agent-mux [flags] "prompt text"
 agent-mux [flags] --prompt-file path/to/prompt.md
 agent-mux [flags] --recover <dispatch_id>
 agent-mux [flags] --pipeline <name> "prompt text"
 ```
+
+`preview` and `dispatch` are reserved first-position subcommands. If the literal
+one-token prompt is exactly `"preview"` or `"dispatch"`, pass it after `--`
+(`agent-mux -- preview`) or use `--prompt-file` / `--stdin`.
 
 **Common flags:**
 
@@ -460,6 +468,7 @@ agent-mux [flags] --pipeline <name> "prompt text"
 | `--context-file` | — | string | — | Path to context file for $AGENT_MUX_CONTEXT injection |
 | `--artifact-dir` | — | string | `/tmp/agent-mux/<dispatch_id>/` | Where workers write artifacts |
 | `--salt` | — | string | auto-generated | Human-greppable dispatch salt |
+| `--yes` | — | bool | `false` | Skip interactive confirmation after preview when stdout/stderr are TTYs |
 | `--config` | — | string | XDG default | Config file override |
 | `--output` | `-o` | string | `"json"` | `json` (structured) or `text` (human-readable) |
 | `--full` | `-f` | bool | `true` | Full access mode. On by default. Use `--no-full` to restrict. README documents the security posture. |
@@ -472,6 +481,20 @@ agent-mux [flags] --pipeline <name> "prompt text"
 | `--stdin` | — | bool | `false` | Read full DispatchSpec as JSON from stdin. Recommended for programmatic callers. |
 | `--response-max-chars` | — | int | `0` | Maximum characters in response before truncation (0 = no limit, default from config) |
 | `--verbose` | `-v` | bool | `false` | Verbose event stream on stderr |
+
+**Interactive preflight behavior:**
+
+- `preview` never launches a harness. It prints the fully resolved plan as JSON
+  and exits.
+- `dispatch` is machine-safe: non-interactive callers can invoke it directly.
+- When `dispatch` is launched from a TTY and `--yes` is not set, agent-mux
+  should first show the same resolved preview summary a human operator would
+  want to inspect, then require confirmation before the harness starts.
+- If that confirmation is declined, no harness is launched. Agent-mux returns a
+  structured failed result with `error.code = "cancelled"` and exits with code
+  `130`.
+- TTY confirmation is a UX layer, not a protocol requirement. Bots and other
+  non-interactive callers should use `preview` explicitly and then `dispatch`.
 
 **Engine-specific flags** (passed through to harness binary):
 
@@ -495,7 +518,7 @@ Three input modes, in order of preference for programmatic callers:
 
 3. **CLI argument**: Simple one-liners only. Escaping fragile at 2+ nesting levels.
 
-For context sharing, the coordinator writes a context excerpt to `<artifact_dir>/context.md`. Agent-mux injects `$AGENT_MUX_CONTEXT` into the worker's environment and prompt: "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting."
+If the caller passes `--context-file <path>`, agent-mux validates that file, sets `AGENT_MUX_CONTEXT=<path>`, and prepends a one-line prompt instruction: "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting." `context.md` is only a caller-side convention; agent-mux does not auto-write it from `artifact_dir`.
 
 ### 5.2.1 DispatchSpec
 
@@ -508,6 +531,7 @@ type DispatchSpec struct {
     // ── Identity ──────────────────────────────────────────
     DispatchID string `json:"dispatch_id"`          // ULID, assigned at construction
     Salt       string `json:"salt,omitempty"`        // Human-greppable three-word phrase
+    TraceToken string `json:"trace_token,omitempty"` // Deterministic grep token; default "AGENT_MUX_GO_<dispatch_id>"
 
     // ── Core dispatch parameters ──────────────────────────
     Engine       string `json:"engine"`              // "codex", "claude", "gemini" (required)
@@ -520,7 +544,7 @@ type DispatchSpec struct {
     // ── Context & skills ──────────────────────────────────
     Skills      []string `json:"skills,omitempty"`       // Resolved skill names (content already in prompt)
     Coordinator string   `json:"coordinator,omitempty"`  // Coordinator spec name (metadata)
-    ContextFile string   `json:"context_file,omitempty"` // Path to context.md for $AGENT_MUX_CONTEXT
+    ContextFile string   `json:"context_file,omitempty"` // Path to caller-managed context file for $AGENT_MUX_CONTEXT
     ArtifactDir string   `json:"artifact_dir"`           // Default: /tmp/agent-mux/<dispatch_id>/
 
     // ── Timeout ───────────────────────────────────────────
@@ -562,6 +586,7 @@ type DispatchSpec struct {
 
 | Field | Default |
 |-------|---------|
+| TraceToken | `AGENT_MUX_GO_<dispatch_id>` |
 | Effort | "high" |
 | Cwd | $PWD |
 | ArtifactDir | /tmp/agent-mux/<dispatch_id>/ |
@@ -573,6 +598,11 @@ type DispatchSpec struct {
 | HandoffMode | "summary_and_refs" |
 
 DispatchSpec is always fully resolved before dispatch. The CLI layer resolves all transport concerns (--prompt-file, --stdin JSON, inline args) into the Prompt field. Engine.Dispatch() receives a ready-to-use struct.
+
+The caller may omit `trace_token`. Agent-mux derives it deterministically from
+`dispatch_id` before preview or dispatch execution. `salt` remains a human
+alias; `trace_token` is the machine-greppable token that must survive into
+child session logs.
 
 **Artifact directory lifecycle:** agent-mux creates `<artifact_dir>` at dispatch start with mode 0755. Parent directories are created as needed (equivalent to `mkdir -p`). If the directory already exists, it is reused (no error). Symlinks are followed but not created. agent-mux does not perform cleanup — artifact directories persist until the caller or user removes them.
 
@@ -597,6 +627,60 @@ Every stdout result and every stderr event includes `schema_version`. Consumers 
 - Callers should warn on unknown version, never hard-fail. Ignore unknown fields (standard JSON forward-compatibility)
 
 **Response truncation:** Agent-mux returns a compact result by default to prevent caller context bloat. The `response` field is capped at `response_max_chars` (default: 2000). If the full response exceeds the cap, it is written to `<artifact_dir>/full_output.md` and the `response` field contains the truncated version. Fields: `response_truncated` (bool) indicates truncation occurred; `full_output` (string, file path) points to the untruncated response. Set `response_max_chars: 0` in config for unlimited.
+
+### 5.3.0 Preview Output
+
+`preview` returns JSON, not text. Its purpose is to show the exact resolved
+dispatch plan before any harness starts, without dumping the full resolved
+prompt body or noisy derived engine state.
+
+```json
+{
+  "schema_version": 1,
+  "kind": "preview",
+  "dispatch_spec": {
+    "dispatch_id": "01JQXYZ...",
+    "salt": "coral-fox-nine",
+    "trace_token": "AGENT_MUX_GO_01JQXYZ...",
+    "engine": "codex",
+    "model": "gpt-5.4-mini",
+    "effort": "high",
+    "role": "heavy_lifter",
+    "cwd": "/repo",
+    "artifact_dir": "/tmp/agent-mux/01JQXYZ/",
+    "timeout_sec": 600,
+    "grace_sec": 60,
+    "max_depth": 2,
+    "allow_subdispatch": true,
+    "full_access": true
+  },
+  "prompt": {
+    "excerpt": "Implement the parser upgrade ... keep tests green.",
+    "chars": 1840,
+    "truncated": true,
+    "system_prompt_chars": 420
+  },
+  "control": {
+    "control_record": "/tmp/agent-mux/control/01JQXYZ.json",
+    "artifact_dir": "/tmp/agent-mux/01JQXYZ/"
+  },
+  "prompt_preamble": [
+    "Trace token: AGENT_MUX_GO_01JQXYZ...",
+    "Dispatch ID: 01JQXYZ...",
+    "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR."
+  ],
+  "warnings": [],
+  "confirmation_required": true
+}
+```
+
+`confirmation_required` is a UI hint for interactive callers. Non-interactive
+callers can ignore it.
+
+`dispatch_spec` is intentionally compact. It includes the resolved execution
+plan and identity fields, but not the full `prompt`, `system_prompt`, or
+derived `engine_opts` map. Prompt content is summarized separately under
+`prompt`.
 
 #### Completed:
 ```json
@@ -779,12 +863,13 @@ Every error code is designed as a steering signal for the calling LLM.
 | `invalid_args` | Bad CLI args | Specific: "Unknown flag --foo. Did you mean --full?" |
 | `config_error` | Bad TOML / missing role | "Role 'X' not found in config. Available: [...]" |
 | `process_killed` | Engine process died unexpectedly | "Exit code N. stderr: [last 5 lines]. Check engine logs." |
-| `recovery_failed` | --recover couldn't find artifacts | "No artifacts at path. Previous dispatch may not have written." |
+| `recovery_failed` | --recover couldn't find artifacts | "No artifacts found via control record or legacy root. Check the dispatch ID and artifact directory." |
 | `output_parse_error` | Harness event stream contained malformed data that could not be parsed into a DispatchResult. May indicate a harness crash mid-stream, corrupted output, or incompatible harness version. | "Check engine version. Raw output preserved at artifact path." |
 | `skill_not_found` | Skill directory not found | "Available skills: [...]. Check --skill name and --cwd." |
 | `coordinator_not_found` | Coordinator file not found | "Searched: project agents/, bundled agents/. Check --coordinator name." |
 | `prompt_file_missing` | --prompt-file path doesn't exist | "File not found: [path]." |
 | `artifact_dir_unwritable` | Can't write to artifact directory | "Check permissions on [path]." |
+| `cancelled` | Operator declined TTY confirmation before launch | "Re-run with --yes to skip confirmation, or answer y to proceed." |
 | `interrupted` | SIGINT/SIGTERM received | "Dispatch interrupted. Partial artifacts at [path]." |
 
 ---
@@ -796,15 +881,15 @@ Every error code is designed as a steering signal for the calling LLM.
 ```go
 type InboxMode int
 const (
-    InboxDeterministic InboxMode = iota  // harness supports resume — injected at event boundaries
-    InboxNone                             // engine does not support inbox
+    InboxResumeCapable InboxMode = iota  // adapter can resume once a session/thread ID has been observed
+    InboxNone                             // engine does not support inbox resume
 )
 
 type Engine interface {
     Name() string
     ValidModels() []string
     Dispatch(ctx context.Context, spec *DispatchSpec) (*DispatchResult, error)
-    InboxMode() InboxMode  // deterministic or none
+    InboxMode() InboxMode  // resume-capable or none
 }
 
 // HarnessAdapter interface — one implementation per harness (internal/engine/adapter/)
@@ -893,7 +978,7 @@ The LoopEngine does NOT call LLM APIs, execute tools, or manage conversation con
       a. Graceful stop current harness process
       b. Resume via adapter.ResumeArgs(sessionID, message) with inbox content
       c. Emit "coordinator_inject" event
-    - All v2 harnesses support deterministic resume. No best-effort fallback.
+    - A successful `--signal` only guarantees the inbox append. Delivery still requires a resumable session/thread ID and the next event boundary.
 7.  Soft timeout → emit timeout_warning event; hard timeout → SIGTERM + collect artifacts
 8.  On harness completion: read final output from event stream
 9.  Normalize via HarnessAdapter → DispatchResult
@@ -918,8 +1003,13 @@ Same mechanism as v1, carried to Go:
 - The **caller** provides the context file path explicitly via `DispatchSpec.ContextFile` (CLI: `--context-file <path>`). If the caller omits the path, no context file is injected. Agent-mux does not auto-generate a context path from `artifact_dir` -- the caller must know the path before constructing the DispatchSpec.
 - The **caller** writes the context file (not agent-mux). Agent-mux never generates context from scratch.
 - Agent-mux validates the file exists, sets `AGENT_MUX_CONTEXT=<path>` in subprocess env, and prepends a one-line instruction to the prompt: "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting."
+- Agent-mux also exports `AGENT_MUX_DISPATCH_ID`, `AGENT_MUX_TRACE_TOKEN`,
+  `AGENT_MUX_SALT`, and `AGENT_MUX_ARTIFACT_DIR` to the harness subprocess.
+- The prompt preamble must include `trace_token` and `dispatch_id` in the first
+  injected lines so the child engine session log contains a deterministic grep
+  marker even if the worker never mentions it explicitly later.
 - **Pull model:** the worker reads the file when the model chooses to. Agent-mux does not force-inject file contents into the prompt.
-- **Pipeline exception:** For pipeline steps with `receives`, agent-mux writes the handoff context to `<artifact_dir>/context.md` and sets `ContextFile` automatically. This is the one case where agent-mux writes a context file.
+- Pipelines do not auto-write `context.md` for `receives`. Step handoff is rendered into worker prompts, and any existing `ContextFile` on the base dispatch is inherited unchanged by worker specs.
 - Context file format is a convention (Markdown recommended), not enforced by agent-mux.
 
 ### 6.4 Recursive Dispatch Controls
@@ -980,11 +1070,7 @@ T=0                    T=soft_limit          T=soft+grace
  │                          │  worker can finish    │  artifacts
 ```
 
-1. **Soft limit** (effort-derived from config): Emit `timeout_warning` event on stderr. The harness process is NOT killed. Soft timeout behavior depends on harness resume support:
-
-   - **Resume-capable harness (Claude Code, Codex):** Active steering via inbox injection. Agent-mux writes a "wrap up" message to the inbox and triggers resume: "Soft timeout reached. Wrap up your current work, write final artifacts, and return a summary." This uses the same resume mechanism as coordinator inbox delivery (§7.3). Deterministic — it always fires.
-
-   - **Gemini CLI:** Same deterministic steering as Claude/Codex. Agent-mux writes the "wrap up" message to the inbox and triggers resume via `gemini --resume <session>`. Sessions stored at `~/.gemini/tmp/<project_hash>/chats/`.
+1. **Soft limit** (effort-derived from config): Emit `timeout_warning` event on stderr. The harness process is NOT killed. For resume-capable adapters (Claude Code, Codex, Gemini), agent-mux also writes a "wrap up" message to the inbox and attempts the same harness-native continuation path used for coordinator signals. This still depends on the run having emitted a resumable session/thread ID; otherwise the dispatch can fail with `resume_session_missing`.
 
 2. **Grace period** (configurable, default 60s): Engine keeps running. Agent-mux watches for completion. If the engine finishes within grace, result is `status: "completed"` (not timed_out).
 
@@ -1025,17 +1111,13 @@ Agent-mux creates `<artifact_dir>/inbox.md` at dispatch start. The coordinator L
 
     agent-mux --signal <dispatch_id> "focus on the auth module, skip the tests"
 
-This appends to the inbox file. The `--signal` CLI interface is the same regardless of harness.
+This resolves `<dispatch_id>` through the control record at `/tmp/agent-mux/control/<dispatch_id>.json` first, then the legacy default artifact path, and appends the message to `inbox.md`. On success the CLI returns a small JSON acknowledgement with the resolved artifact directory. The `--signal` CLI interface is the same regardless of harness.
 
 **Inbox file concurrency:** Inbox delivery uses POSIX `O_APPEND` writes. Each `--signal` call opens `inbox.md` with `O_WRONLY|O_APPEND|O_CREAT`, writes the message as a single write(2) call (<= PIPE_BUF = 4096 bytes on most systems, guaranteeing atomicity), and closes the file. Multiple concurrent `--signal` calls are safe -- messages may interleave in order but none are lost. The receiver (LoopEngine inbox check) acquires an advisory `flock(LOCK_EX)` on the file, reads all content, truncates to zero, and releases the lock. This ensures each message is read exactly once.
 
-**Delivery depends on harness resume support:**
+**Delivery depends on harness resume support and session discovery:** At event boundaries, the LoopEngine checks the inbox. If a message is present and the harness has already emitted a resumable session/thread ID, the engine gracefully stops the current harness process and resumes via `HarnessAdapter.ResumeArgs(sessionID, message)`. If the message arrives before that ID exists, the run fails with `resume_session_missing`.
 
-**Harnesses with resume (Claude Code, Codex) — deterministic delivery.** At event boundaries, the LoopEngine checks the inbox. If a message is present: gracefully stop the current harness process, then resume via `HarnessAdapter.ResumeArgs(sessionID, message)`. The harness resumes its session with the injected coordinator message as new input. Delivery is structural — the harness's own resume protocol guarantees the message reaches the conversation.
-
-All three harnesses (Claude Code, Codex, Gemini CLI) support deterministic resume. There is no best-effort delivery tier in v2.
-
-**TG bot integration path:** The inbox file is the universal interface. A TG bot writes to it via `--signal`. For resume-capable harnesses, the message reaches the worker deterministically at the next event boundary. This makes agent-mux the protocol layer between any external system and a running worker — no custom bot-to-worker wiring needed.
+**TG bot integration path:** The inbox file is the universal interface. A TG bot writes to it via `--signal`. The JSON ack means the inbox write succeeded; the actual resumed turn happens later at an event boundary. This makes agent-mux the protocol layer between any external system and a running worker without custom bot-to-worker wiring.
 
 ---
 
@@ -1047,6 +1129,17 @@ Every dispatch writes work incrementally to `--artifact-dir` (default: `/tmp/age
 
 Agent-mux injects `AGENT_MUX_ARTIFACT_DIR` as an environment variable into the harness subprocess and mentions the artifact path in the prompt preamble: "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR."
 
+The same preamble also carries the deterministic trace marker:
+
+```
+Trace token: AGENT_MUX_GO_<dispatch_id>
+Dispatch ID: <dispatch_id>
+Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.
+```
+
+This is intentionally redundant. The trace token must be grep-visible inside
+the child engine session log, not only in agent-mux's own artifacts.
+
 ### 8.2 Recovery Flow
 
 ```
@@ -1054,6 +1147,8 @@ agent-mux --recover 01JQXYZ "continue building the parser"
 ```
 
 1. Read artifact directory for `01JQXYZ`
+   - First resolve `/tmp/agent-mux/control/01JQXYZ.json` to find the registered artifact dir.
+   - If no control record exists, fall back to the legacy default `/tmp/agent-mux/01JQXYZ/`.
 2. List files, read any `_dispatch_meta.json` (written at dispatch start)
 3. Build continuation prompt: "Previous worker (dispatch 01JQXYZ) completed the following before timeout: [file list + summary]. Continue from here: [user prompt]"
 4. Dispatch to same or different engine (caller decides via flags)
@@ -1067,6 +1162,7 @@ Written by agent-mux at dispatch start to `<artifact_dir>/_dispatch_meta.json`:
 {
   "dispatch_id": "01JQXYZ...",
   "dispatch_salt": "coral-fox-nine",
+  "trace_token": "AGENT_MUX_GO_01JQXYZ...",
   "started_at": "2026-03-25T10:00:00Z",
   "engine": "codex",
   "model": "gpt-5.4",
@@ -1078,6 +1174,8 @@ Written by agent-mux at dispatch start to `<artifact_dir>/_dispatch_meta.json`:
 ```
 
 Updated on completion/timeout/failure with `ended_at`, `status`, `artifacts[]`.
+
+At dispatch start agent-mux also writes a control record at `/tmp/agent-mux/control/<dispatch_id>.json` pointing to the resolved artifact directory and carrying the same trace token. `--recover` and `--signal` consult that record first, so custom `--artifact-dir` runs remain discoverable unless the control record is removed.
 
 ---
 
@@ -1148,8 +1246,9 @@ Agent-mux events are generated by parsing the harness event stream via `HarnessA
 Every dispatch gets two IDs:
 - **`dispatch_id`** (ULID): machine-joinable, sortable by time, globally unique
 - **`dispatch_salt`** (three-word human phrase): greppable in logs, artifacts, conversation. Format: `adjective-noun-digit` (e.g., `coral-fox-nine`). Auto-generated or `--salt` override.
+- **`trace_token`** (deterministic string): defaults to `AGENT_MUX_GO_<dispatch_id>`. This is the canonical grep token for child engine logs.
 
-Both IDs appear on `dispatch_start` and `dispatch_end` events, in `_dispatch_meta.json`, and in the final stdout JSON result. Other stderr events inherit identity from their containing dispatch — callers correlate by stream (stderr of the dispatch process). The IDs are also injected into the prompt so the worker can reference its own dispatch.
+All three identifiers appear on `dispatch_start` and `dispatch_end` events, in `_dispatch_meta.json`, in the control record, and in the final stdout JSON result. Other stderr events inherit identity from their containing dispatch — callers correlate by stream (stderr of the dispatch process). `trace_token` and `dispatch_id` are also injected into the prompt preamble and subprocess env so the worker's own engine session log contains a deterministic join key.
 
 ### 10.2 Lineage
 
@@ -1160,7 +1259,7 @@ Both IDs appear on `dispatch_start` and `dispatch_end` events, in `_dispatch_met
 
 ### 10.3 Event Log
 
-Append-only file at `<artifact_dir>/events.jsonl`. Every stderr event also written here. Survives process death (flushed per-line). Post-mortem debugging reads this file.
+Append-only file at `<artifact_dir>/events.jsonl`. Every stderr event also written here. Survives process death (flushed per-line). Each event carries `dispatch_id`, `dispatch_salt`, and `trace_token`. Post-mortem debugging reads this file.
 
 ---
 
@@ -1517,16 +1616,14 @@ agents/
 
 ### 13.2 Template Anatomy
 
-Each agent template is a pair. `.toml` holds full definitions (role details, pipeline steps, timeouts, model lists). `.md` holds persona/system prompt text. Frontmatter in `.md` serves as **light metadata pointers** — skill names, model name, role references — that reference things fully defined in the companion `.toml`. Frontmatter may define lightweight pipeline steps and role overrides (e.g., `effort: medium`). Full role definitions (with engine/model/effort) belong in `.toml`; frontmatter pipelines reference roles by name.
+Each agent template is a pair. `.toml` holds full definitions (role details, pipeline steps, timeouts, model lists). `.md` holds persona/system prompt text plus scalar dispatch defaults in frontmatter (`skills`, `engine`, `model`, `effort`, `timeout`). Roles and pipelines live in the companion `.toml`, which is merged into config when the coordinator loads.
 
 **`agents/explorer.md`** — persona/prompt (loaded by `--coordinator`):
 ```markdown
 ---
 skills: [web-search, pratchett-read]
 model: gpt-5.4-mini
-roles:
-  explorer:
-    effort: medium
+effort: medium
 ---
 
 You are a research agent. Your job is to find information, not to build things.
@@ -2256,7 +2353,7 @@ Init:
 {
   "type": "init",
   "session_id": "gem-session-789xyz",
-  "model": "gemini-3.1-pro",
+  "model": "gemini-2.5-pro",
   "tools": ["shell", "read_file", "write_file", "glob", "grep"],
   "cwd": "/path/to/project"
 }

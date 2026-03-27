@@ -19,6 +19,7 @@ import (
 type resumeCall struct {
 	sessionID string
 	message   string
+	model     string
 }
 
 type scriptedAdapter struct {
@@ -27,6 +28,7 @@ type scriptedAdapter struct {
 	resumeBinary    string
 	supportsResume  bool
 	initialScript   string
+	initialPrompt   string
 	resumeScript    func(sessionID, message string) string
 	resumeCalls     []resumeCall
 	failResumeStart bool
@@ -53,6 +55,11 @@ func (a *scriptedAdapter) Binary() string {
 }
 
 func (a *scriptedAdapter) BuildArgs(spec *types.DispatchSpec) []string {
+	a.mu.Lock()
+	if spec != nil {
+		a.initialPrompt = spec.Prompt
+	}
+	a.mu.Unlock()
 	return []string{"-c", a.initialScript}
 }
 
@@ -64,10 +71,14 @@ func (a *scriptedAdapter) SupportsResume() bool {
 	return a.supportsResume
 }
 
-func (a *scriptedAdapter) ResumeArgs(sessionID, message string) []string {
+func (a *scriptedAdapter) ResumeArgs(spec *types.DispatchSpec, sessionID, message string) []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.resumeCalls = append(a.resumeCalls, resumeCall{sessionID: sessionID, message: message})
+	model := ""
+	if spec != nil {
+		model = spec.Model
+	}
+	a.resumeCalls = append(a.resumeCalls, resumeCall{sessionID: sessionID, message: message, model: model})
 	if a.failResumeStart {
 		a.resumeBinary = "nonexistent-binary-for-resume"
 	}
@@ -80,6 +91,12 @@ func (a *scriptedAdapter) Calls() []resumeCall {
 	out := make([]resumeCall, len(a.resumeCalls))
 	copy(out, a.resumeCalls)
 	return out
+}
+
+func (a *scriptedAdapter) InitialPrompt() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.initialPrompt
 }
 
 func (a *scriptedAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {
@@ -167,6 +184,9 @@ func TestLoopEngineInboxResumeHappyPath(t *testing.T) {
 	}
 	if calls[0].sessionID != "session-1" || calls[0].message != "inject now" {
 		t.Fatalf("resume call = %+v, want session-1/inject now", calls[0])
+	}
+	if calls[0].model != "gpt-5.4" {
+		t.Fatalf("resume model = %q, want gpt-5.4", calls[0].model)
 	}
 	eventsPath := filepath.Join(artifactDir, "events.jsonl")
 	eventsData, err := os.ReadFile(eventsPath)
@@ -281,6 +301,98 @@ func TestLoopEngineNaturalExitWhileRestartPendingStillResumes(t *testing.T) {
 	}
 	if calls[0].sessionID != "session-natural-exit" || calls[0].message != "restart after exit" {
 		t.Fatalf("resume call = %+v, want session-natural-exit/restart after exit", calls[0])
+	}
+}
+
+func TestLoopEngineResumePassesOriginalModel(t *testing.T) {
+	artifactDir := t.TempDir()
+	readyPath := filepath.Join(artifactDir, "ready")
+	adapter := newScriptedAdapter(strings.Join([]string{
+		fmt.Sprintf("touch %q", readyPath),
+		"echo 'SESSION:session-model'",
+		"trap 'exit 0' TERM",
+		"while :; do sleep 0.1; done",
+	}, "\n"))
+	adapter.resumeScript = func(sessionID, message string) string {
+		return strings.Join([]string{
+			"echo 'RESPONSE:model preserved'",
+			"echo 'TURN:1,1,0'",
+		}, "\n")
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Model = "gpt-5.4-mini"
+	result := runDispatchWithInboxMessageAndSpec(t, adapter, spec, readyPath, "resume on same model")
+
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed, error = %+v", result.Status, result.Error)
+	}
+	calls := adapter.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("resume calls = %d, want 1", len(calls))
+	}
+	if calls[0].model != "gpt-5.4-mini" {
+		t.Fatalf("resume model = %q, want gpt-5.4-mini", calls[0].model)
+	}
+}
+
+func TestLoopEngineInjectsTracePreambleIntoPrompt(t *testing.T) {
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'RESPONSE:ok'",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+
+	spec := testDispatchSpec(artifactDir)
+	spec.DispatchID = "01TRACE"
+	spec.Salt = "coral-fox-nine"
+	spec.TraceToken = "AGENT_MUX_GO_01TRACE"
+	spec.Prompt = "build the parser"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed", result.Status)
+	}
+
+	wantPrefix := strings.Join([]string{
+		"Trace token: AGENT_MUX_GO_01TRACE",
+		"Dispatch ID: 01TRACE",
+		"Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.",
+		"",
+		"build the parser",
+	}, "\n")
+	if got := adapter.InitialPrompt(); got != wantPrefix {
+		t.Fatalf("initial prompt = %q, want %q", got, wantPrefix)
+	}
+}
+
+func TestLoopEngineExportsTraceEnvVars(t *testing.T) {
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter(strings.Join([]string{
+		`echo "RESPONSE:$AGENT_MUX_TRACE_TOKEN|$AGENT_MUX_SALT|$AGENT_MUX_DISPATCH_ID"`,
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+
+	spec := testDispatchSpec(artifactDir)
+	spec.DispatchID = "01TRACEENV"
+	spec.Salt = "coral-fox-nine"
+	spec.TraceToken = "AGENT_MUX_GO_01TRACEENV"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed", result.Status)
+	}
+	want := "AGENT_MUX_GO_01TRACEENV|coral-fox-nine|01TRACEENV"
+	if result.Response != want {
+		t.Fatalf("response = %q, want %q", result.Response, want)
 	}
 }
 
@@ -442,8 +554,12 @@ func TestLoopEngineBinaryNotFound(t *testing.T) {
 
 func runDispatchWithInboxMessage(t *testing.T, adapter *scriptedAdapter, artifactDir, readyPath, message string) *types.DispatchResult {
 	t.Helper()
+	return runDispatchWithInboxMessageAndSpec(t, adapter, testDispatchSpec(artifactDir), readyPath, message)
+}
+
+func runDispatchWithInboxMessageAndSpec(t *testing.T, adapter *scriptedAdapter, spec *types.DispatchSpec, readyPath, message string) *types.DispatchResult {
+	t.Helper()
 	engine := NewLoopEngine(adapter, io.Discard, nil)
-	spec := testDispatchSpec(artifactDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -458,6 +574,7 @@ func runDispatchWithInboxMessage(t *testing.T, adapter *scriptedAdapter, artifac
 		outcomeCh <- dispatchOutcome{result: result, err: err}
 	}()
 
+	artifactDir := spec.ArtifactDir
 	waitForPath(t, readyPath)
 	if err := inbox.WriteInbox(artifactDir, message); err != nil {
 		t.Fatalf("write inbox: %v", err)

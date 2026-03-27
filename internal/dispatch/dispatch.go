@@ -42,6 +42,29 @@ func GenerateSalt() string {
 		digits[saltRand.Intn(len(digits))],
 	)
 }
+
+func DefaultTraceToken(dispatchID string) string {
+	dispatchID = strings.TrimSpace(dispatchID)
+	if dispatchID == "" {
+		return ""
+	}
+	return "AGENT_MUX_GO_" + dispatchID
+}
+
+func EnsureTraceability(spec *types.DispatchSpec) {
+	if spec == nil {
+		return
+	}
+	spec.Salt = strings.TrimSpace(spec.Salt)
+	if spec.Salt == "" {
+		spec.Salt = GenerateSalt()
+	}
+	spec.TraceToken = strings.TrimSpace(spec.TraceToken)
+	if spec.TraceToken == "" {
+		spec.TraceToken = DefaultTraceToken(spec.DispatchID)
+	}
+}
+
 func EnsureArtifactDir(dir string) error {
 	return os.MkdirAll(dir, 0755)
 }
@@ -49,6 +72,7 @@ func EnsureArtifactDir(dir string) error {
 type DispatchMeta struct {
 	DispatchID          string   `json:"dispatch_id"`
 	DispatchSalt        string   `json:"dispatch_salt"`
+	TraceToken          string   `json:"trace_token,omitempty"`
 	StartedAt           string   `json:"started_at"`
 	Engine              string   `json:"engine"`
 	Model               string   `json:"model"`
@@ -62,10 +86,12 @@ type DispatchMeta struct {
 }
 
 func WriteDispatchMeta(artifactDir string, spec *types.DispatchSpec) error {
+	EnsureTraceability(spec)
 	hash := sha256.Sum256([]byte(spec.Prompt))
 	meta := DispatchMeta{
 		DispatchID:   spec.DispatchID,
 		DispatchSalt: spec.Salt,
+		TraceToken:   spec.TraceToken,
 		StartedAt:    time.Now().UTC().Format(time.RFC3339),
 		Engine:       spec.Engine,
 		Model:        spec.Model,
@@ -135,6 +161,34 @@ func ExtractHandoffSummary(response string, maxChars int) string {
 	}
 
 	return truncateAtBoundary(response, maxChars)
+}
+
+func PromptPreamble(spec *types.DispatchSpec) []string {
+	if spec == nil {
+		return nil
+	}
+	lines := make([]string, 0, 3)
+	if spec.TraceToken != "" {
+		lines = append(lines, "Trace token: "+spec.TraceToken)
+	}
+	if spec.DispatchID != "" {
+		lines = append(lines, "Dispatch ID: "+spec.DispatchID)
+	}
+	if spec.ArtifactDir != "" {
+		lines = append(lines, "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.")
+	}
+	return lines
+}
+
+func WithPromptPreamble(prompt string, spec *types.DispatchSpec) string {
+	lines := PromptPreamble(spec)
+	if len(lines) == 0 {
+		return prompt
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines, "\n") + "\n\n" + prompt
 }
 
 type ErrorInfo struct {
@@ -315,11 +369,13 @@ func truncateAtBoundary(s string, maxChars int) string {
 }
 
 func baseResult(spec *types.DispatchSpec, status types.DispatchStatus, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	EnsureTraceability(spec)
 	return &types.DispatchResult{
 		SchemaVersion:  1,
 		Status:         status,
 		DispatchID:     spec.DispatchID,
 		DispatchSalt:   spec.Salt,
+		TraceToken:     spec.TraceToken,
 		Response:       response,
 		HandoffSummary: ExtractHandoffSummary(response, 2000),
 		Activity:       activity,

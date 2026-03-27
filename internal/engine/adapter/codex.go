@@ -266,8 +266,14 @@ func parseItemCompleted(raw *codexEvent, evt *types.HarnessEvent) *types.Harness
 func (a *CodexAdapter) SupportsResume() bool {
 	return true
 }
-func (a *CodexAdapter) ResumeArgs(sessionID string, message string) []string {
-	return []string{"exec", "resume", "--id", sessionID, "--json", message}
+
+func (a *CodexAdapter) ResumeArgs(spec *types.DispatchSpec, sessionID string, message string) []string {
+	args := []string{"exec", "resume"}
+	if spec != nil && spec.Model != "" {
+		args = append(args, "-m", spec.Model)
+	}
+	args = append(args, "--json", sessionID, message)
+	return args
 }
 
 func addDirs(spec *types.DispatchSpec) []string {

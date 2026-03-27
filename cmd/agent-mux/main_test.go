@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/hooks"
+	"github.com/buildoak/agent-mux/internal/inbox"
+	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -28,6 +31,175 @@ func TestVersionFlag(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), version) {
 		t.Fatalf("stdout = %q, want version %q", stdout.String(), version)
+	}
+}
+
+func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
+	prompt := "implement feature"
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--engine", "codex",
+		"--timeout", "123",
+		"--artifact-dir", artifactDir,
+		prompt,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	preview := decodePreviewResult(t, stdout.Bytes())
+	if preview.Kind != "preview" {
+		t.Fatalf("kind = %q, want preview", preview.Kind)
+	}
+	if preview.DispatchSpec.Engine != "codex" {
+		t.Fatalf("dispatch_spec.engine = %q, want codex", preview.DispatchSpec.Engine)
+	}
+	if preview.DispatchSpec.TraceToken != "AGENT_MUX_GO_"+preview.DispatchSpec.DispatchID {
+		t.Fatalf("trace_token = %q, want %q", preview.DispatchSpec.TraceToken, "AGENT_MUX_GO_"+preview.DispatchSpec.DispatchID)
+	}
+	if preview.Control.ControlRecord != recovery.ControlRecordPath(preview.DispatchSpec.DispatchID) {
+		t.Fatalf("control_record = %q, want %q", preview.Control.ControlRecord, recovery.ControlRecordPath(preview.DispatchSpec.DispatchID))
+	}
+	if preview.Control.ArtifactDir != artifactDir {
+		t.Fatalf("control.artifact_dir = %q, want %q", preview.Control.ArtifactDir, artifactDir)
+	}
+	if len(preview.PromptPreamble) != 3 {
+		t.Fatalf("prompt_preamble len = %d, want 3 (%v)", len(preview.PromptPreamble), preview.PromptPreamble)
+	}
+	if preview.PromptPreamble[0] != "Trace token: "+preview.DispatchSpec.TraceToken {
+		t.Fatalf("prompt_preamble[0] = %q, want trace token line", preview.PromptPreamble[0])
+	}
+	if preview.Prompt.Excerpt != prompt {
+		t.Fatalf("prompt.excerpt = %q, want %q", preview.Prompt.Excerpt, prompt)
+	}
+	if preview.Prompt.Chars != len(prompt) {
+		t.Fatalf("prompt.chars = %d, want %d", preview.Prompt.Chars, len(prompt))
+	}
+	if preview.Prompt.Truncated {
+		t.Fatal("prompt.truncated = true, want false")
+	}
+	if preview.ConfirmationRequired {
+		t.Fatal("confirmation_required = true, want false for non-TTY test harness")
+	}
+}
+
+func TestDispatchTTYConfirmationCancelsBeforeDispatch(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithTerminalCheck([]string{
+		"--engine", "codex",
+		"--artifact-dir", artifactDir,
+		"implement feature",
+	}, strings.NewReader("n\n"), &stdout, &stderr, func(any) bool { return true })
+	if exitCode != exitCodeCancelled {
+		t.Fatalf("exit code = %d, want %d; stderr=%q stdout=%q", exitCode, exitCodeCancelled, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `"kind": "preview"`) {
+		t.Fatalf("stderr = %q, want preview JSON", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "dispatch cancelled") {
+		t.Fatalf("stderr = %q, want cancellation message", stderr.String())
+	}
+	result := decodeResult(t, stdout.Bytes())
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
+	}
+	if result.Error == nil || result.Error.Code != "cancelled" {
+		t.Fatalf("error = %#v, want cancelled", result.Error)
+	}
+	if result.Error.Message != "Dispatch cancelled at confirmation prompt before launch." {
+		t.Fatalf("error.message = %q, want cancellation message", result.Error.Message)
+	}
+	if _, err := os.Stat(artifactDir); !os.IsNotExist(err) {
+		t.Fatalf("artifact dir should not be created before confirmation, stat err=%v", err)
+	}
+}
+
+func TestPreviewCommandCompactsPromptSummary(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
+	prompt := strings.Repeat("alpha beta gamma ", 40) + "final instruction"
+	systemPrompt := strings.Repeat("system rule ", 20)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--engine", "codex",
+		"--artifact-dir", artifactDir,
+		"--system-prompt", systemPrompt,
+		prompt,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	preview := decodePreviewResult(t, stdout.Bytes())
+	if !preview.Prompt.Truncated {
+		t.Fatal("prompt.truncated = false, want true for long prompt")
+	}
+	if preview.Prompt.Chars != len(prompt) {
+		t.Fatalf("prompt.chars = %d, want %d", preview.Prompt.Chars, len(prompt))
+	}
+	if preview.Prompt.SystemPromptChars != len(systemPrompt) {
+		t.Fatalf("prompt.system_prompt_chars = %d, want %d", preview.Prompt.SystemPromptChars, len(systemPrompt))
+	}
+	if !strings.Contains(preview.Prompt.Excerpt, "alpha beta gamma") || !strings.Contains(preview.Prompt.Excerpt, "final instruction") {
+		t.Fatalf("prompt.excerpt = %q, want compact head/tail summary", preview.Prompt.Excerpt)
+	}
+	if len([]rune(preview.Prompt.Excerpt)) > previewPromptExcerptRunes {
+		t.Fatalf("prompt.excerpt len = %d, want <= %d", len([]rune(preview.Prompt.Excerpt)), previewPromptExcerptRunes)
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+	}
+	if _, ok := dispatchSpec["prompt"]; ok {
+		t.Fatalf("dispatch_spec should omit prompt body, got %v", dispatchSpec["prompt"])
+	}
+	if _, ok := dispatchSpec["system_prompt"]; ok {
+		t.Fatalf("dispatch_spec should omit system_prompt, got %v", dispatchSpec["system_prompt"])
+	}
+	if _, ok := dispatchSpec["engine_opts"]; ok {
+		t.Fatalf("dispatch_spec should omit engine_opts, got %v", dispatchSpec["engine_opts"])
+	}
+}
+
+func TestExplicitPreviewLikeCommandShowsLiteralPromptGuidance(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{name: "preview", command: "preview"},
+		{name: "dispatch", command: "dispatch"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			exitCode := run([]string{tc.command}, strings.NewReader(""), &stdout, &stderr)
+			if exitCode != 1 {
+				t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), fmt.Sprintf("If you meant the literal prompt %q", tc.command)) {
+				t.Fatalf("stderr = %q, want literal prompt guidance", stderr.String())
+			}
+			if !strings.Contains(stderr.String(), fmt.Sprintf("agent-mux -- %s", tc.command)) {
+				t.Fatalf("stderr = %q, want -- escape hatch guidance", stderr.String())
+			}
+		})
 	}
 }
 
@@ -106,6 +278,25 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildDispatchSpecIncludesPipeline(t *testing.T) {
+	t.Parallel()
+
+	fs, parsed := newFlagSet(ioDiscard{})
+	err := fs.Parse([]string{"--engine", "codex", "--pipeline", "review", "implement feature"})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	flags, positional := *parsed, fs.Args()
+
+	spec, err := buildDispatchSpecE(flags, positional)
+	if err != nil {
+		t.Fatalf("buildDispatchSpecE: %v", err)
+	}
+	if spec.Pipeline != "review" {
+		t.Fatalf("pipeline = %q, want %q", spec.Pipeline, "review")
+	}
+}
+
 func TestNoFullFlag(t *testing.T) {
 	t.Parallel()
 
@@ -166,7 +357,7 @@ func TestNormalizeArgsAllowsFlagsAfterPrompt(t *testing.T) {
 }
 
 func TestStdinMode(t *testing.T) {
-	t.Parallel()
+	t.Setenv("PATH", t.TempDir())
 
 	input := types.DispatchSpec{
 		DispatchID:       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -208,16 +399,237 @@ func TestStdinMode(t *testing.T) {
 	if result.DispatchID != "01ARZ3NDEKTSV4RRFFQ69G5FAV" {
 		t.Errorf("dispatch_id = %q, want 01ARZ3NDEKTSV4RRFFQ69G5FAV", result.DispatchID)
 	}
-	// If codex is not installed, expect binary_not_found; otherwise completed or failed
-	validStatuses := map[types.DispatchStatus]bool{
-		types.StatusCompleted: true,
-		types.StatusTimedOut:  true,
-		types.StatusFailed:    true,
+	if result.Status != types.StatusFailed {
+		t.Errorf("status = %q, want %q", result.Status, types.StatusFailed)
 	}
-	if !validStatuses[result.Status] {
-		t.Errorf("status = %q, not a valid DispatchStatus", result.Status)
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found", result.Error)
 	}
-	_ = exitCode // exit code depends on whether codex is installed
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+}
+
+func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
+	workingDir := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(prevWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	}()
+
+	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin"}`))
+	if err != nil {
+		t.Fatalf("decodeStdinDispatchSpec: %v", err)
+	}
+
+	if spec.DispatchID == "" {
+		t.Fatal("dispatch_id should be materialized")
+	}
+	specCwdReal, err := filepath.EvalSymlinks(spec.Cwd)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(spec.Cwd): %v", err)
+	}
+	workingDirReal, err := filepath.EvalSymlinks(workingDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(workingDir): %v", err)
+	}
+	if specCwdReal != workingDirReal {
+		t.Fatalf("cwd = %q (%q), want %q (%q)", spec.Cwd, specCwdReal, workingDir, workingDirReal)
+	}
+	if spec.ArtifactDir != filepath.ToSlash(recovery.DefaultArtifactDir(spec.DispatchID))+"/" {
+		t.Fatalf("artifact_dir = %q, want default path", spec.ArtifactDir)
+	}
+	if !spec.AllowSubdispatch {
+		t.Fatal("allow_subdispatch = false, want true")
+	}
+	if !spec.FullAccess {
+		t.Fatal("full_access = false, want true")
+	}
+	if spec.PipelineStep != -1 {
+		t.Fatalf("pipeline_step = %d, want -1", spec.PipelineStep)
+	}
+	if spec.GraceSec != 60 {
+		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
+	}
+	if spec.HandoffMode != "summary_and_refs" {
+		t.Fatalf("handoff_mode = %q, want %q", spec.HandoffMode, "summary_and_refs")
+	}
+}
+
+func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndZero(t *testing.T) {
+	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","allow_subdispatch":false,"full_access":false,"pipeline_step":0,"grace_sec":0}`))
+	if err != nil {
+		t.Fatalf("decodeStdinDispatchSpec: %v", err)
+	}
+
+	if spec.AllowSubdispatch {
+		t.Fatal("allow_subdispatch = true, want false")
+	}
+	if spec.FullAccess {
+		t.Fatal("full_access = true, want false")
+	}
+	if spec.PipelineStep != 0 {
+		t.Fatalf("pipeline_step = %d, want 0", spec.PipelineStep)
+	}
+	if spec.GraceSec != 0 {
+		t.Fatalf("grace_sec = %d, want 0", spec.GraceSec)
+	}
+}
+
+func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
+	startDir := t.TempDir()
+	otherDir := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(startDir); err != nil {
+		t.Fatalf("chdir startDir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(prevWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	}()
+
+	t.Setenv("PATH", t.TempDir())
+
+	dispatchID := "fixed-dispatch-" + strings.ReplaceAll(t.Name(), "/", "-")
+	relativeArtifactDir := filepath.Join("artifacts", "custom-dispatch")
+	absoluteArtifactDir := filepath.Join(startDir, relativeArtifactDir)
+	t.Cleanup(func() {
+		_ = os.Remove(filepath.Join("/tmp/agent-mux/control", url.PathEscape(dispatchID)+".json"))
+	})
+	input := map[string]any{
+		"dispatch_id":  dispatchID,
+		"engine":       "codex",
+		"prompt":       "from stdin",
+		"artifact_dir": relativeArtifactDir,
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--stdin"}, bytes.NewReader(data), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("initial exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("initial error = %#v, want binary_not_found", result.Error)
+	}
+	if result.DispatchID != dispatchID {
+		t.Fatalf("dispatch_id = %q, want %q", result.DispatchID, dispatchID)
+	}
+	if _, err := os.Stat(filepath.Join(absoluteArtifactDir, "_dispatch_meta.json")); err != nil {
+		t.Fatalf("stat dispatch meta: %v", err)
+	}
+
+	if err := os.Chdir(otherDir); err != nil {
+		t.Fatalf("chdir otherDir: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run([]string{"--signal", dispatchID, "focus on auth"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("signal exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	messages, err := inbox.ReadInbox(absoluteArtifactDir)
+	if err != nil {
+		t.Fatalf("ReadInbox: %v", err)
+	}
+	if len(messages) != 1 || messages[0] != "focus on auth" {
+		t.Fatalf("messages = %v, want [focus on auth]", messages)
+	}
+
+	var signalResult struct {
+		ArtifactDir string `json:"artifact_dir"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &signalResult); err != nil {
+		t.Fatalf("unmarshal signal result: %v\nstdout=%q", err, stdout.String())
+	}
+	signalArtifactReal, err := filepath.EvalSymlinks(signalResult.ArtifactDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(signal artifact_dir): %v", err)
+	}
+	absoluteArtifactReal, err := filepath.EvalSymlinks(absoluteArtifactDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(absolute artifact_dir): %v", err)
+	}
+	if signalArtifactReal != absoluteArtifactReal {
+		t.Fatalf("artifact_dir = %q (%q), want %q (%q)", signalResult.ArtifactDir, signalArtifactReal, absoluteArtifactDir, absoluteArtifactReal)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run([]string{"--engine", "codex", "--recover", dispatchID, "continue"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("recover exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result = decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("recover error = %#v, want binary_not_found", result.Error)
+	}
+}
+
+func TestStdinPipelineDispatch(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+[pipelines.review]
+[[pipelines.review.steps]]
+name = "review"
+`)
+	input := map[string]any{
+		"dispatch_id":  "stdin-pipeline-dispatch",
+		"engine":       "not-a-real-engine",
+		"prompt":       "from stdin",
+		"pipeline":     "review",
+		"cwd":          t.TempDir(),
+		"artifact_dir": filepath.Join(t.TempDir(), "artifacts"),
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--stdin", "--config", cfgPath}, bytes.NewReader(data), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodePipelineResult(t, stdout.Bytes())
+	if result.PipelineID == "" {
+		t.Fatal("pipeline_id should be set")
+	}
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("len(steps) = %d, want 1", len(result.Steps))
+	}
+	if len(result.Steps[0].Workers) != 1 {
+		t.Fatalf("len(steps[0].workers) = %d, want 1", len(result.Steps[0].Workers))
+	}
+	if result.Steps[0].Workers[0].ErrorCode != "engine_not_found" {
+		t.Fatalf("workers[0].error_code = %q, want engine_not_found", result.Steps[0].Workers[0].ErrorCode)
+	}
 }
 
 func TestOutputFlagDefault(t *testing.T) {
@@ -480,6 +892,68 @@ func decodeResult(t *testing.T, data []byte) types.DispatchResult {
 	return result
 }
 
+type previewResultForTest struct {
+	SchemaVersion int    `json:"schema_version"`
+	Kind          string `json:"kind"`
+	DispatchSpec  struct {
+		DispatchID string `json:"dispatch_id"`
+		Engine     string `json:"engine"`
+		TraceToken string `json:"trace_token"`
+	} `json:"dispatch_spec"`
+	Prompt struct {
+		Excerpt           string `json:"excerpt"`
+		Chars             int    `json:"chars"`
+		Truncated         bool   `json:"truncated"`
+		SystemPromptChars int    `json:"system_prompt_chars"`
+	} `json:"prompt"`
+	Control struct {
+		ControlRecord string `json:"control_record"`
+		ArtifactDir   string `json:"artifact_dir"`
+	} `json:"control"`
+	PromptPreamble       []string `json:"prompt_preamble"`
+	ConfirmationRequired bool     `json:"confirmation_required"`
+}
+
+func decodePreviewResult(t *testing.T, data []byte) previewResultForTest {
+	t.Helper()
+
+	var result previewResultForTest
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("unmarshal PreviewResult: %v\nstdout=%q", err, string(data))
+	}
+	return result
+}
+
+func decodeJSONMap(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("unmarshal JSON map: %v\nstdout=%q", err, string(data))
+	}
+	return result
+}
+
+type pipelineResultForTest struct {
+	PipelineID string `json:"pipeline_id"`
+	Status     string `json:"status"`
+	Steps      []struct {
+		Workers []struct {
+			ErrorCode string `json:"error_code"`
+		} `json:"workers"`
+	} `json:"steps"`
+}
+
+func decodePipelineResult(t *testing.T, data []byte) pipelineResultForTest {
+	t.Helper()
+
+	var result pipelineResultForTest
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("unmarshal PipelineResult: %v\nstdout=%q", err, string(data))
+	}
+	return result
+}
+
 func readDispatchMeta(t *testing.T, artifactDir string) dispatchMetaForTest {
 	t.Helper()
 
@@ -502,6 +976,7 @@ func promptHash(prompt string) string {
 
 type dispatchMetaForTest struct {
 	PromptHash string `json:"prompt_hash"`
+	Cwd        string `json:"cwd"`
 }
 
 func TestFlagSetVisitTracksExplicitFlags(t *testing.T) {
