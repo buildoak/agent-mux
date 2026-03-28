@@ -125,12 +125,20 @@ func DefaultConfig() *Config {
 }
 
 func LoadConfig(configPath string, cwd string) (*Config, error) {
+	cfg, _, err := LoadConfigWithSources(configPath, cwd)
+	return cfg, err
+}
+
+// LoadConfigWithSources loads the resolved config and returns the ordered list
+// of config file paths that were actually found and loaded.
+func LoadConfigWithSources(configPath string, cwd string) (*Config, []string, error) {
 	paths, err := configPaths(configPath, cwd)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	cfg := DefaultConfig()
+	var loaded []string
 	for _, path := range paths {
 		if path == "" {
 			continue
@@ -141,16 +149,16 @@ func LoadConfig(configPath string, cwd string) (*Config, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("stat config %q: %w", path, err)
+			return nil, nil, fmt.Errorf("stat config %q: %w", path, err)
 		}
 		if info.IsDir() {
-			return nil, fmt.Errorf("config path %q is a directory", path)
+			return nil, nil, fmt.Errorf("config path %q is a directory", path)
 		}
 
 		var overlay Config
 		meta, err := toml.DecodeFile(path, &overlay)
 		if err != nil {
-			return nil, fmt.Errorf("decode config %q: %w", path, err)
+			return nil, nil, fmt.Errorf("decode config %q: %w", path, err)
 		}
 		overlay.meta = &meta
 		for name, role := range overlay.Roles {
@@ -158,12 +166,13 @@ func LoadConfig(configPath string, cwd string) (*Config, error) {
 			overlay.Roles[name] = role
 		}
 		if err := validateExplicitTimeoutValues(path, &overlay); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		mergeConfig(cfg, &overlay)
+		loaded = append(loaded, path)
 	}
 
-	return cfg, nil
+	return cfg, loaded, nil
 }
 
 func MergeConfigInto(base, overlay *Config) {
