@@ -66,6 +66,34 @@ func TestClaudeBuildArgsEmptyPermissionMode(t *testing.T) {
 	assertNotContains(t, args, "--permission-mode")
 }
 
+func TestClaudeBuildArgsWithAddDirs(t *testing.T) {
+	a := &ClaudeAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt: "test prompt",
+		EngineOpts: map[string]any{
+			"add-dir": []any{"/tmp/scripts", "/tmp/helpers"},
+		},
+	}
+
+	args := a.BuildArgs(spec)
+	assertContains(t, args, "--add-dir")
+	assertContains(t, args, "/tmp/scripts")
+	assertContains(t, args, "/tmp/helpers")
+}
+
+func TestClaudeBuildArgsNoAddDirsWhenEmpty(t *testing.T) {
+	a := &ClaudeAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt:     "test prompt",
+		EngineOpts: map[string]any{},
+	}
+
+	args := a.BuildArgs(spec)
+	assertNotContains(t, args, "--add-dir")
+}
+
 func TestClaudeBuildArgsSystemPrompt(t *testing.T) {
 	a := &ClaudeAdapter{}
 

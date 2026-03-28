@@ -69,6 +69,40 @@ func TestGeminiBuildArgsEmptyPermissionModeDefaultsToYolo(t *testing.T) {
 	assertNotContains(t, args, "plan")
 }
 
+func TestGeminiBuildArgsWithAddDirs(t *testing.T) {
+	a := &GeminiAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt: "test prompt",
+		EngineOpts: map[string]any{
+			"add-dir": []any{"/tmp/scripts", "/tmp/helpers"},
+		},
+	}
+
+	args := a.BuildArgs(spec)
+	assertContains(t, args, "--include-directories")
+	idx := indexOf(args, "--include-directories")
+	if idx == -1 || idx+1 >= len(args) {
+		t.Fatalf("missing --include-directories value in args: %#v", args)
+	}
+	val := args[idx+1]
+	if !strings.Contains(val, "/tmp/scripts") || !strings.Contains(val, "/tmp/helpers") {
+		t.Fatalf("--include-directories value = %q, want both dirs", val)
+	}
+}
+
+func TestGeminiBuildArgsNoIncludeDirsWhenEmpty(t *testing.T) {
+	a := &GeminiAdapter{}
+
+	spec := &types.DispatchSpec{
+		Prompt:     "test prompt",
+		EngineOpts: map[string]any{},
+	}
+
+	args := a.BuildArgs(spec)
+	assertNotContains(t, args, "--include-directories")
+}
+
 func TestGeminiEnvVarsWritesSystemPromptFile(t *testing.T) {
 	a := &GeminiAdapter{}
 	spec := &types.DispatchSpec{

@@ -58,6 +58,9 @@ func (a *GeminiAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 		approvalMode = mode
 	}
 	args = append(args, "--approval-mode", approvalMode)
+	if dirs := addDirs(spec); len(dirs) > 0 {
+		args = append(args, "--include-directories", strings.Join(dirs, ","))
+	}
 	return args
 }
 

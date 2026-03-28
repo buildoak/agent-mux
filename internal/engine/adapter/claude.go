@@ -34,6 +34,9 @@ func (a *ClaudeAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	if spec.SystemPrompt != "" {
 		args = append(args, "--system-prompt", spec.SystemPrompt)
 	}
+	for _, dir := range addDirs(spec) {
+		args = append(args, "--add-dir", dir)
+	}
 
 	args = append(args, spec.Prompt)
 	return args
