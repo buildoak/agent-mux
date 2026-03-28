@@ -733,6 +733,77 @@ system_prompt_file = "prompts/lifter-claude.md"
 	}
 }
 
+func TestLoadConfigRejectsNegativeTimeoutValues(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "negative low",
+			content: `
+[timeout]
+low = -10
+`,
+			want: "timeout.low",
+		},
+		{
+			name: "negative medium",
+			content: `
+[timeout]
+medium = -1
+`,
+			want: "timeout.medium",
+		},
+		{
+			name: "negative high",
+			content: `
+[timeout]
+high = -100
+`,
+			want: "timeout.high",
+		},
+		{
+			name: "negative xhigh",
+			content: `
+[timeout]
+xhigh = -5
+`,
+			want: "timeout.xhigh",
+		},
+		{
+			name: "negative role timeout",
+			content: `
+[roles.slow]
+timeout = -30
+`,
+			want: "roles.slow.timeout",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, "neg-"+strings.ReplaceAll(tt.name, " ", "-")+".toml")
+			if err := os.WriteFile(path, []byte(strings.TrimSpace(tt.content)), 0o644); err != nil {
+				t.Fatalf("WriteFile(%q): %v", path, err)
+			}
+
+			_, err := LoadConfig(path, dir)
+			if err == nil {
+				t.Fatal("LoadConfig error = nil, want validation error")
+			}
+			if !IsValidationError(err) {
+				t.Fatalf("error = %T %v, want ValidationError", err, err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want field %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestTimeoutForEffort(t *testing.T) {
 	cfg := &Config{
 		Timeout: TimeoutConfig{

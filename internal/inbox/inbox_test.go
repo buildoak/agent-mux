@@ -180,6 +180,37 @@ func TestReadInboxEmpty(t *testing.T) {
 	}
 }
 
+func TestDelimiterPoisoningInNDJSONFraming(t *testing.T) {
+	dir := t.TempDir()
+	if err := CreateInbox(dir); err != nil {
+		t.Fatalf("CreateInbox: %v", err)
+	}
+
+	// Message text contains the legacy block delimiter \n---\n.
+	// NDJSON framing should treat the whole thing as one message.
+	poison := "line one\n---\nline two\n---\nline three"
+	if err := WriteInbox(dir, poison); err != nil {
+		t.Fatalf("WriteInbox: %v", err)
+	}
+	if err := WriteInbox(dir, "clean message"); err != nil {
+		t.Fatalf("WriteInbox: %v", err)
+	}
+
+	got, err := ReadInbox(dir)
+	if err != nil {
+		t.Fatalf("ReadInbox: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ReadInbox returned %d messages, want 2: %v", len(got), messageTexts(got))
+	}
+	if got[0].Message != poison {
+		t.Fatalf("message[0] = %q, want %q", got[0].Message, poison)
+	}
+	if got[1].Message != "clean message" {
+		t.Fatalf("message[1] = %q, want %q", got[1].Message, "clean message")
+	}
+}
+
 func messageTexts(messages []InboxMessage) []string {
 	out := make([]string, 0, len(messages))
 	for _, msg := range messages {

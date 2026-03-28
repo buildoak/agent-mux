@@ -205,6 +205,80 @@ func TestOpenFileNoFollowRejectsLeafSymlink(t *testing.T) {
 	}
 }
 
+func TestSecureArtifactRootCreatesDirectoryWith0700(t *testing.T) {
+	runtimeDir := t.TempDir()
+	// Resolve symlinks so the display path matches the resolved creation path.
+	resolvedRuntime, err := filepath.EvalSymlinks(runtimeDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", resolvedRuntime)
+
+	got := SecureArtifactRoot()
+	want := filepath.Join(resolvedRuntime, "agent-mux")
+	if got != want {
+		t.Fatalf("SecureArtifactRoot() = %q, want %q", got, want)
+	}
+
+	info, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", got, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("%q is not a directory", got)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("%q mode = %o, want 0700", got, info.Mode().Perm())
+	}
+}
+
+func TestEnsurePrivateDirCorrectsBadPermissions(t *testing.T) {
+	// t.TempDir() may use symlinked paths (macOS /var -> /private/var).
+	// Resolve symlinks first to satisfy checkPathChainNoSymlinks.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	badDir := filepath.Join(root, "world-readable")
+	if err := os.Mkdir(badDir, 0o777); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	// ensurePrivateDir should chmod it to 0700, not reject.
+	if err := ensurePrivateDir(badDir, 0o700); err != nil {
+		t.Fatalf("ensurePrivateDir: %v", err)
+	}
+	info, err := os.Stat(badDir)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %o, want 0700 after ensurePrivateDir", info.Mode().Perm())
+	}
+}
+
+func TestEnsurePrivateDirRejectsSymlinkDirectory(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	realDir := filepath.Join(root, "real")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	linkDir := filepath.Join(root, "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	ensureErr := ensurePrivateDir(linkDir, 0o700)
+	if ensureErr == nil {
+		t.Fatal("ensurePrivateDir(symlink) error = nil, want error")
+	}
+	if !strings.Contains(ensureErr.Error(), "symlink") {
+		t.Fatalf("error = %q, want symlink rejection", ensureErr.Error())
+	}
+}
+
 func assertPrivateDir(t *testing.T, path string) {
 	t.Helper()
 

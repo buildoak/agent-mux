@@ -387,6 +387,32 @@ func TestLoopEngineFailsParseErrorWithoutFinalResponse(t *testing.T) {
 	}
 }
 
+func TestLoopEngineParseErrorExitZeroNoResponseIsFailed(t *testing.T) {
+	// Engine exits 0 but produces only malformed NDJSON — no valid response.
+	// This should be marked failed with parse_error code.
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'TURN:not,a,number'",
+		"echo 'ERROR:badformat'",
+		"exit 0",
+	}, "\n"))
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	result, err := engine.Dispatch(context.Background(), testDispatchSpec(artifactDir))
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "parse_error" {
+		t.Fatalf("error = %+v, want parse_error", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, "parse error") {
+		t.Fatalf("error.message = %q, want parse error explanation", result.Error.Message)
+	}
+}
+
 func TestLoopEngineKeepsCompletedStatusWhenParseErrorHasFinalResponse(t *testing.T) {
 	artifactDir := t.TempDir()
 	adapter := newScriptedAdapter(strings.Join([]string{
@@ -429,6 +455,32 @@ func TestLoopEngineFailsWhenAdapterEnvSetupFails(t *testing.T) {
 	}
 	if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
 		t.Fatalf("marker file exists or unexpected stat error = %v, harness should not have started", statErr)
+	}
+}
+
+func TestLoopEngineGeminiPromptWriteFailure(t *testing.T) {
+	artifactDir := t.TempDir()
+	markerPath := filepath.Join(artifactDir, "started")
+	adapter := newScriptedAdapter(fmt.Sprintf("touch %q", markerPath))
+	adapter.envErr = fmt.Errorf("write system prompt to %q: permission denied", filepath.Join(artifactDir, "system_prompt.md"))
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	result, err := engine.Dispatch(context.Background(), testDispatchSpec(artifactDir))
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "artifact_dir_unwritable" {
+		t.Fatalf("error = %+v, want artifact_dir_unwritable", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, "write system prompt") {
+		t.Fatalf("error.message = %q, want system prompt write error", result.Error.Message)
+	}
+	// Verify harness was never started.
+	if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
+		t.Fatalf("marker file exists, harness should not have started")
 	}
 }
 
