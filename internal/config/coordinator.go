@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/buildoak/agent-mux/internal/sanitize"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,6 +24,11 @@ type CoordinatorSpec struct {
 }
 
 func LoadProfile(name, cwd string) (*CoordinatorSpec, *Config, error) {
+	name = strings.TrimSpace(name)
+	if err := sanitize.ValidateBasename(name); err != nil {
+		return nil, nil, fmt.Errorf("invalid profile name %q: %w", name, err)
+	}
+
 	if cwd == "" {
 		var err error
 		cwd, err = os.Getwd()

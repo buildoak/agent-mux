@@ -37,8 +37,111 @@ func TestVersionFlag(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", exitCode, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), version) {
-		t.Fatalf("stdout = %q, want version %q", stdout.String(), version)
+	raw := decodeJSONMap(t, stdout.Bytes())
+	if raw["version"] != version {
+		t.Fatalf("version = %#v, want %q", raw["version"], version)
+	}
+}
+
+func TestUnknownFlagReturnsJSONError(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"--definitely-not-a-flag"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_args" {
+		t.Fatalf("error = %#v, want invalid_args", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, "flag provided but not defined") {
+		t.Fatalf("error.message = %q, want parse failure", result.Error.Message)
+	}
+	if !strings.Contains(result.Error.Suggestion, "Usage of agent-mux") {
+		t.Fatalf("error.suggestion = %q, want usage text", result.Error.Suggestion)
+	}
+}
+
+func TestHelpFlagReturnsJSON(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"--help"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	if raw["kind"] != "help" {
+		t.Fatalf("kind = %#v, want help", raw["kind"])
+	}
+	usage, ok := raw["usage"].(string)
+	if !ok {
+		t.Fatalf("usage = %#v, want string", raw["usage"])
+	}
+	if !strings.Contains(usage, "Usage of agent-mux") {
+		t.Fatalf("usage = %q, want usage text", usage)
+	}
+}
+
+func TestSignalRequiresMessageReturnsJSONAck(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"--signal", "dispatch-123"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	var ack SignalAck
+	if err := json.Unmarshal(stdout.Bytes(), &ack); err != nil {
+		t.Fatalf("unmarshal SignalAck: %v\nstdout=%q", err, stdout.String())
+	}
+	if ack.Status != "error" {
+		t.Fatalf("status = %q, want error", ack.Status)
+	}
+	if ack.DispatchID != "dispatch-123" {
+		t.Fatalf("dispatch_id = %q, want dispatch-123", ack.DispatchID)
+	}
+	if ack.Error == nil || ack.Error.Code != "invalid_args" {
+		t.Fatalf("error = %#v, want invalid_args", ack.Error)
+	}
+}
+
+func TestSignalRejectsInvalidDispatchID(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"--signal", "../dispatch", "resume"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	var ack SignalAck
+	if err := json.Unmarshal(stdout.Bytes(), &ack); err != nil {
+		t.Fatalf("unmarshal SignalAck: %v\nstdout=%q", err, stdout.String())
+	}
+	if ack.Error == nil || ack.Error.Code != "invalid_input" {
+		t.Fatalf("error = %#v, want invalid_input", ack.Error)
 	}
 }
 
@@ -91,6 +194,9 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	if preview.Control.ArtifactDir != artifactDir {
 		t.Fatalf("control.artifact_dir = %q, want %q", preview.Control.ArtifactDir, artifactDir)
 	}
+	if preview.DispatchSpec.ResponseMaxChars != 16000 {
+		t.Fatalf("dispatch_spec.response_max_chars = %d, want 16000", preview.DispatchSpec.ResponseMaxChars)
+	}
 	if len(preview.PromptPreamble) != 3 {
 		t.Fatalf("prompt_preamble len = %d, want 3 (%v)", len(preview.PromptPreamble), preview.PromptPreamble)
 	}
@@ -140,9 +246,6 @@ func TestDispatchTTYConfirmationCancelsBeforeDispatch(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), `"kind":"preview"`) {
 		t.Fatalf("stderr = %q, want preview JSON", stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "dispatch cancelled") {
-		t.Fatalf("stderr = %q, want cancellation message", stderr.String())
 	}
 	result := decodeResult(t, stdout.Bytes())
 	if result.Status != types.StatusFailed {
@@ -379,14 +482,21 @@ func TestExplicitPreviewLikeCommandShowsLiteralPromptGuidance(t *testing.T) {
 			if exitCode != 1 {
 				t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 			}
-			if stdout.Len() != 0 {
-				t.Fatalf("stdout = %q, want empty", stdout.String())
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
-			if !strings.Contains(stderr.String(), fmt.Sprintf("If you meant the literal prompt %q", tc.command)) {
-				t.Fatalf("stderr = %q, want literal prompt guidance", stderr.String())
+			result := decodeResult(t, stdout.Bytes())
+			if result.Error == nil || result.Error.Code != "invalid_args" {
+				t.Fatalf("error = %#v, want invalid_args", result.Error)
 			}
-			if !strings.Contains(stderr.String(), fmt.Sprintf("agent-mux -- %s", tc.command)) {
-				t.Fatalf("stderr = %q, want -- escape hatch guidance", stderr.String())
+			if result.Error.Message != "missing prompt: provide the first positional arg or --prompt-file" {
+				t.Fatalf("error.message = %q, want missing prompt", result.Error.Message)
+			}
+			if !strings.Contains(result.Error.Suggestion, fmt.Sprintf("If you meant the literal prompt %q", tc.command)) {
+				t.Fatalf("error.suggestion = %q, want literal prompt guidance", result.Error.Suggestion)
+			}
+			if !strings.Contains(result.Error.Suggestion, fmt.Sprintf("agent-mux -- %s", tc.command)) {
+				t.Fatalf("error.suggestion = %q, want -- escape hatch guidance", result.Error.Suggestion)
 			}
 		})
 	}
@@ -896,13 +1006,44 @@ timeout = 900
 	if result.Metadata.Engine != "claude" || result.Metadata.Model != "claude-sonnet-4-6" {
 		t.Fatalf("metadata = %#v, want variant engine/model", result.Metadata)
 	}
-
-	previewIdx := strings.Index(stderr.String(), `"kind":"preview"`)
-	if previewIdx == -1 {
-		t.Fatalf("stderr = %q, want preview JSON", stderr.String())
+	if strings.Contains(stderr.String(), `"kind":"preview"`) {
+		t.Fatalf("stderr = %q, want no preview JSON in --stdin mode", stderr.String())
 	}
-	if !strings.Contains(stderr.String(), `"variant":"claude"`) {
-		t.Fatalf("stderr = %q, want variant in preview output", stderr.String())
+}
+
+func TestStdinModeDefaultsYesForTTY(t *testing.T) {
+	isolateHome(t)
+
+	t.Setenv("PATH", t.TempDir())
+
+	input := map[string]any{
+		"dispatch_id":  "stdin-defaults-yes",
+		"engine":       "codex",
+		"prompt":       "from stdin",
+		"cwd":          t.TempDir(),
+		"artifact_dir": filepath.Join(t.TempDir(), "artifacts") + "/",
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithTerminalCheck([]string{"--stdin"}, bytes.NewReader(data), &stdout, &stderr, func(any) bool { return true })
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if strings.Contains(stderr.String(), `"kind":"preview"`) {
+		t.Fatalf("stderr = %q, want no preview JSON when --stdin defaults --yes", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Proceed with dispatch?") {
+		t.Fatalf("stderr = %q, want no confirmation prompt when --stdin defaults --yes", stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found", result.Error)
 	}
 }
 
@@ -940,7 +1081,11 @@ func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
 	if specCwdReal != workingDirReal {
 		t.Fatalf("cwd = %q (%q), want %q (%q)", spec.Cwd, specCwdReal, workingDir, workingDirReal)
 	}
-	if spec.ArtifactDir != filepath.ToSlash(recovery.DefaultArtifactDir(spec.DispatchID))+"/" {
+	defaultArtifactDir, err := recovery.DefaultArtifactDir(spec.DispatchID)
+	if err != nil {
+		t.Fatalf("DefaultArtifactDir: %v", err)
+	}
+	if spec.ArtifactDir != filepath.ToSlash(defaultArtifactDir)+"/" {
 		t.Fatalf("artifact_dir = %q, want default path", spec.ArtifactDir)
 	}
 	if !spec.AllowSubdispatch {
@@ -961,7 +1106,7 @@ func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
 }
 
 func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndZero(t *testing.T) {
-	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","allow_subdispatch":false,"full_access":false,"pipeline_step":0,"grace_sec":0}`))
+	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","allow_subdispatch":false,"full_access":false,"pipeline_step":0,"grace_sec":0,"response_max_chars":0}`))
 	if err != nil {
 		t.Fatalf("decodeStdinDispatchSpec: %v", err)
 	}
@@ -977,6 +1122,9 @@ func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndZero(t *testing.T) {
 	}
 	if spec.GraceSec != 0 {
 		t.Fatalf("grace_sec = %d, want 0", spec.GraceSec)
+	}
+	if spec.ResponseMaxChars != 0 {
+		t.Fatalf("response_max_chars = %d, want 0", spec.ResponseMaxChars)
 	}
 }
 
@@ -997,6 +1145,72 @@ func TestDecodeStdinDispatchSpecRejectsConflictingProfileAlias(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "conflicting profile values") {
 		t.Fatalf("error = %q, want conflicting profile values", err)
+	}
+}
+
+func TestDecodeStdinDispatchSpecRejectsInvalidDispatchID(t *testing.T) {
+	_, err := decodeStdinDispatchSpec(strings.NewReader(`{"dispatch_id":"../bad","engine":"codex","prompt":"from stdin"}`))
+	if err == nil {
+		t.Fatal("decodeStdinDispatchSpec error = nil, want invalid dispatch_id")
+	}
+	if !strings.Contains(err.Error(), `invalid dispatch_id "../bad"`) {
+		t.Fatalf("error = %q, want invalid dispatch_id message", err)
+	}
+}
+
+func TestDecodeStdinDispatchSpecRejectsInvalidCoordinatorAliasBeforeConflictResolution(t *testing.T) {
+	_, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","profile":"planner","coordinator":"../legacy"}`))
+	if err == nil {
+		t.Fatal("decodeStdinDispatchSpec error = nil, want invalid coordinator")
+	}
+	if !strings.Contains(err.Error(), `invalid coordinator "../legacy"`) {
+		t.Fatalf("error = %q, want invalid coordinator message", err)
+	}
+}
+
+func TestRunStdinRejectsInvalidDispatchID(t *testing.T) {
+	input := []byte(`{"dispatch_id":"../bad","engine":"codex","prompt":"from stdin"}`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--stdin"}, bytes.NewReader(input), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_input" {
+		t.Fatalf("error = %#v, want invalid_input", result.Error)
+	}
+}
+
+func TestRunPreviewRejectsInvalidSkillName(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"preview", "--engine", "codex", "--skill", "../bad", "hello"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_input" {
+		t.Fatalf("error = %#v, want invalid_input", result.Error)
+	}
+}
+
+func TestRunPreviewRejectsInvalidCoordinatorName(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"preview", "--engine", "codex", "--profile", "planner", "--coordinator", "../legacy", "hello"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_input" {
+		t.Fatalf("error = %#v, want invalid_input", result.Error)
 	}
 }
 
@@ -1474,16 +1688,17 @@ type previewResultForTest struct {
 	SchemaVersion int    `json:"schema_version"`
 	Kind          string `json:"kind"`
 	DispatchSpec  struct {
-		DispatchID string   `json:"dispatch_id"`
-		Engine     string   `json:"engine"`
-		Model      string   `json:"model"`
-		Effort     string   `json:"effort"`
-		Role       string   `json:"role"`
-		Variant    string   `json:"variant"`
-		Profile    string   `json:"profile"`
-		TraceToken string   `json:"trace_token"`
-		TimeoutSec int      `json:"timeout_sec"`
-		Skills     []string `json:"skills"`
+		DispatchID       string   `json:"dispatch_id"`
+		Engine           string   `json:"engine"`
+		Model            string   `json:"model"`
+		Effort           string   `json:"effort"`
+		Role             string   `json:"role"`
+		Variant          string   `json:"variant"`
+		Profile          string   `json:"profile"`
+		TraceToken       string   `json:"trace_token"`
+		TimeoutSec       int      `json:"timeout_sec"`
+		ResponseMaxChars int      `json:"response_max_chars"`
+		Skills           []string `json:"skills"`
 	} `json:"dispatch_spec"`
 	Prompt struct {
 		Excerpt           string `json:"excerpt"`
@@ -1884,6 +2099,30 @@ func TestRoleSkillsStdinMerge(t *testing.T) {
 	want := []string{"web-search", "pratchett-read"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("skills = %#v, want %#v", got, want)
+	}
+}
+
+func TestPreviewStdinPreservesExplicitZeroResponseMaxChars(t *testing.T) {
+	input := map[string]any{
+		"engine":             "codex",
+		"prompt":             "from stdin",
+		"response_max_chars": 0,
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"preview", "--stdin"}, bytes.NewReader(data), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	preview := decodePreviewResult(t, stdout.Bytes())
+	if preview.DispatchSpec.ResponseMaxChars != 0 {
+		t.Fatalf("dispatch_spec.response_max_chars = %d, want 0", preview.DispatchSpec.ResponseMaxChars)
 	}
 }
 

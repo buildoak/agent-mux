@@ -3,6 +3,7 @@ package engine
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -77,9 +78,19 @@ func (e *LoopEngine) scanHarnessOutput(stdout io.Reader, runGen uint64, artifact
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil {
+	if err := scanner.Err(); err != nil && !isIgnorableStreamScanErr(err) {
 		signals <- loopSignal{kind: loopSignalScanError, runGen: runGen, err: err}
 	}
+}
+
+func isIgnorableStreamScanErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrClosed) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "file already closed")
 }
 
 func NewLoopEngine(adapter types.HarnessAdapter, eventWriter io.Writer, hookEval *hooks.Evaluator) *LoopEngine {
@@ -656,9 +667,13 @@ func emptyActivity() *types.DispatchActivity {
 }
 
 func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS, spec.ResponseMaxChars)
+	if emitter != nil && result.ResponseTruncated && result.FullOutputPath != nil {
+		_ = emitter.EmitResponseTruncated(*result.FullOutputPath)
+	}
+	_ = dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", result.Artifacts)
 	_ = emitter.EmitDispatchEnd("completed", durationMS)
-	_ = dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", dispatch.ScanArtifacts(spec.ArtifactDir))
-	return dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS, spec.ResponseMaxChars)
+	return result
 }
 
 func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {

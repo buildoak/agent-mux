@@ -26,6 +26,7 @@ import (
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/pipeline"
 	"github.com/buildoak/agent-mux/internal/recovery"
+	"github.com/buildoak/agent-mux/internal/sanitize"
 	"github.com/buildoak/agent-mux/internal/types"
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/term"
@@ -33,6 +34,7 @@ import (
 
 const version = "agent-mux v2.0.0-dev"
 const contextFilePromptPreamble = "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting."
+const unsetResponseMaxChars = -1
 
 type cliCommand string
 
@@ -97,7 +99,7 @@ type previewDispatchSpec struct {
 	MaxDepth            int      `json:"max_depth,omitempty"`
 	AllowSubdispatch    bool     `json:"allow_subdispatch"`
 	ContinuesDispatchID string   `json:"continues_dispatch_id,omitempty"`
-	ResponseMaxChars    int      `json:"response_max_chars,omitempty"`
+	ResponseMaxChars    int      `json:"response_max_chars"`
 	FullAccess          bool     `json:"full_access"`
 }
 
@@ -111,6 +113,14 @@ type previewPrompt struct {
 type previewControl struct {
 	ControlRecord string `json:"control_record"`
 	ArtifactDir   string `json:"artifact_dir"`
+}
+
+type SignalAck struct {
+	Status      string               `json:"status"`
+	DispatchID  string               `json:"dispatch_id,omitempty"`
+	ArtifactDir string               `json:"artifact_dir,omitempty"`
+	Message     string               `json:"message,omitempty"`
+	Error       *types.DispatchError `json:"error,omitempty"`
 }
 
 type terminalChecker func(any) bool
@@ -130,88 +140,95 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writer, isTerminal terminalChecker) int {
 	command, args, explicitCommand := splitCommand(args)
-	fs, parsed := newFlagSet(stderr)
+	var flagOutput bytes.Buffer
+	fs, parsed := newFlagSet(&flagOutput)
 	err := fs.Parse(normalizeArgs(args))
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			emitResult(stdout, map[string]any{
+				"kind":  "help",
+				"usage": strings.TrimSpace(flagOutput.String()),
+			})
 			return 0
 		}
-		fmt.Fprintln(stderr, err)
+		emitResult(stdout, buildFailedResult(&types.DispatchSpec{}, "invalid_args", err.Error(), strings.TrimSpace(flagOutput.String())))
 		return 2
 	}
 	flags := *parsed
 	positional := fs.Args()
+	flagsSet := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		flagsSet[f.Name] = true
+	})
+	flags.signal = strings.TrimSpace(flags.signal)
+	if flags.stdin && !flagsSet["yes"] {
+		flags.yes = true
+	}
 
 	if flags.version {
-		fmt.Fprintln(stdout, version)
+		emitResult(stdout, map[string]any{"version": version})
 		return 0
 	}
 	if flags.signal != "" {
+		if err := sanitize.ValidateDispatchID(flags.signal); err != nil {
+			emitResult(stdout, buildSignalErrorAck(flags.signal, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", flags.signal, err), "Provide a dispatch ID without path separators or traversal segments."))
+			return 1
+		}
 		if len(positional) == 0 {
-			fmt.Fprintln(stderr, "--signal requires a message as the first positional argument")
+			emitResult(stdout, buildSignalErrorAck(flags.signal, "invalid_args", "--signal requires a message as the first positional argument", "Provide the signal message as the first positional argument."))
 			return 2
 		}
 		msg := positional[0]
 		artifactDir, err := recovery.ResolveArtifactDir(flags.signal)
 		if err != nil {
-			fmt.Fprintf(stderr, "signal: %v\n", err)
+			emitResult(stdout, buildSignalErrorAck(flags.signal, "recovery_failed", err.Error(), "Check the dispatch ID and control record, then retry."))
 			return 1
 		}
 		if err := inbox.WriteInbox(artifactDir, msg); err != nil {
-			fmt.Fprintf(stderr, "signal: %v\n", err)
+			emitResult(stdout, buildSignalErrorAck(flags.signal, "config_error", err.Error(), "Ensure the inbox path is writable and retry."))
 			return 1
 		}
-		writeSignalResult(stdout, flags.signal, artifactDir)
+		emitResult(stdout, buildSignalAck(flags.signal, artifactDir))
 		return 0
 	}
 	if explicitCommand && !flags.stdin && flags.promptFile == "" && len(positional) == 0 {
-		fmt.Fprintf(stderr, "missing prompt: provide the first positional arg or --prompt-file\nIf you meant the literal prompt %q, pass it after -- (for example: agent-mux -- %s) or use --prompt-file/--stdin.\n", command, command)
-		return 1
+		return emitFailureResult(stdout, &types.DispatchSpec{}, 1, "invalid_args",
+			fmt.Sprintf("missing prompt: provide the first positional arg or --prompt-file"),
+			fmt.Sprintf("If you meant the literal prompt %q, pass it after -- (for example: agent-mux -- %s) or use --prompt-file/--stdin.", command, command))
 	}
 
 	failResult := func(spec *types.DispatchSpec, code, msg, suggestion string) int {
-		result := dispatch.BuildFailedResult(
-			spec,
-			dispatch.NewDispatchError(code, msg, suggestion),
-			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Tokens: &types.TokenUsage{}},
-			0,
-		)
-		if flags.output == "text" {
-			writeTextResult(stdout, result)
-		} else {
-			writeResult(stdout, result)
-		}
-		return 1
+		return emitFailureResult(stdout, spec, 1, code, msg, suggestion)
 	}
 
 	var spec *types.DispatchSpec
 	if flags.stdin {
 		spec, err = decodeStdinDispatchSpec(stdin)
 		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
+			code := "invalid_args"
+			if isInputValidationError(err) {
+				code = "invalid_input"
+			}
+			return emitFailureResult(stdout, &types.DispatchSpec{}, 1, code, err.Error(), "")
 		}
 	} else {
+		normalizeDispatchFlags(&flags)
+		if err := validateDispatchFlags(flags); err != nil {
+			return emitFailureResult(stdout, &types.DispatchSpec{}, 1, "invalid_input", err.Error(), "")
+		}
 		spec, err = buildDispatchSpecE(flags, positional)
 		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
+			return emitFailureResult(stdout, &types.DispatchSpec{}, 1, "invalid_args", err.Error(), "")
 		}
 	}
 
-	flagsSet := make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) {
-		flagsSet[f.Name] = true
-	})
 	if flags.stdin && stdinDispatchFlagsSet(flagsSet) {
 		fmt.Fprintf(stderr, "Warning: --stdin mode active; CLI dispatch flags are ignored.\n")
 	}
 
 	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
 	if err != nil {
-		fmt.Fprintf(stderr, "load config: %v\n", err)
-		return 1
+		return emitFailureResult(stdout, spec, 1, "config_error", fmt.Sprintf("load config: %v", err), "")
 	}
 
 	applyPreset := func(engine, model, effort string) {
@@ -322,7 +339,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if spec.Effort == "" {
 		spec.Effort = "high"
 	}
-	if spec.ResponseMaxChars == 0 {
+	if spec.ResponseMaxChars < 0 {
 		spec.ResponseMaxChars = cfg.Defaults.ResponseMaxChars
 	}
 	if spec.MaxDepth == 0 {
@@ -390,8 +407,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if recoverDispatchID != "" {
 		recoveryCtx, err := recovery.RecoverDispatch(recoverDispatchID)
 		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
+			return emitFailureResult(stdout, spec, 1, "recovery_failed", err.Error(), "")
 		}
 		spec.ContinuesDispatchID = recoverDispatchID
 		spec.Prompt = recovery.BuildRecoveryPrompt(recoveryCtx, spec.Prompt)
@@ -428,7 +444,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	preview := buildPreviewResult(spec, shouldRequireConfirmation(flags.yes, stdin, stdout, stderr, isTerminal))
 	if command == commandPreview {
-		writeJSON(stdout, preview)
+		emitResult(stdout, preview)
 		return 0
 	}
 	if !flags.yes {
@@ -437,17 +453,10 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if preview.ConfirmationRequired {
 		confirmed, err := confirmTTYDispatch(stdin, stderr)
 		if err != nil {
-			fmt.Fprintf(stderr, "confirmation: %v\n", err)
-			return 1
+			return emitFailureResult(stdout, spec, 1, "config_error", fmt.Sprintf("confirmation: %v", err), "")
 		}
 		if !confirmed {
-			result := buildCancelledResult(spec)
-			if flags.output == "text" {
-				writeTextResult(stdout, result)
-			} else {
-				writeResult(stdout, result)
-			}
-			fmt.Fprintln(stderr, "dispatch cancelled")
+			emitResult(stdout, buildCancelledResult(spec))
 			return exitCodeCancelled
 		}
 	}
@@ -460,21 +469,16 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
-		writePipelineResult(stdout, result)
+		emitResult(stdout, result)
 		return 0
 	}
 
 	result, err := dispatchSpec(ctx, spec, cfg, stderr, flags.verbose, hookEval)
 	if err != nil {
-		fmt.Fprintf(stderr, "dispatch error: %v\n", err)
-		return 1
+		return emitFailureResult(stdout, spec, 1, "process_killed", err.Error(), "")
 	}
 
-	if flags.output == "text" {
-		writeTextResult(stdout, result)
-	} else {
-		writeResult(stdout, result)
-	}
+	emitResult(stdout, result)
 	return 0
 }
 
@@ -596,21 +600,33 @@ func prependSystemPrompt(prefix, existing string) string {
 	}
 }
 
-func writeResult(w io.Writer, result *types.DispatchResult) {
-	writeJSON(w, result)
-}
-
-func writeJSON(w io.Writer, v any) {
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(v)
+func emitResult(w io.Writer, result interface{}) {
+	payload := result
+	switch value := result.(type) {
+	case nil:
+		payload = buildFailedResult(&types.DispatchSpec{}, "internal_error", "missing terminal result", "")
+	case *types.DispatchResult:
+		if value == nil {
+			payload = buildFailedResult(&types.DispatchSpec{}, "internal_error", "missing dispatch result", "")
+		}
+	case *pipeline.PipelineResult:
+		if value == nil {
+			payload = buildFailedResult(&types.DispatchSpec{}, "internal_error", "missing pipeline result", "")
+		}
+	case *SignalAck:
+		if value == nil {
+			payload = buildSignalErrorAck("", "internal_error", "missing signal acknowledgement", "")
+		}
+	}
+	writeCompactJSON(w, payload)
 }
 
 func writeCompactJSON(w io.Writer, v any) {
-	enc := json.NewEncoder(w)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(v)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func writeTextResult(w io.Writer, result *types.DispatchResult) {
@@ -636,13 +652,108 @@ func writeTextResult(w io.Writer, result *types.DispatchResult) {
 	}
 }
 
-func writeSignalResult(w io.Writer, dispatchID, artifactDir string) {
-	writeJSON(w, map[string]any{
-		"status":       "ok",
-		"dispatch_id":  dispatchID,
-		"artifact_dir": artifactDir,
-		"message":      "Signal delivered to inbox",
-	})
+func buildSignalAck(dispatchID, artifactDir string) SignalAck {
+	return SignalAck{
+		Status:      "ok",
+		DispatchID:  dispatchID,
+		ArtifactDir: artifactDir,
+		Message:     "Signal delivered to inbox",
+	}
+}
+
+func buildSignalErrorAck(dispatchID, code, message, suggestion string) SignalAck {
+	return SignalAck{
+		Status:     "error",
+		DispatchID: dispatchID,
+		Message:    message,
+		Error:      dispatch.NewDispatchError(code, message, suggestion),
+	}
+}
+
+func buildFailedResult(spec *types.DispatchSpec, code, msg, suggestion string) *types.DispatchResult {
+	if spec == nil {
+		spec = &types.DispatchSpec{}
+	}
+	return dispatch.BuildFailedResult(
+		spec,
+		dispatch.NewDispatchError(code, msg, suggestion),
+		&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+		&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+		0,
+	)
+}
+
+func emitFailureResult(stdout io.Writer, spec *types.DispatchSpec, exitCode int, code, msg, suggestion string) int {
+	emitResult(stdout, buildFailedResult(spec, code, msg, suggestion))
+	return exitCode
+}
+
+func normalizeDispatchFlags(flags *cliFlags) {
+	if flags == nil {
+		return
+	}
+
+	flags.profile = strings.TrimSpace(flags.profile)
+	flags.coordinator = strings.TrimSpace(flags.coordinator)
+	for i, name := range flags.skills {
+		flags.skills[i] = strings.TrimSpace(name)
+	}
+}
+
+func validateDispatchFlags(flags cliFlags) error {
+	for _, name := range flags.skills {
+		if err := sanitize.ValidateBasename(name); err != nil {
+			return newInputValidationError("skill", name, err)
+		}
+	}
+	for _, field := range []struct {
+		label string
+		value string
+	}{
+		{label: "profile", value: flags.profile},
+		{label: "coordinator", value: flags.coordinator},
+	} {
+		if field.value == "" {
+			continue
+		}
+		if err := sanitize.ValidateBasename(field.value); err != nil {
+			return newInputValidationError(field.label, field.value, err)
+		}
+	}
+	return nil
+}
+
+type inputValidationError struct {
+	field string
+	value string
+	err   error
+}
+
+func (e *inputValidationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("invalid %s %q: %v", e.field, e.value, e.err)
+}
+
+func (e *inputValidationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func newInputValidationError(field, value string, err error) error {
+	return &inputValidationError{
+		field: field,
+		value: value,
+		err:   err,
+	}
+}
+
+func isInputValidationError(err error) bool {
+	var target *inputValidationError
+	return errors.As(err, &target)
 }
 
 func decodeStdinDispatchSpec(stdin io.Reader) (*types.DispatchSpec, error) {
@@ -657,6 +768,9 @@ func decodeStdinDispatchSpec(stdin io.Reader) (*types.DispatchSpec, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return nil, fmt.Errorf("parse stdin JSON: %w", err)
+	}
+	if err := validateStdinProfileAliases(fields); err != nil {
+		return nil, err
 	}
 
 	var spec types.DispatchSpec
@@ -675,8 +789,27 @@ func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]js
 	}
 
 	spec.DispatchID = strings.TrimSpace(spec.DispatchID)
+	if spec.DispatchID != "" {
+		if err := sanitize.ValidateDispatchID(spec.DispatchID); err != nil {
+			return newInputValidationError("dispatch_id", spec.DispatchID, err)
+		}
+	}
 	if spec.DispatchID == "" {
 		spec.DispatchID = ulid.Make().String()
+	}
+
+	spec.Profile = strings.TrimSpace(spec.Profile)
+	if spec.Profile != "" {
+		if err := sanitize.ValidateBasename(spec.Profile); err != nil {
+			return newInputValidationError("profile", spec.Profile, err)
+		}
+	}
+	for i, name := range spec.Skills {
+		name = strings.TrimSpace(name)
+		if err := sanitize.ValidateBasename(name); err != nil {
+			return newInputValidationError("skill", name, err)
+		}
+		spec.Skills[i] = name
 	}
 
 	if strings.TrimSpace(spec.Prompt) == "" {
@@ -694,7 +827,11 @@ func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]js
 
 	spec.ArtifactDir = strings.TrimSpace(spec.ArtifactDir)
 	if spec.ArtifactDir == "" {
-		spec.ArtifactDir = filepath.ToSlash(recovery.DefaultArtifactDir(spec.DispatchID)) + "/"
+		artifactDir, err := recovery.DefaultArtifactDir(spec.DispatchID)
+		if err != nil {
+			return fmt.Errorf("default artifact dir for dispatch %q: %w", spec.DispatchID, err)
+		}
+		spec.ArtifactDir = filepath.ToSlash(artifactDir) + "/"
 	}
 
 	if !jsonFieldSet(fields, "allow_subdispatch") {
@@ -709,10 +846,40 @@ func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]js
 	if !jsonFieldSet(fields, "grace_sec") {
 		spec.GraceSec = 60
 	}
+	if !jsonFieldSet(fields, "response_max_chars") {
+		spec.ResponseMaxChars = unsetResponseMaxChars
+	}
 	if !jsonFieldSet(fields, "handoff_mode") && spec.HandoffMode == "" {
 		spec.HandoffMode = "summary_and_refs"
 	}
 
+	return nil
+}
+
+func validateStdinProfileAliases(fields map[string]json.RawMessage) error {
+	for _, field := range []struct {
+		label string
+		key   string
+	}{
+		{label: "profile", key: "profile"},
+		{label: "coordinator", key: "coordinator"},
+	} {
+		raw, ok := fields[field.key]
+		if !ok {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if err := sanitize.ValidateBasename(value); err != nil {
+			return newInputValidationError(field.label, value, err)
+		}
+	}
 	return nil
 }
 
@@ -866,12 +1033,13 @@ func isTerminalStream(stream any) bool {
 
 func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	flags := &cliFlags{
-		effort:    "",
-		full:      true,
-		maxDepth:  2,
-		output:    "json",
-		sandbox:   "danger-full-access",
-		reasoning: "medium",
+		effort:           "",
+		full:             true,
+		maxDepth:         2,
+		output:           "json",
+		responseMaxChars: unsetResponseMaxChars,
+		sandbox:          "danger-full-access",
+		reasoning:        "medium",
 	}
 
 	fs := flag.NewFlagSet("agent-mux", flag.ContinueOnError)
@@ -905,7 +1073,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	fs.StringVar(&flags.permissionMode, "permission-mode", "", "Permission mode")
 	fs.BoolVar(&flags.stdin, "stdin", false, "Read DispatchSpec JSON from stdin")
 	fs.BoolVar(&flags.yes, "yes", false, "Skip interactive confirmation for TTY dispatches")
-	fs.IntVar(&flags.responseMaxChars, "response-max-chars", 0, "Maximum response characters")
+	fs.IntVar(&flags.responseMaxChars, "response-max-chars", flags.responseMaxChars, "Maximum response characters")
 	bindBool(fs, &flags.version, "Show version", false, "version", "V")
 	fs.StringVar(&flags.sandbox, "sandbox", flags.sandbox, "Sandbox mode")
 	bindStr(fs, &flags.reasoning, "Reasoning effort", flags.reasoning, "reasoning", "r")
@@ -969,7 +1137,11 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 
 	artifactDir := flags.artifactDir
 	if artifactDir == "" {
-		artifactDir = filepath.ToSlash(recovery.DefaultArtifactDir(dispatchID)) + "/"
+		artifactDirPath, err := recovery.DefaultArtifactDir(dispatchID)
+		if err != nil {
+			return nil, fmt.Errorf("default artifact dir for dispatch %q: %w", dispatchID, err)
+		}
+		artifactDir = filepath.ToSlash(artifactDirPath) + "/"
 	}
 
 	fullAccess := flags.full
@@ -1111,10 +1283,6 @@ func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...stri
 	for _, name := range names {
 		fs.BoolVar(dst, name, def, usage)
 	}
-}
-
-func writePipelineResult(w io.Writer, result *pipeline.PipelineResult) {
-	writeJSON(w, result)
 }
 
 func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseSpec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool) (*pipeline.PipelineResult, error) {

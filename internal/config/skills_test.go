@@ -142,6 +142,18 @@ func TestLoadSkillsEmptyNames(t *testing.T) {
 	}
 }
 
+func TestLoadSkillsRejectsInvalidName(t *testing.T) {
+	cwd := t.TempDir()
+
+	_, _, err := LoadSkills([]string{"../bad"}, cwd)
+	if err == nil {
+		t.Fatal("LoadSkills error = nil, want invalid skill name")
+	}
+	if !strings.Contains(err.Error(), `invalid skill name "../bad"`) {
+		t.Fatalf("error = %q, want invalid skill name message", err)
+	}
+}
+
 func TestLoadSkillsSecondSkillHasScriptsDir(t *testing.T) {
 	cwd := t.TempDir()
 	writeSkillFile(t, cwd, "go", "Go only.")

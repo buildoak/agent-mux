@@ -40,6 +40,7 @@ type Event struct {
 	Status         string   `json:"status,omitempty"`
 	SilenceSeconds int      `json:"silence_seconds,omitempty"`
 	ErrorCode      string   `json:"error_code,omitempty"`
+	FullOutputPath string   `json:"full_output_path,omitempty"`
 }
 type Emitter struct {
 	mu          sync.Mutex
@@ -148,6 +149,9 @@ func (e *Emitter) EmitFrozenWarning(silenceSeconds int, message string) error {
 }
 func (e *Emitter) EmitError(code, message string) error {
 	return e.emitType("error", Event{ErrorCode: code, Message: message})
+}
+func (e *Emitter) EmitResponseTruncated(fullOutputPath string) error {
+	return e.emitType("response_truncated", Event{FullOutputPath: fullOutputPath})
 }
 func (e *Emitter) HeartbeatTicker(intervalSec int) (stop func(), updateActivity func(string)) {
 	ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)

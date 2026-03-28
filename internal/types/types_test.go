@@ -55,6 +55,9 @@ func TestDispatchResultCompleted(t *testing.T) {
 	if decoded.FullOutput != nil {
 		t.Errorf("full_output should be nil")
 	}
+	if decoded.FullOutputPath != nil {
+		t.Errorf("full_output_path should be nil")
+	}
 	if decoded.Error != nil {
 		t.Errorf("error should be nil for completed")
 	}
@@ -181,12 +184,13 @@ func TestFullOutputNullMarshal(t *testing.T) {
 func TestFullOutputStringMarshal(t *testing.T) {
 	path := "/tmp/agent-mux/01JQXYZ/full_output.md"
 	r := &DispatchResult{
-		SchemaVersion: 1,
-		Status:        StatusCompleted,
-		FullOutput:    &path,
-		Artifacts:     []string{},
-		Activity:      &DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-		Metadata:      &DispatchMetadata{Engine: "codex", Tokens: &TokenUsage{}},
+		SchemaVersion:  1,
+		Status:         StatusCompleted,
+		FullOutput:     &path,
+		FullOutputPath: &path,
+		Artifacts:      []string{},
+		Activity:       &DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+		Metadata:       &DispatchMetadata{Engine: "codex", Tokens: &TokenUsage{}},
 	}
 
 	data, err := json.Marshal(r)
@@ -200,6 +204,9 @@ func TestFullOutputStringMarshal(t *testing.T) {
 	}
 	if decoded.FullOutput == nil || *decoded.FullOutput != path {
 		t.Errorf("full_output = %v, want %q", decoded.FullOutput, path)
+	}
+	if decoded.FullOutputPath == nil || *decoded.FullOutputPath != path {
+		t.Errorf("full_output_path = %v, want %q", decoded.FullOutputPath, path)
 	}
 }
 
@@ -223,7 +230,7 @@ func TestOmitemptyFields(t *testing.T) {
 	}
 
 	// These should be omitted when zero-valued
-	for _, key := range []string{"partial", "recoverable", "reason", "error"} {
+	for _, key := range []string{"partial", "recoverable", "reason", "error", "full_output_path"} {
 		if _, exists := raw[key]; exists {
 			t.Errorf("%q should be omitted when zero-valued, got %s", key, string(raw[key]))
 		}

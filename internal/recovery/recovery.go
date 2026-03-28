@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
+	"github.com/buildoak/agent-mux/internal/sanitize"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -28,8 +29,8 @@ type controlRecord struct {
 	TraceToken   string `json:"trace_token,omitempty"`
 }
 
-func DefaultArtifactDir(dispatchID string) string {
-	return filepath.Join(legacyArtifactRoot, dispatchID)
+func DefaultArtifactDir(dispatchID string) (string, error) {
+	return artifactDirPath(dispatchID)
 }
 
 func RegisterDispatch(dispatchID, artifactDir string) error {
@@ -53,15 +54,11 @@ func RegisterDispatchSpec(spec *types.DispatchSpec) error {
 }
 
 func writeControlRecord(record controlRecord) error {
-	dispatchID := strings.TrimSpace(record.DispatchID)
+	dispatchID, err := validateDispatchID(record.DispatchID)
 	artifactDir := strings.TrimSpace(record.ArtifactDir)
 	record.DispatchID = dispatchID
 	record.ArtifactDir = artifactDir
-	dispatchID = strings.TrimSpace(dispatchID)
 	artifactDir = strings.TrimSpace(artifactDir)
-	if dispatchID == "" {
-		return fmt.Errorf("missing dispatch ID for control-path registration")
-	}
 	if artifactDir == "" {
 		return fmt.Errorf("missing artifact dir for dispatch %q", dispatchID)
 	}
@@ -80,7 +77,10 @@ func writeControlRecord(record controlRecord) error {
 		return fmt.Errorf("marshal control record: %w", err)
 	}
 
-	path := controlRecordPath(dispatchID)
+	path, err := controlRecordPathE(dispatchID)
+	if err != nil {
+		return err
+	}
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
 		return fmt.Errorf("write control record: %w", err)
@@ -93,12 +93,15 @@ func writeControlRecord(record controlRecord) error {
 }
 
 func ResolveArtifactDir(dispatchID string) (string, error) {
-	dispatchID = strings.TrimSpace(dispatchID)
-	if dispatchID == "" {
-		return "", fmt.Errorf("missing dispatch ID")
+	dispatchID, err := validateDispatchID(dispatchID)
+	if err != nil {
+		return "", err
 	}
 
-	recordPath := controlRecordPath(dispatchID)
+	recordPath, err := controlRecordPathE(dispatchID)
+	if err != nil {
+		return "", err
+	}
 	data, err := os.ReadFile(recordPath)
 	if err == nil {
 		var record controlRecord
@@ -114,7 +117,10 @@ func ResolveArtifactDir(dispatchID string) (string, error) {
 		return "", fmt.Errorf("read control record %q: %w", recordPath, err)
 	}
 
-	dir := DefaultArtifactDir(dispatchID)
+	dir, err := artifactDirPath(dispatchID)
+	if err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(dir); err == nil {
 		return dir, nil
 	} else if err != nil && !os.IsNotExist(err) {
@@ -165,11 +171,48 @@ func controlRoot() string {
 }
 
 func ControlRecordPath(dispatchID string) string {
-	return controlRecordPath(dispatchID)
+	path, err := controlRecordPathE(dispatchID)
+	if err != nil {
+		return filepath.Join(controlRoot(), url.PathEscape(strings.TrimSpace(dispatchID))+".json")
+	}
+	return path
 }
 
-func controlRecordPath(dispatchID string) string {
-	return filepath.Join(controlRoot(), url.PathEscape(dispatchID)+".json")
+func controlRecordPathE(dispatchID string) (string, error) {
+	dispatchID, err := validateDispatchID(dispatchID)
+	if err != nil {
+		return "", err
+	}
+
+	path, err := sanitize.SafeJoinPath(controlRoot(), url.PathEscape(dispatchID)+".json")
+	if err != nil {
+		return "", fmt.Errorf("build control record path for dispatch %q: %w", dispatchID, err)
+	}
+	return path, nil
+}
+
+func artifactDirPath(dispatchID string) (string, error) {
+	dispatchID, err := validateDispatchID(dispatchID)
+	if err != nil {
+		return "", err
+	}
+
+	path, err := sanitize.SafeJoinPath(legacyArtifactRoot, dispatchID)
+	if err != nil {
+		return "", fmt.Errorf("build artifact dir for dispatch %q: %w", dispatchID, err)
+	}
+	return path, nil
+}
+
+func validateDispatchID(dispatchID string) (string, error) {
+	dispatchID = strings.TrimSpace(dispatchID)
+	if dispatchID == "" {
+		return "", fmt.Errorf("missing dispatch ID")
+	}
+	if err := sanitize.ValidateDispatchID(dispatchID); err != nil {
+		return "", fmt.Errorf("invalid dispatch ID %q: %w", dispatchID, err)
+	}
+	return dispatchID, nil
 }
 
 func BuildRecoveryPrompt(ctx *RecoveryContext, additionalInstruction string) string {

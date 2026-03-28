@@ -268,6 +268,56 @@ func TestBuildCompletedResult(t *testing.T) {
 	}
 }
 
+func TestBuildCompletedResultTruncationIncludesFullOutputPath(t *testing.T) {
+	dir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID:  "01JQXYZ",
+		Salt:        "coral-fox-nine",
+		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
+		ArtifactDir: dir,
+	}
+	activity := &types.DispatchActivity{
+		FilesChanged: []string{},
+		FilesRead:    []string{},
+		CommandsRun:  []string{},
+		ToolCalls:    []string{},
+	}
+	metadata := &types.DispatchMetadata{
+		Engine: "codex",
+		Model:  "gpt-5.4",
+		Tokens: &types.TokenUsage{Input: 100, Output: 50},
+	}
+	response := "First sentence. Second sentence. Third sentence."
+
+	result := BuildCompletedResult(spec, response, activity, metadata, 5000, 20)
+
+	if !result.ResponseTruncated {
+		t.Fatal("response_truncated = false, want true")
+	}
+	if result.FullOutput == nil {
+		t.Fatal("full_output = nil, want path")
+	}
+	if result.FullOutputPath == nil {
+		t.Fatal("full_output_path = nil, want path")
+	}
+	if *result.FullOutput != *result.FullOutputPath {
+		t.Fatalf("full_output = %q, full_output_path = %q, want same path", *result.FullOutput, *result.FullOutputPath)
+	}
+	if !filepath.IsAbs(*result.FullOutputPath) {
+		t.Fatalf("full_output_path = %q, want absolute path", *result.FullOutputPath)
+	}
+	data, err := os.ReadFile(*result.FullOutputPath)
+	if err != nil {
+		t.Fatalf("read full_output: %v", err)
+	}
+	if string(data) != response {
+		t.Fatalf("full_output contents = %q, want %q", string(data), response)
+	}
+	if !containsArtifact(result.Artifacts, *result.FullOutputPath) {
+		t.Fatalf("artifacts = %#v, want full_output path %q", result.Artifacts, *result.FullOutputPath)
+	}
+}
+
 func TestBuildTimedOutResult(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
@@ -374,4 +424,13 @@ func TestLevenshtein(t *testing.T) {
 			t.Errorf("levenshtein(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
 		}
 	}
+}
+
+func containsArtifact(artifacts []string, want string) bool {
+	for _, artifact := range artifacts {
+		if artifact == want {
+			return true
+		}
+	}
+	return false
 }

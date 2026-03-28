@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -216,6 +217,57 @@ func TestLoopEngineResumeUnsupportedFailsDispatch(t *testing.T) {
 	}
 	if result.Error == nil || result.Error.Code != "resume_unsupported" {
 		t.Fatalf("error = %+v, want resume_unsupported", result.Error)
+	}
+}
+
+func TestLoopEngineEmitsResponseTruncatedEvent(t *testing.T) {
+	artifactDir := t.TempDir()
+	response := strings.Repeat("x", 64)
+	adapter := newScriptedAdapter(fmt.Sprintf("echo %q", "RESPONSE:"+response))
+
+	var stderr bytes.Buffer
+	engine := NewLoopEngine(adapter, &stderr, nil)
+
+	spec := testDispatchSpec(artifactDir)
+	spec.ResponseMaxChars = 16
+
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !result.ResponseTruncated {
+		t.Fatal("response_truncated = false, want true")
+	}
+	if result.FullOutputPath == nil {
+		t.Fatal("full_output_path = nil, want path")
+	}
+	if !filepath.IsAbs(*result.FullOutputPath) {
+		t.Fatalf("full_output_path = %q, want absolute path", *result.FullOutputPath)
+	}
+
+	fullOutputData, err := os.ReadFile(*result.FullOutputPath)
+	if err != nil {
+		t.Fatalf("read full_output: %v", err)
+	}
+	if string(fullOutputData) != response {
+		t.Fatalf("full_output = %q, want %q", string(fullOutputData), response)
+	}
+
+	eventsData, err := os.ReadFile(filepath.Join(artifactDir, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read events log: %v", err)
+	}
+	eventsText := string(eventsData)
+	if !strings.Contains(eventsText, `"type":"response_truncated"`) {
+		t.Fatalf("events log missing response_truncated: %s", eventsText)
+	}
+	if !strings.Contains(eventsText, `"full_output_path":"`+*result.FullOutputPath+`"`) {
+		t.Fatalf("events log missing full_output_path %q: %s", *result.FullOutputPath, eventsText)
+	}
+	truncatedIdx := strings.Index(eventsText, `"type":"response_truncated"`)
+	endIdx := strings.Index(eventsText, `"type":"dispatch_end"`)
+	if truncatedIdx < 0 || endIdx < 0 || truncatedIdx > endIdx {
+		t.Fatalf("event order = %q, want response_truncated before dispatch_end", eventsText)
 	}
 }
 
@@ -510,6 +562,20 @@ func TestScanHarnessOutputDeliversInboxSignalWhenChannelWasFull(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("scanner did not exit")
+	}
+}
+
+func TestIsIgnorableStreamScanErr(t *testing.T) {
+	t.Parallel()
+
+	if !isIgnorableStreamScanErr(os.ErrClosed) {
+		t.Fatal("os.ErrClosed should be ignored")
+	}
+	if !isIgnorableStreamScanErr(fmt.Errorf("read |0: %w", os.ErrClosed)) {
+		t.Fatal("wrapped os.ErrClosed should be ignored")
+	}
+	if isIgnorableStreamScanErr(io.EOF) {
+		t.Fatal("io.EOF should not be treated as an ignorable scanner error")
 	}
 }
 

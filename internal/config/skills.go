@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/buildoak/agent-mux/internal/sanitize"
 )
 
 // LoadSkills loads skill SKILL.md files by name and returns a concatenated prompt
@@ -21,6 +23,10 @@ func LoadSkills(names []string, cwd string) (prompt string, pathDirs []string, e
 	pathDirs = make([]string, 0)
 
 	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if err := sanitize.ValidateBasename(name); err != nil {
+			return "", nil, fmt.Errorf("invalid skill name %q: %w", name, err)
+		}
 		if _, ok := seen[name]; ok {
 			continue
 		}

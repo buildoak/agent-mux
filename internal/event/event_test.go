@@ -1,6 +1,7 @@
 package event
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -178,4 +179,30 @@ func TestEmitterWithoutLog(t *testing.T) {
 
 	// Should not panic even without log file
 	_ = emitter.EmitDispatchStart(&types.DispatchSpec{DispatchID: "01JQXYZ", Salt: "coral-fox-nine", TraceToken: "AGENT_MUX_GO_01JQXYZ", Engine: "codex", Model: "gpt-5.4"})
+}
+
+func TestEmitResponseTruncated(t *testing.T) {
+	var stream bytes.Buffer
+	fullOutputPath := filepath.Join(t.TempDir(), "full_output.md")
+
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", "AGENT_MUX_GO_01JQXYZ", &stream, "")
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	defer emitter.Close()
+
+	if err := emitter.EmitResponseTruncated(fullOutputPath); err != nil {
+		t.Fatalf("EmitResponseTruncated: %v", err)
+	}
+
+	var evt Event
+	if err := json.Unmarshal(bytes.TrimSpace(stream.Bytes()), &evt); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if evt.Type != "response_truncated" {
+		t.Fatalf("type = %q, want response_truncated", evt.Type)
+	}
+	if evt.FullOutputPath != fullOutputPath {
+		t.Fatalf("full_output_path = %q, want %q", evt.FullOutputPath, fullOutputPath)
+	}
 }

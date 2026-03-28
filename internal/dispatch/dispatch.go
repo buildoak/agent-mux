@@ -135,7 +135,11 @@ func WriteFullOutput(artifactDir, response string) (string, error) {
 	if err := os.WriteFile(path, []byte(response), 0644); err != nil {
 		return "", fmt.Errorf("write full output: %w", err)
 	}
-	return path, nil
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve full output path: %w", err)
+	}
+	return absPath, nil
 }
 func ExtractHandoffSummary(response string, maxChars int) string {
 	if maxChars <= 0 {
@@ -206,6 +210,7 @@ var ErrorCatalog = map[string]ErrorInfo{
 	"api_error":               {Suggestion: "Retry once. If it repeats, switch model or provider and include the provider error details.", Retryable: true},
 	"frozen_tool_call":        {Suggestion: "Worker may be stuck in a hanging command or tool call. Retry with a narrower task or longer timeout. Partial work was preserved.", Retryable: true},
 	"invalid_args":            {Suggestion: "Fix the dispatch arguments and retry. Check required fields such as engine, prompt, and working directory.", Retryable: true},
+	"invalid_input":           {Suggestion: "Provide dispatch inputs without path separators, traversal segments, or empty basenames, then retry.", Retryable: true},
 	"config_error":            {Suggestion: "Fix the referenced config or role definition, then retry the dispatch.", Retryable: true},
 	"process_killed":          {Suggestion: "Check harness stderr and recent events, then retry once the underlying process issue is resolved.", Retryable: true},
 	"recovery_failed":         {Message: "No artifacts found for the given dispatch ID.", Suggestion: "Previous dispatch may not have written artifacts. Check the artifact directory.", Retryable: false},
@@ -294,11 +299,12 @@ func BuildCompletedResult(spec *types.DispatchSpec, response string, activity *t
 	if responseMaxChars > 0 {
 		truncated, wasTruncated := TruncateResponse(response, responseMaxChars)
 		if wasTruncated {
-			result.Response = truncated
-			result.ResponseTruncated = true
 			fullPath, err := WriteFullOutput(spec.ArtifactDir, response)
 			if err == nil {
+				result.Response = truncated
+				result.ResponseTruncated = true
 				result.FullOutput = &fullPath
+				result.FullOutputPath = &fullPath
 			}
 		}
 	}

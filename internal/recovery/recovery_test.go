@@ -26,7 +26,10 @@ func TestRecoverDispatch_NotFound(t *testing.T) {
 
 func TestRecoverDispatch_ValidDir(t *testing.T) {
 	dispatchID := "valid-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
-	dir := DefaultArtifactDir(dispatchID)
+	dir, err := DefaultArtifactDir(dispatchID)
+	if err != nil {
+		t.Fatalf("DefaultArtifactDir: %v", err)
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -99,7 +102,7 @@ func TestResolveArtifactDirUsesAbsoluteRegisteredPath(t *testing.T) {
 		t.Fatalf("RegisterDispatch: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = os.Remove(controlRecordPath(dispatchID))
+		_ = os.Remove(ControlRecordPath(dispatchID))
 	})
 
 	if err := os.Chdir(otherDir); err != nil {
@@ -136,10 +139,10 @@ func TestRegisterDispatchSpecPersistsTraceability(t *testing.T) {
 		t.Fatalf("RegisterDispatchSpec: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = os.Remove(controlRecordPath(spec.DispatchID))
+		_ = os.Remove(ControlRecordPath(spec.DispatchID))
 	})
 
-	data, err := os.ReadFile(controlRecordPath(spec.DispatchID))
+	data, err := os.ReadFile(ControlRecordPath(spec.DispatchID))
 	if err != nil {
 		t.Fatalf("ReadFile(controlRecord): %v", err)
 	}
@@ -157,6 +160,22 @@ func TestRegisterDispatchSpecPersistsTraceability(t *testing.T) {
 	}
 	if record.TraceToken != spec.TraceToken {
 		t.Fatalf("trace_token = %q, want %q", record.TraceToken, spec.TraceToken)
+	}
+}
+
+func TestDefaultArtifactDirRejectsInvalidDispatchID(t *testing.T) {
+	if _, err := DefaultArtifactDir("../bad"); err == nil {
+		t.Fatal("DefaultArtifactDir error = nil, want invalid dispatch ID error")
+	}
+}
+
+func TestResolveArtifactDirRejectsInvalidDispatchID(t *testing.T) {
+	_, err := ResolveArtifactDir("../bad")
+	if err == nil {
+		t.Fatal("ResolveArtifactDir error = nil, want invalid dispatch ID error")
+	}
+	if !strings.Contains(err.Error(), "invalid dispatch ID") {
+		t.Fatalf("error = %q, want invalid dispatch ID message", err)
 	}
 }
 

@@ -165,6 +165,18 @@ func TestLoadCoordinatorNotFoundListsAvailable(t *testing.T) {
 	}
 }
 
+func TestLoadCoordinatorRejectsInvalidName(t *testing.T) {
+	cwd := t.TempDir()
+
+	_, _, err := LoadCoordinator("../planner", cwd)
+	if err == nil {
+		t.Fatal("LoadCoordinator error = nil, want invalid profile name")
+	}
+	if !strings.Contains(err.Error(), `invalid profile name "../planner"`) {
+		t.Fatalf("error = %q, want invalid profile name message", err)
+	}
+}
+
 func TestLoadCoordinatorSearchOrderProjectThenGlobal(t *testing.T) {
 	cwd := t.TempDir()
 	projectAgents := filepath.Join(cwd, ".claude", "agents")

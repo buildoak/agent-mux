@@ -24,6 +24,7 @@ type DispatchResult struct {
 	Response          string            `json:"response"`
 	ResponseTruncated bool              `json:"response_truncated"`
 	FullOutput        *string           `json:"full_output"`
+	FullOutputPath    *string           `json:"full_output_path,omitempty"`
 	HandoffSummary    string            `json:"handoff_summary"`
 	Artifacts         []string          `json:"artifacts"`
 	Partial           bool              `json:"partial,omitempty"`
