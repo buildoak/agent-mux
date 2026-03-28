@@ -71,7 +71,7 @@ type cliFlags struct {
 	permissionMode, sandbox, reasoning                                                              string
 	output, pipeline                                                                                string
 	timeout, maxDepth, responseMaxChars, maxTurns                                                   int
-	full, noFull, noSubdispatch, stdin, version, verbose, yes                                       bool
+	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes                            bool
 	skills, addDirs                                                                                 stringSlice
 }
 
@@ -99,6 +99,7 @@ type previewDispatchSpec struct {
 	Pipeline            string   `json:"pipeline,omitempty"`
 	Cwd                 string   `json:"cwd"`
 	Skills              []string `json:"skills,omitempty"`
+	SkipSkills          bool     `json:"skip_skills,omitempty"`
 	ContextFile         string   `json:"context_file,omitempty"`
 	ArtifactDir         string   `json:"artifact_dir"`
 	TimeoutSec          int      `json:"timeout_sec,omitempty"`
@@ -399,7 +400,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 	}
 
-	if len(spec.Skills) > 0 {
+	if len(spec.Skills) > 0 && !spec.SkipSkills {
 		skillPrompt, pathDirs, err := config.LoadSkills(spec.Skills, spec.Cwd, roleConfigDir, cfg.Skills.SearchPaths, roleName)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
@@ -1056,6 +1057,7 @@ func previewDispatchSpecFrom(spec *types.DispatchSpec) previewDispatchSpec {
 		Pipeline:            spec.Pipeline,
 		Cwd:                 spec.Cwd,
 		Skills:              append([]string(nil), spec.Skills...),
+		SkipSkills:          spec.SkipSkills,
 		ContextFile:         spec.ContextFile,
 		ArtifactDir:         spec.ArtifactDir,
 		TimeoutSec:          spec.TimeoutSec,
@@ -1192,7 +1194,8 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	fs.BoolVar(&flags.stdin, "stdin", false, "Read DispatchSpec JSON from stdin")
 	fs.BoolVar(&flags.yes, "yes", false, "Skip interactive confirmation for TTY dispatches")
 	fs.IntVar(&flags.responseMaxChars, "response-max-chars", flags.responseMaxChars, "Maximum response characters")
-	bindBool(fs, &flags.version, "Show version", false, "version", "V")
+	fs.BoolVar(&flags.skipSkills, "skip-skills", false, "Skip skill injection")
+	fs.BoolVar(&flags.version, "version", false, "Show version")
 	fs.StringVar(&flags.sandbox, "sandbox", flags.sandbox, "Sandbox mode")
 	bindStr(fs, &flags.reasoning, "Reasoning effort", flags.reasoning, "reasoning", "r")
 	fs.IntVar(&flags.maxTurns, "max-turns", 0, "Maximum turns")
@@ -1290,6 +1293,7 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 		SystemPrompt:     systemPrompt,
 		Cwd:              cwd,
 		Skills:           append([]string(nil), flags.skills...),
+		SkipSkills:       flags.skipSkills,
 		Profile:          profile,
 		Pipeline:         flags.pipeline,
 		ContextFile:      flags.contextFile,

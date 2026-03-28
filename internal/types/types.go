@@ -82,6 +82,7 @@ type DispatchSpec struct {
 	SystemPrompt        string         `json:"system_prompt,omitempty"`
 	Cwd                 string         `json:"cwd"`
 	Skills              []string       `json:"skills,omitempty"`
+	SkipSkills          bool           `json:"skip_skills,omitempty"`
 	Profile             string         `json:"-"`
 	Pipeline            string         `json:"pipeline,omitempty"`
 	ContextFile         string         `json:"context_file,omitempty"`
@@ -117,6 +118,7 @@ type dispatchSpecJSON struct {
 	SystemPrompt        string         `json:"system_prompt,omitempty"`
 	Cwd                 string         `json:"cwd"`
 	Skills              []string       `json:"skills,omitempty"`
+	SkipSkills          bool           `json:"skip_skills,omitempty"`
 	Profile             string         `json:"profile,omitempty"`
 	Coordinator         string         `json:"coordinator,omitempty"`
 	Pipeline            string         `json:"pipeline,omitempty"`
@@ -154,6 +156,7 @@ func (s DispatchSpec) MarshalJSON() ([]byte, error) {
 		SystemPrompt:        s.SystemPrompt,
 		Cwd:                 s.Cwd,
 		Skills:              append([]string(nil), s.Skills...),
+		SkipSkills:          s.SkipSkills,
 		Profile:             s.Profile,
 		Pipeline:            s.Pipeline,
 		ContextFile:         s.ContextFile,
@@ -202,6 +205,7 @@ func (s *DispatchSpec) UnmarshalJSON(data []byte) error {
 		SystemPrompt:        wire.SystemPrompt,
 		Cwd:                 wire.Cwd,
 		Skills:              append([]string(nil), wire.Skills...),
+		SkipSkills:          wire.SkipSkills,
 		Profile:             profile,
 		Pipeline:            wire.Pipeline,
 		ContextFile:         wire.ContextFile,
