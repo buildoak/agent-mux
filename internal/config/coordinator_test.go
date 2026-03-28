@@ -145,7 +145,7 @@ func TestLoadCoordinatorNotFoundListsAvailable(t *testing.T) {
 	projectAgents := filepath.Join(cwd, ".claude", "agents")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	globalAgents := filepath.Join(home, ".config", "agent-mux", "agents")
+	globalAgents := filepath.Join(home, ".agent-mux", "agents")
 	mustMkdirAll(t, projectAgents)
 	mustMkdirAll(t, globalAgents)
 
@@ -157,11 +157,11 @@ func TestLoadCoordinatorNotFoundListsAvailable(t *testing.T) {
 		t.Fatal("LoadCoordinator(missing) error = nil, want error")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, `coordinator "missing" not found`) {
-		t.Fatalf("error = %q, want missing coordinator message", msg)
+	if !strings.Contains(msg, `profile "missing" not found`) {
+		t.Fatalf("error = %q, want missing profile message", msg)
 	}
 	if !strings.Contains(msg, "alpha") || !strings.Contains(msg, "beta") {
-		t.Fatalf("error = %q, want available coordinators from both dirs", msg)
+		t.Fatalf("error = %q, want available profiles from both dirs", msg)
 	}
 }
 
@@ -170,7 +170,7 @@ func TestLoadCoordinatorSearchOrderProjectThenGlobal(t *testing.T) {
 	projectAgents := filepath.Join(cwd, ".claude", "agents")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	globalAgents := filepath.Join(home, ".config", "agent-mux", "agents")
+	globalAgents := filepath.Join(home, ".agent-mux", "agents")
 	mustMkdirAll(t, projectAgents)
 	mustMkdirAll(t, globalAgents)
 
@@ -205,6 +205,48 @@ fallback prompt
 	if spec.Engine != "gemini" || spec.SystemPrompt != "fallback prompt\n" {
 		t.Fatalf("fallback coordinator = %#v, want global file used", spec)
 	}
+}
+
+// TestLoadCoordinatorAgentMuxDirSearchPaths verifies that the new .agent-mux/agents
+// project-level and ~/.agent-mux/agents global paths are searched.
+func TestLoadCoordinatorAgentMuxDirSearchPaths(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	t.Run("cwd-dot-agent-mux-agents", func(t *testing.T) {
+		agentMuxAgents := filepath.Join(cwd, ".agent-mux", "agents")
+		mustMkdirAll(t, agentMuxAgents)
+		writeTestFile(t, filepath.Join(agentMuxAgents, "lifter.md"), `---
+engine: codex
+---
+lifted prompt
+`)
+		spec, _, err := LoadCoordinator("lifter", cwd)
+		if err != nil {
+			t.Fatalf("LoadCoordinator: %v", err)
+		}
+		if spec.Engine != "codex" || spec.SystemPrompt != "lifted prompt\n" {
+			t.Fatalf("spec = %#v, want .agent-mux/agents file", spec)
+		}
+	})
+
+	t.Run("home-dot-agent-mux-agents", func(t *testing.T) {
+		globalAgents := filepath.Join(home, ".agent-mux", "agents")
+		mustMkdirAll(t, globalAgents)
+		writeTestFile(t, filepath.Join(globalAgents, "global-agent.md"), `---
+engine: claude
+---
+global agent prompt
+`)
+		spec, _, err := LoadCoordinator("global-agent", cwd)
+		if err != nil {
+			t.Fatalf("LoadCoordinator: %v", err)
+		}
+		if spec.Engine != "claude" || spec.SystemPrompt != "global agent prompt\n" {
+			t.Fatalf("spec = %#v, want ~/.agent-mux/agents file", spec)
+		}
+	})
 }
 
 func TestLoadCoordinatorWithoutFrontmatterUsesBodyOnly(t *testing.T) {

@@ -56,14 +56,14 @@ func (s *stringSlice) Set(value string) error {
 }
 
 type cliFlags struct {
-	engine, role, coordinator, cwd, model, effort, systemPrompt, systemPromptFile string
-	contextFile, artifactDir, salt, config, promptFile, recover                   string
-	signal                                                                        string
-	permissionMode, sandbox, reasoning                                            string
-	output, pipeline                                                              string
-	timeout, maxDepth, responseMaxChars, maxTurns                                 int
-	full, noFull, noSubdispatch, stdin, version, verbose, yes                     bool
-	skills, addDirs                                                               stringSlice
+	engine, role, variant, profile, coordinator, cwd, model, effort, systemPrompt, systemPromptFile string
+	contextFile, artifactDir, salt, config, promptFile, recover                                     string
+	signal                                                                                          string
+	permissionMode, sandbox, reasoning                                                              string
+	output, pipeline                                                                                string
+	timeout, maxDepth, responseMaxChars, maxTurns                                                   int
+	full, noFull, noSubdispatch, stdin, version, verbose, yes                                       bool
+	skills, addDirs                                                                                 stringSlice
 }
 
 type previewResult struct {
@@ -85,7 +85,8 @@ type previewDispatchSpec struct {
 	Model               string   `json:"model,omitempty"`
 	Effort              string   `json:"effort,omitempty"`
 	Role                string   `json:"role,omitempty"`
-	Coordinator         string   `json:"coordinator,omitempty"`
+	Variant             string   `json:"variant,omitempty"`
+	Profile             string   `json:"profile,omitempty"`
 	Pipeline            string   `json:"pipeline,omitempty"`
 	Cwd                 string   `json:"cwd"`
 	Skills              []string `json:"skills,omitempty"`
@@ -236,12 +237,9 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 	}
 
-	coordinatorName := flags.coordinator
-	if flags.stdin {
-		coordinatorName = spec.Coordinator
-	}
-	if coordinatorName != "" {
-		coordSpec, companionCfg, err := config.LoadCoordinator(coordinatorName, spec.Cwd)
+	profileName := spec.Profile
+	if profileName != "" {
+		coordSpec, companionCfg, err := config.LoadProfile(profileName, spec.Cwd)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
@@ -271,13 +269,25 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 
 	roleName := flags.role
+	variantName := flags.variant
 	if flags.stdin {
 		roleName = spec.Role
+		variantName = spec.Variant
+	}
+	if roleName == "" && variantName != "" {
+		return failResult(spec, "invalid_args", "--variant requires --role", "")
 	}
 	if roleName != "" {
 		role, err := config.ResolveRole(cfg, roleName)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
+		}
+		if variantName != "" {
+			resolvedRole, err := resolveVariant(*role, variantName)
+			if err != nil {
+				return failResult(spec, "config_error", fmt.Sprintf("variant %q not found in role %q", variantName, roleName), "")
+			}
+			role = &resolvedRole
 		}
 		if flags.stdin {
 			if spec.Engine == "" && role.Engine != "" {
@@ -289,9 +299,23 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 			if spec.Effort == "" && role.Effort != "" {
 				spec.Effort = role.Effort
 			}
+			if spec.TimeoutSec == 0 && role.Timeout > 0 {
+				spec.TimeoutSec = role.Timeout
+			}
 		} else {
 			applyPreset(role.Engine, role.Model, role.Effort)
+			if !flagsSet["timeout"] && !flagsSet["t"] && role.Timeout > 0 {
+				spec.TimeoutSec = role.Timeout
+			}
 		}
+		roleSystemPrompt, err := loadSystemPromptFile(role.SourceDir, role.SystemPromptFile)
+		if err != nil {
+			return failResult(spec, "config_error", err.Error(), "")
+		}
+		spec.SystemPrompt = prependSystemPrompt(roleSystemPrompt, spec.SystemPrompt)
+		spec.Skills = mergeSkills(role.Skills, spec.Skills)
+		spec.Role = roleName
+		spec.Variant = variantName
 	}
 
 	applyDefaults()
@@ -407,8 +431,11 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		writeJSON(stdout, preview)
 		return 0
 	}
+	if !flags.yes {
+		writeCompactJSON(stderr, preview)
+	}
 	if preview.ConfirmationRequired {
-		confirmed, err := confirmTTYDispatch(stdin, stderr, preview)
+		confirmed, err := confirmTTYDispatch(stdin, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "confirmation: %v\n", err)
 			return 1
@@ -468,6 +495,107 @@ func anySliceOrEmpty(v any) []string {
 	}
 }
 
+func mergeSkills(base, overlay []string) []string {
+	if len(base) == 0 && len(overlay) == 0 {
+		return nil
+	}
+
+	merged := make([]string, 0, len(base)+len(overlay))
+	seen := make(map[string]struct{}, len(base)+len(overlay))
+
+	for _, skill := range overlay {
+		if _, ok := seen[skill]; ok {
+			continue
+		}
+		seen[skill] = struct{}{}
+		merged = append(merged, skill)
+	}
+	for _, skill := range base {
+		if _, ok := seen[skill]; ok {
+			continue
+		}
+		seen[skill] = struct{}{}
+		merged = append(merged, skill)
+	}
+
+	return merged
+}
+
+func resolveVariant(role config.RoleConfig, variantName string) (config.RoleConfig, error) {
+	variantName = strings.TrimSpace(variantName)
+	if variantName == "" {
+		return role, nil
+	}
+
+	variant, ok := role.Variants[variantName]
+	if !ok {
+		return config.RoleConfig{}, fmt.Errorf("variant %q not found", variantName)
+	}
+
+	resolved := role
+	if variant.Engine != "" {
+		resolved.Engine = variant.Engine
+	}
+	if variant.Model != "" {
+		resolved.Model = variant.Model
+	}
+	if variant.Effort != "" {
+		resolved.Effort = variant.Effort
+	}
+	if variant.Timeout > 0 {
+		resolved.Timeout = variant.Timeout
+	}
+	resolved.Skills = mergeSkills(role.Skills, variant.Skills)
+	if variant.SystemPromptFile != "" {
+		resolved.SystemPromptFile = variant.SystemPromptFile
+	}
+
+	return resolved, nil
+}
+
+func loadSystemPromptFile(sourceDir, promptFile string) (string, error) {
+	promptFile = strings.TrimSpace(promptFile)
+	if promptFile == "" {
+		return "", nil
+	}
+
+	// Absolute paths are used directly.
+	if filepath.IsAbs(promptFile) {
+		data, err := os.ReadFile(promptFile)
+		if err != nil {
+			return "", fmt.Errorf("read system prompt file %q: %w", promptFile, err)
+		}
+		return string(data), nil
+	}
+
+	// Relative path: try <sourceDir>/<file> first, then <sourceDir>/prompts/<file>.
+	candidates := []string{
+		filepath.Join(sourceDir, promptFile),
+		filepath.Join(sourceDir, "prompts", promptFile),
+	}
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return string(data), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("read system prompt file %q: %w", path, err)
+		}
+	}
+	return "", fmt.Errorf("read system prompt file %q: not found in %q or %q", promptFile, candidates[0], candidates[1])
+}
+
+func prependSystemPrompt(prefix, existing string) string {
+	switch {
+	case strings.TrimSpace(prefix) == "":
+		return existing
+	case strings.TrimSpace(existing) == "":
+		return prefix
+	default:
+		return prefix + "\n\n" + existing
+	}
+}
+
 func writeResult(w io.Writer, result *types.DispatchResult) {
 	writeJSON(w, result)
 }
@@ -476,6 +604,12 @@ func writeJSON(w io.Writer, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
+	_ = enc.Encode(v)
+}
+
+func writeCompactJSON(w io.Writer, v any) {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
 	_ = enc.Encode(v)
 }
 
@@ -632,7 +766,8 @@ func previewDispatchSpecFrom(spec *types.DispatchSpec) previewDispatchSpec {
 		Model:               spec.Model,
 		Effort:              spec.Effort,
 		Role:                spec.Role,
-		Coordinator:         spec.Coordinator,
+		Variant:             spec.Variant,
+		Profile:             spec.Profile,
 		Pipeline:            spec.Pipeline,
 		Cwd:                 spec.Cwd,
 		Skills:              append([]string(nil), spec.Skills...),
@@ -691,7 +826,7 @@ func previewExcerpt(text string, maxRunes int) (string, bool) {
 func buildCancelledResult(spec *types.DispatchSpec) *types.DispatchResult {
 	return dispatch.BuildFailedResult(
 		spec,
-		dispatch.NewDispatchError("cancelled", "Dispatch cancelled at confirmation prompt before launch.", "Re-run with --yes to skip the confirmation prompt."),
+		dispatch.NewDispatchError("cancelled", "Dispatch cancelled at confirmation prompt before launch.", "Re-run with --yes to skip preview and confirmation."),
 		&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 		&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
 		0,
@@ -705,8 +840,7 @@ func shouldRequireConfirmation(skip bool, stdin io.Reader, stdout, stderr io.Wri
 	return isTerminal(stdin) && isTerminal(stdout) && isTerminal(stderr)
 }
 
-func confirmTTYDispatch(stdin io.Reader, stderr io.Writer, preview previewResult) (bool, error) {
-	writeJSON(stderr, preview)
+func confirmTTYDispatch(stdin io.Reader, stderr io.Writer) (bool, error) {
 	if _, err := fmt.Fprint(stderr, "Proceed with dispatch? [y/N]: "); err != nil {
 		return false, fmt.Errorf("write confirmation prompt: %w", err)
 	}
@@ -745,7 +879,9 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 
 	bindStr(fs, &flags.engine, "Engine name", "", "engine", "E")
 	bindStr(fs, &flags.role, "Role", "", "role", "R")
-	fs.StringVar(&flags.coordinator, "coordinator", "", "Coordinator")
+	fs.StringVar(&flags.variant, "variant", "", "Role variant")
+	fs.StringVar(&flags.profile, "profile", "", "Profile")
+	fs.StringVar(&flags.coordinator, "coordinator", "", "Legacy alias for --profile")
 	bindStr(fs, &flags.cwd, "Working directory", "", "cwd", "C")
 	bindStr(fs, &flags.model, "Model", "", "model", "m")
 	bindStr(fs, &flags.effort, "Effort", flags.effort, "effort", "e")
@@ -785,6 +921,9 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 	if flags.promptFile != "" && len(args) > 0 {
 		return nil, errors.New("prompt must come from either the first positional arg or --prompt-file, not both")
 	}
+	if flags.variant != "" && flags.role == "" {
+		return nil, errors.New("--variant requires --role")
+	}
 	var (
 		prompt, systemPrompt string
 		err                  error
@@ -816,6 +955,10 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 		}
 	}
 	dispatchID := ulid.Make().String()
+	profile, err := resolveProfileName(flags.profile, flags.coordinator)
+	if err != nil {
+		return nil, err
+	}
 	cwd := flags.cwd
 	if cwd == "" {
 		cwd, err = os.Getwd()
@@ -857,13 +1000,14 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 		SystemPrompt:     systemPrompt,
 		Cwd:              cwd,
 		Skills:           append([]string(nil), flags.skills...),
-		Coordinator:      flags.coordinator,
+		Profile:          profile,
 		Pipeline:         flags.pipeline,
 		ContextFile:      flags.contextFile,
 		ArtifactDir:      artifactDir,
 		TimeoutSec:       flags.timeout,
 		GraceSec:         60,
 		Role:             flags.role,
+		Variant:          flags.variant,
 		MaxDepth:         flags.maxDepth,
 		AllowSubdispatch: allowSubdispatch,
 		PipelineStep:     -1,
@@ -874,6 +1018,19 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 	}
 
 	return spec, nil
+}
+
+func resolveProfileName(profile, coordinator string) (string, error) {
+	profile = strings.TrimSpace(profile)
+	coordinator = strings.TrimSpace(coordinator)
+	switch {
+	case profile == "":
+		return coordinator, nil
+	case coordinator == "" || coordinator == profile:
+		return profile, nil
+	default:
+		return "", fmt.Errorf("conflicting profile values: --profile=%q --coordinator=%q", profile, coordinator)
+	}
 }
 
 func normalizeArgs(args []string) []string {
@@ -912,6 +1069,8 @@ func flagTakesValue(name string) bool {
 	switch name {
 	case "--engine", "-E",
 		"--role", "-R",
+		"--variant",
+		"--profile",
 		"--coordinator",
 		"--cwd", "-C",
 		"--model", "-m",
@@ -962,21 +1121,40 @@ func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseS
 	hookEval := hooks.NewEvaluator(cfg.Hooks)
 	for i, step := range pipelineCfg.Steps {
 		if step.Role == "" {
+			if step.Variant != "" {
+				return nil, fmt.Errorf("resolve pipeline step[%d]: variant %q requires role", i, step.Variant)
+			}
 			continue
 		}
 		roleCfg, err := config.ResolveRole(cfg, step.Role)
 		if err != nil {
 			return nil, fmt.Errorf("resolve pipeline step[%d] role %q: %w", i, step.Role, err)
 		}
+		resolvedRole := *roleCfg
+		if step.Variant != "" {
+			resolvedRole, err = resolveVariant(resolvedRole, step.Variant)
+			if err != nil {
+				return nil, fmt.Errorf("resolve pipeline step[%d]: variant %q not found in role %q", i, step.Variant, step.Role)
+			}
+		}
 		if pipelineCfg.Steps[i].Engine == "" {
-			pipelineCfg.Steps[i].Engine = roleCfg.Engine
+			pipelineCfg.Steps[i].Engine = resolvedRole.Engine
 		}
 		if pipelineCfg.Steps[i].Model == "" {
-			pipelineCfg.Steps[i].Model = roleCfg.Model
+			pipelineCfg.Steps[i].Model = resolvedRole.Model
 		}
 		if pipelineCfg.Steps[i].Effort == "" {
-			pipelineCfg.Steps[i].Effort = roleCfg.Effort
+			pipelineCfg.Steps[i].Effort = resolvedRole.Effort
 		}
+		if pipelineCfg.Steps[i].Timeout == 0 && resolvedRole.Timeout > 0 {
+			pipelineCfg.Steps[i].Timeout = resolvedRole.Timeout
+		}
+		pipelineCfg.Steps[i].ResolvedSkills = mergeSkills(resolvedRole.Skills, baseSpec.Skills)
+		roleSystemPrompt, err := loadSystemPromptFile(resolvedRole.SourceDir, resolvedRole.SystemPromptFile)
+		if err != nil {
+			return nil, fmt.Errorf("resolve pipeline step[%d] system prompt: %w", i, err)
+		}
+		pipelineCfg.Steps[i].ResolvedSystemPrompt = prependSystemPrompt(roleSystemPrompt, baseSpec.SystemPrompt)
 	}
 
 	pipelineArtifactDir := filepath.Join(baseSpec.ArtifactDir, "pipeline")
@@ -1063,6 +1241,8 @@ func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {
 	for _, name := range []string{
 		"engine", "E",
 		"role", "R",
+		"variant",
+		"profile",
 		"coordinator",
 		"cwd", "C",
 		"model", "m",
@@ -1108,7 +1288,7 @@ func configuredModels(cfg *config.Config) map[string][]string {
 		models["claude"] = []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
 	}
 	if len(models["gemini"]) == 0 {
-		models["gemini"] = []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview"}
+		models["gemini"] = []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview"}
 	}
 	return models
 }

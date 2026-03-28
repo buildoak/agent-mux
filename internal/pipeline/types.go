@@ -22,17 +22,20 @@ const (
 
 // PipelineStep configures one step in a pipeline.
 type PipelineStep struct {
-	Name          string   `toml:"name"`
-	Role          string   `toml:"role"`
-	Engine        string   `toml:"engine"`
-	Model         string   `toml:"model"`
-	Effort        string   `toml:"effort"`
-	Timeout       int      `toml:"timeout"`
-	Parallel      int      `toml:"parallel"`       // 0 or 1 = sequential
-	WorkerPrompts []string `toml:"worker_prompts"` // per-worker focus dirs for fan-out
-	Receives      string   `toml:"receives"`       // name of prior step's pass_output_as
-	PassOutputAs  string   `toml:"pass_output_as"` // name for this step's output
-	HandoffMode   string   `toml:"handoff_mode"`   // "summary_and_refs" | "full_concat" | "refs_only"
+	Name                 string   `toml:"name"`
+	Role                 string   `toml:"role"`
+	Variant              string   `toml:"variant"`
+	Engine               string   `toml:"engine"`
+	Model                string   `toml:"model"`
+	Effort               string   `toml:"effort"`
+	Timeout              int      `toml:"timeout"`
+	ResolvedSkills       []string `toml:"-"`
+	ResolvedSystemPrompt string   `toml:"-"`
+	Parallel             int      `toml:"parallel"`       // 0 or 1 = sequential
+	WorkerPrompts        []string `toml:"worker_prompts"` // per-worker focus dirs for fan-out
+	Receives             string   `toml:"receives"`       // name of prior step's pass_output_as
+	PassOutputAs         string   `toml:"pass_output_as"` // name for this step's output
+	HandoffMode          string   `toml:"handoff_mode"`   // "summary_and_refs" | "full_concat" | "refs_only"
 }
 
 // PipelineConfig is the full config for a named pipeline.

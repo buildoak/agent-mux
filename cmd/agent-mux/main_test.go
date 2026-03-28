@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -35,6 +36,15 @@ func TestVersionFlag(t *testing.T) {
 }
 
 func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
+	cwd := t.TempDir()
+	agentsDir := filepath.Join(cwd, ".claude", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", agentsDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "planner.md"), []byte("Planner profile.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(profile): %v", err)
+	}
+
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
 	prompt := "implement feature"
 
@@ -43,6 +53,8 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	exitCode := run([]string{
 		"preview",
 		"--engine", "codex",
+		"--cwd", cwd,
+		"--profile", "planner",
 		"--timeout", "123",
 		"--artifact-dir", artifactDir,
 		prompt,
@@ -57,6 +69,9 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	}
 	if preview.DispatchSpec.Engine != "codex" {
 		t.Fatalf("dispatch_spec.engine = %q, want codex", preview.DispatchSpec.Engine)
+	}
+	if preview.DispatchSpec.Profile != "planner" {
+		t.Fatalf("dispatch_spec.profile = %q, want planner", preview.DispatchSpec.Profile)
 	}
 	if preview.DispatchSpec.TraceToken != "AGENT_MUX_GO_"+preview.DispatchSpec.DispatchID {
 		t.Fatalf("trace_token = %q, want %q", preview.DispatchSpec.TraceToken, "AGENT_MUX_GO_"+preview.DispatchSpec.DispatchID)
@@ -85,6 +100,18 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	if preview.ConfirmationRequired {
 		t.Fatal("confirmation_required = true, want false for non-TTY test harness")
 	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+	}
+	if got := dispatchSpec["profile"]; got != "planner" {
+		t.Fatalf("dispatch_spec.profile = %#v, want planner", got)
+	}
+	if _, ok := dispatchSpec["coordinator"]; ok {
+		t.Fatalf("dispatch_spec should omit legacy coordinator key, got %v", dispatchSpec["coordinator"])
+	}
 }
 
 func TestDispatchTTYConfirmationCancelsBeforeDispatch(t *testing.T) {
@@ -100,7 +127,7 @@ func TestDispatchTTYConfirmationCancelsBeforeDispatch(t *testing.T) {
 	if exitCode != exitCodeCancelled {
 		t.Fatalf("exit code = %d, want %d; stderr=%q stdout=%q", exitCode, exitCodeCancelled, stderr.String(), stdout.String())
 	}
-	if !strings.Contains(stderr.String(), `"kind": "preview"`) {
+	if !strings.Contains(stderr.String(), `"kind":"preview"`) {
 		t.Fatalf("stderr = %q, want preview JSON", stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "dispatch cancelled") {
@@ -118,6 +145,68 @@ func TestDispatchTTYConfirmationCancelsBeforeDispatch(t *testing.T) {
 	}
 	if _, err := os.Stat(artifactDir); !os.IsNotExist(err) {
 		t.Fatalf("artifact dir should not be created before confirmation, stat err=%v", err)
+	}
+}
+
+func TestDispatchNonTTYEmitsPreviewBeforeDispatch(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--engine", "codex",
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `"kind":"preview"`) {
+		t.Fatalf("stderr = %q, want preview JSON", stderr.String())
+	}
+	previewIdx := strings.Index(stderr.String(), `"kind": "preview"`)
+	startIdx := strings.Index(stderr.String(), `"type":"dispatch_start"`)
+	if startIdx == -1 {
+		t.Fatalf("stderr = %q, want dispatch_start event after preview", stderr.String())
+	}
+	if previewIdx > startIdx {
+		t.Fatalf("stderr = %q, want preview before dispatch_start", stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
+	}
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found", result.Error)
+	}
+}
+
+func TestDispatchTTYYesSkipsPreviewAndConfirmation(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithTerminalCheck([]string{
+		"--engine", "codex",
+		"--yes",
+		"implement feature",
+	}, strings.NewReader("n\n"), &stdout, &stderr, func(any) bool { return true })
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if strings.Contains(stderr.String(), `"kind":"preview"`) {
+		t.Fatalf("stderr = %q, want no preview JSON when --yes is set", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Proceed with dispatch?") {
+		t.Fatalf("stderr = %q, want no confirmation prompt when --yes is set", stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
+	}
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found", result.Error)
 	}
 }
 
@@ -169,6 +258,87 @@ func TestPreviewCommandCompactsPromptSummary(t *testing.T) {
 	}
 	if _, ok := dispatchSpec["engine_opts"]; ok {
 		t.Fatalf("dispatch_spec should omit engine_opts, got %v", dispatchSpec["engine_opts"])
+	}
+}
+
+func TestPreviewCommandResolvesRoleVariantAndSystemPromptLayering(t *testing.T) {
+	configDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(configDir, "prompts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cfgPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(filepath.Join(configDir, "prompts", "lifter.md"), []byte("base role prompt"), 0o644); err != nil {
+		t.Fatalf("WriteFile base prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "prompts", "lifter-claude.md"), []byte("claude role prompt"), 0o644); err != nil {
+		t.Fatalf("WriteFile variant prompt: %v", err)
+	}
+	cliPromptPath := filepath.Join(configDir, "cli-system.md")
+	if err := os.WriteFile(cliPromptPath, []byte("cli file prompt"), 0o644); err != nil {
+		t.Fatalf("WriteFile cli prompt: %v", err)
+	}
+	writeTestSkillFile(t, configDir, "cli-skill", "# cli skill\n")
+	writeTestSkillFile(t, configDir, "variant-skill", "# variant skill\n")
+	writeTestSkillFile(t, configDir, "role-skill", "# role skill\n")
+	if err := os.WriteFile(cfgPath, []byte(strings.TrimSpace(`
+[roles.lifter]
+engine = "codex"
+model = "gpt-5.4"
+effort = "high"
+timeout = 1800
+skills = ["role-skill"]
+system_prompt_file = "prompts/lifter.md"
+
+[roles.lifter.variants.claude]
+engine = "claude"
+model = "claude-sonnet-4-6"
+timeout = 900
+skills = ["variant-skill"]
+system_prompt_file = "prompts/lifter-claude.md"
+`)), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--config", cfgPath,
+		"--cwd", configDir,
+		"--role", "lifter",
+		"--variant", "claude",
+		"--skill", "cli-skill",
+		"--system-prompt-file", cliPromptPath,
+		"--system-prompt", "inline prompt",
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	preview := decodePreviewResult(t, stdout.Bytes())
+	if preview.DispatchSpec.Role != "lifter" {
+		t.Fatalf("role = %q, want %q", preview.DispatchSpec.Role, "lifter")
+	}
+	if preview.DispatchSpec.Variant != "claude" {
+		t.Fatalf("variant = %q, want %q", preview.DispatchSpec.Variant, "claude")
+	}
+	if preview.DispatchSpec.Engine != "claude" {
+		t.Fatalf("engine = %q, want %q", preview.DispatchSpec.Engine, "claude")
+	}
+	if preview.DispatchSpec.Model != "claude-sonnet-4-6" {
+		t.Fatalf("model = %q, want %q", preview.DispatchSpec.Model, "claude-sonnet-4-6")
+	}
+	if preview.DispatchSpec.TimeoutSec != 900 {
+		t.Fatalf("timeout_sec = %d, want %d", preview.DispatchSpec.TimeoutSec, 900)
+	}
+	if got := preview.DispatchSpec.Skills; len(got) != 3 || got[0] != "cli-skill" || got[1] != "variant-skill" || got[2] != "role-skill" {
+		t.Fatalf("skills = %#v, want CLI > variant > role", got)
+	}
+
+	expectedSystemPrompt := "claude role prompt\n\ncli file prompt\n\ninline prompt"
+	if preview.Prompt.SystemPromptChars != len(expectedSystemPrompt) {
+		t.Fatalf("system_prompt_chars = %d, want %d", preview.Prompt.SystemPromptChars, len(expectedSystemPrompt))
 	}
 }
 
@@ -297,6 +467,223 @@ func TestBuildDispatchSpecIncludesPipeline(t *testing.T) {
 	}
 }
 
+func TestBuildDispatchSpecPrefersProfileFlag(t *testing.T) {
+	t.Parallel()
+
+	fs, parsed := newFlagSet(ioDiscard{})
+	err := fs.Parse([]string{"--engine", "codex", "--profile", "planner", "implement feature"})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	flags, positional := *parsed, fs.Args()
+
+	spec, err := buildDispatchSpecE(flags, positional)
+	if err != nil {
+		t.Fatalf("buildDispatchSpecE: %v", err)
+	}
+	if spec.Profile != "planner" {
+		t.Fatalf("profile = %q, want %q", spec.Profile, "planner")
+	}
+}
+
+func TestBuildDispatchSpecAcceptsLegacyCoordinatorFlag(t *testing.T) {
+	t.Parallel()
+
+	fs, parsed := newFlagSet(ioDiscard{})
+	err := fs.Parse([]string{"--engine", "codex", "--coordinator", "planner", "implement feature"})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	flags, positional := *parsed, fs.Args()
+
+	spec, err := buildDispatchSpecE(flags, positional)
+	if err != nil {
+		t.Fatalf("buildDispatchSpecE: %v", err)
+	}
+	if spec.Profile != "planner" {
+		t.Fatalf("profile = %q, want %q", spec.Profile, "planner")
+	}
+}
+
+func TestBuildDispatchSpecRejectsConflictingProfileFlags(t *testing.T) {
+	t.Parallel()
+
+	fs, parsed := newFlagSet(ioDiscard{})
+	err := fs.Parse([]string{"--engine", "codex", "--profile", "planner", "--coordinator", "legacy", "implement feature"})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	flags, positional := *parsed, fs.Args()
+
+	_, err = buildDispatchSpecE(flags, positional)
+	if err == nil {
+		t.Fatal("buildDispatchSpecE error = nil, want conflict")
+	}
+	if !strings.Contains(err.Error(), "conflicting profile values") {
+		t.Fatalf("error = %q, want conflicting profile values", err)
+	}
+}
+
+func TestBuildDispatchSpecRejectsVariantWithoutRole(t *testing.T) {
+	t.Parallel()
+
+	fs, parsed := newFlagSet(ioDiscard{})
+	if err := fs.Parse([]string{"--engine", "codex", "--variant", "spark", "implement feature"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	_, err := buildDispatchSpecE(*parsed, fs.Args())
+	if err == nil {
+		t.Fatal("buildDispatchSpecE error = nil, want variant/role validation error")
+	}
+	if err.Error() != "--variant requires --role" {
+		t.Fatalf("error = %q, want %q", err, "--variant requires --role")
+	}
+}
+
+func TestResolveVariantMergesRoleAndVariant(t *testing.T) {
+	t.Parallel()
+
+	role := config.RoleConfig{
+		Engine:           "codex",
+		Model:            "gpt-5.4",
+		Effort:           "high",
+		Timeout:          1800,
+		Skills:           []string{"role-skill"},
+		SystemPromptFile: "prompts/base.md",
+		SourceDir:        "/config",
+		Variants: map[string]config.RoleVariant{
+			"spark": {
+				Model:   "gpt-5.3-codex-spark",
+				Effort:  "low",
+				Timeout: 600,
+				Skills:  []string{"variant-skill"},
+			},
+			"claude": {
+				Engine:           "claude",
+				Model:            "claude-sonnet-4-6",
+				SystemPromptFile: "prompts/claude.md",
+			},
+		},
+	}
+
+	spark, err := resolveVariant(role, "spark")
+	if err != nil {
+		t.Fatalf("resolveVariant(spark): %v", err)
+	}
+	if spark.Engine != "codex" || spark.Model != "gpt-5.3-codex-spark" || spark.Effort != "low" || spark.Timeout != 600 {
+		t.Fatalf("spark = %#v, want merged engine/model/effort/timeout", spark)
+	}
+	if got := spark.Skills; len(got) != 2 || got[0] != "variant-skill" || got[1] != "role-skill" {
+		t.Fatalf("spark skills = %#v, want variant additive over role", got)
+	}
+	if spark.SystemPromptFile != "prompts/base.md" {
+		t.Fatalf("spark system_prompt_file = %q, want inherited base file", spark.SystemPromptFile)
+	}
+
+	claude, err := resolveVariant(role, "claude")
+	if err != nil {
+		t.Fatalf("resolveVariant(claude): %v", err)
+	}
+	if claude.Engine != "claude" || claude.Model != "claude-sonnet-4-6" {
+		t.Fatalf("claude = %#v, want engine/model override", claude)
+	}
+	if claude.SystemPromptFile != "prompts/claude.md" {
+		t.Fatalf("claude system_prompt_file = %q, want variant replacement", claude.SystemPromptFile)
+	}
+}
+
+func TestResolveVariantUnknownVariant(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveVariant(config.RoleConfig{Variants: map[string]config.RoleVariant{}}, "missing")
+	if err == nil {
+		t.Fatal("resolveVariant error = nil, want not found")
+	}
+	if !strings.Contains(err.Error(), `variant "missing" not found`) {
+		t.Fatalf("error = %q, want variant not found", err)
+	}
+}
+
+func TestLoadSystemPromptFileResolvesRelativeToRoleSourceDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompts", "lifter.md")
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(promptPath, []byte("role prompt"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := loadSystemPromptFile(dir, filepath.Join("prompts", "lifter.md"))
+	if err != nil {
+		t.Fatalf("loadSystemPromptFile: %v", err)
+	}
+	if got != "role prompt" {
+		t.Fatalf("prompt = %q, want %q", got, "role prompt")
+	}
+}
+
+func TestLoadSystemPromptFilePromptsSubfolderFallback(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Only create the file inside prompts/ subfolder, NOT directly in dir.
+	promptsDir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptsDir, "lifter.md"), []byte("prompts subfolder content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Pass just "lifter.md" (not "prompts/lifter.md") — should fall through to prompts/ subfolder.
+	got, err := loadSystemPromptFile(dir, "lifter.md")
+	if err != nil {
+		t.Fatalf("loadSystemPromptFile: %v", err)
+	}
+	if got != "prompts subfolder content" {
+		t.Fatalf("prompt = %q, want %q", got, "prompts subfolder content")
+	}
+}
+
+func TestLoadSystemPromptFileDirectPathBeforePromptsSubfolder(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Create file in BOTH direct location and prompts/ subfolder with different content.
+	promptsDir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "lifter.md"), []byte("direct content"), 0o644); err != nil {
+		t.Fatalf("WriteFile direct: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptsDir, "lifter.md"), []byte("prompts content"), 0o644); err != nil {
+		t.Fatalf("WriteFile prompts: %v", err)
+	}
+
+	// Direct path should win.
+	got, err := loadSystemPromptFile(dir, "lifter.md")
+	if err != nil {
+		t.Fatalf("loadSystemPromptFile: %v", err)
+	}
+	if got != "direct content" {
+		t.Fatalf("prompt = %q, want direct path to win", got)
+	}
+}
+
+func TestPrependSystemPromptLayersRoleAndCLI(t *testing.T) {
+	t.Parallel()
+
+	got := prependSystemPrompt("role prompt", "cli file\n\ninline")
+	if got != "role prompt\n\ncli file\n\ninline" {
+		t.Fatalf("system prompt = %q, want layered prompt", got)
+	}
+}
+
 func TestNoFullFlag(t *testing.T) {
 	t.Parallel()
 
@@ -410,6 +797,90 @@ func TestStdinMode(t *testing.T) {
 	}
 }
 
+func TestRunUnknownVariantReturnsConfigError(t *testing.T) {
+	cfgPath := writeTempConfig(t, `
+[roles.lifter]
+engine = "codex"
+model = "gpt-5.4"
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--config", cfgPath,
+		"--role", "lifter",
+		"--variant", "missing",
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "config_error" {
+		t.Fatalf("error = %#v, want config_error", result.Error)
+	}
+	if result.Error.Message != `variant "missing" not found in role "lifter"` {
+		t.Fatalf("error.message = %q, want unknown variant message", result.Error.Message)
+	}
+}
+
+func TestStdinModeResolvesVariantFromRole(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	cfgPath := writeTempConfig(t, `
+[roles.lifter]
+engine = "codex"
+model = "gpt-5.4"
+effort = "high"
+
+[roles.lifter.variants.claude]
+engine = "claude"
+model = "claude-sonnet-4-6"
+effort = "medium"
+timeout = 900
+`)
+
+	input := map[string]any{
+		"dispatch_id":  "stdin-variant-dispatch",
+		"role":         "lifter",
+		"variant":      "claude",
+		"prompt":       "from stdin",
+		"cwd":          t.TempDir(),
+		"artifact_dir": filepath.Join(t.TempDir(), "artifacts") + "/",
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--stdin", "--config", cfgPath}, bytes.NewReader(data), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found", result.Error)
+	}
+	if result.Metadata == nil {
+		t.Fatal("metadata = nil, want resolved engine/model")
+	}
+	if result.Metadata.Engine != "claude" || result.Metadata.Model != "claude-sonnet-4-6" {
+		t.Fatalf("metadata = %#v, want variant engine/model", result.Metadata)
+	}
+
+	previewIdx := strings.Index(stderr.String(), `"kind":"preview"`)
+	if previewIdx == -1 {
+		t.Fatalf("stderr = %q, want preview JSON", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `"variant":"claude"`) {
+		t.Fatalf("stderr = %q, want variant in preview output", stderr.String())
+	}
+}
+
 func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
 	workingDir := t.TempDir()
 	prevWD, err := os.Getwd()
@@ -481,6 +952,26 @@ func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndZero(t *testing.T) {
 	}
 	if spec.GraceSec != 0 {
 		t.Fatalf("grace_sec = %d, want 0", spec.GraceSec)
+	}
+}
+
+func TestDecodeStdinDispatchSpecAcceptsLegacyCoordinatorAlias(t *testing.T) {
+	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","coordinator":"planner"}`))
+	if err != nil {
+		t.Fatalf("decodeStdinDispatchSpec: %v", err)
+	}
+	if spec.Profile != "planner" {
+		t.Fatalf("profile = %q, want %q", spec.Profile, "planner")
+	}
+}
+
+func TestDecodeStdinDispatchSpecRejectsConflictingProfileAlias(t *testing.T) {
+	_, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","profile":"planner","coordinator":"legacy"}`))
+	if err == nil {
+		t.Fatal("decodeStdinDispatchSpec error = nil, want conflict")
+	}
+	if !strings.Contains(err.Error(), "conflicting profile values") {
+		t.Fatalf("error = %q, want conflicting profile values", err)
 	}
 }
 
@@ -629,6 +1120,46 @@ name = "review"
 	}
 	if result.Steps[0].Workers[0].ErrorCode != "engine_not_found" {
 		t.Fatalf("workers[0].error_code = %q, want engine_not_found", result.Steps[0].Workers[0].ErrorCode)
+	}
+}
+
+func TestPipelineStepVariantResolvesRole(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+[roles.lifter]
+engine = "codex"
+model = "gpt-5.4"
+effort = "high"
+
+[roles.lifter.variants.spark]
+engine = "not-a-real-engine"
+
+[pipelines.review]
+[[pipelines.review.steps]]
+name = "review"
+role = "lifter"
+variant = "spark"
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--config", cfgPath,
+		"--engine", "codex",
+		"--pipeline", "review",
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodePipelineResult(t, stdout.Bytes())
+	if len(result.Steps) != 1 || len(result.Steps[0].Workers) != 1 {
+		t.Fatalf("pipeline result = %#v, want one worker", result)
+	}
+	if result.Steps[0].Workers[0].ErrorCode != "engine_not_found" {
+		t.Fatalf("workers[0].error_code = %q, want engine_not_found from variant engine", result.Steps[0].Workers[0].ErrorCode)
 	}
 }
 
@@ -882,6 +1413,18 @@ func writeTempConfig(t *testing.T, content string) string {
 	return f.Name()
 }
 
+func writeTestSkillFile(t *testing.T, cwd, name, content string) {
+	t.Helper()
+
+	path := filepath.Join(cwd, ".claude", "skills", name, "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
 func decodeResult(t *testing.T, data []byte) types.DispatchResult {
 	t.Helper()
 
@@ -896,9 +1439,16 @@ type previewResultForTest struct {
 	SchemaVersion int    `json:"schema_version"`
 	Kind          string `json:"kind"`
 	DispatchSpec  struct {
-		DispatchID string `json:"dispatch_id"`
-		Engine     string `json:"engine"`
-		TraceToken string `json:"trace_token"`
+		DispatchID string   `json:"dispatch_id"`
+		Engine     string   `json:"engine"`
+		Model      string   `json:"model"`
+		Effort     string   `json:"effort"`
+		Role       string   `json:"role"`
+		Variant    string   `json:"variant"`
+		Profile    string   `json:"profile"`
+		TraceToken string   `json:"trace_token"`
+		TimeoutSec int      `json:"timeout_sec"`
+		Skills     []string `json:"skills"`
 	} `json:"dispatch_spec"`
 	Prompt struct {
 		Excerpt           string `json:"excerpt"`
@@ -932,6 +1482,25 @@ func decodeJSONMap(t *testing.T, data []byte) map[string]any {
 		t.Fatalf("unmarshal JSON map: %v\nstdout=%q", err, string(data))
 	}
 	return result
+}
+
+func stringSliceFromJSONValue(t *testing.T, value any) []string {
+	t.Helper()
+
+	raw, ok := value.([]any)
+	if !ok {
+		t.Fatalf("value = %#v, want []any", value)
+	}
+
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		s, ok := item.(string)
+		if !ok {
+			t.Fatalf("item = %#v, want string", item)
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 type pipelineResultForTest struct {
@@ -1100,6 +1669,186 @@ func TestRoleEffortNotAppliedWhenExplicitEffort(t *testing.T) {
 
 	if spec.Effort != "high" {
 		t.Errorf("spec.Effort = %q, want %q", spec.Effort, "high")
+	}
+}
+
+func TestRoleSkillsMergedWithCLISkills(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
+	writeTestSkillFile(t, cwd, "pratchett-read", "Read Pratchett.")
+
+	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = [\"pratchett-read\"]\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--engine", "codex",
+		"--cwd", cwd,
+		"--config", cfgPath,
+		"--role", "explorer",
+		"--skill", "web-search",
+		"hello",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+	}
+	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	want := []string{"web-search", "pratchett-read"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("skills = %#v, want %#v", got, want)
+	}
+}
+
+func TestRoleSkillsRoleOnly(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	writeTestSkillFile(t, cwd, "pratchett-read", "Read Pratchett.")
+	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
+
+	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = [\"pratchett-read\", \"web-search\"]\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--engine", "codex",
+		"--cwd", cwd,
+		"--config", cfgPath,
+		"--role", "explorer",
+		"hello",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+	}
+	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	want := []string{"pratchett-read", "web-search"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("skills = %#v, want %#v", got, want)
+	}
+}
+
+func TestRoleSkillsEmpty(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
+
+	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = []\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--engine", "codex",
+		"--cwd", cwd,
+		"--config", cfgPath,
+		"--role", "explorer",
+		"--skill", "web-search",
+		"hello",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+	}
+	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	want := []string{"web-search"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("skills = %#v, want %#v", got, want)
+	}
+}
+
+func TestRoleSkillsDedup(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
+
+	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = [\"web-search\"]\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--engine", "codex",
+		"--cwd", cwd,
+		"--config", cfgPath,
+		"--role", "explorer",
+		"--skill", "web-search",
+		"hello",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+	}
+	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	want := []string{"web-search"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("skills = %#v, want %#v", got, want)
+	}
+}
+
+func TestRoleSkillsStdinMerge(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	writeTestSkillFile(t, cwd, "pratchett-read", "Read Pratchett.")
+	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
+
+	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = [\"pratchett-read\"]\n")
+	input := map[string]any{
+		"engine": "codex",
+		"prompt": "from stdin",
+		"cwd":    cwd,
+		"role":   "explorer",
+		"skills": []string{"web-search"},
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"preview", "--stdin", "--config", cfgPath}, bytes.NewReader(data), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+	}
+	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	want := []string{"web-search", "pratchett-read"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("skills = %#v, want %#v", got, want)
 	}
 }
 

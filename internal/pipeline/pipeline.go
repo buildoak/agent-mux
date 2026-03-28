@@ -172,6 +172,9 @@ func buildWorkerSpec(base *types.DispatchSpec, step PipelineStep, pipelineID str
 	if step.Role != "" {
 		spec.Role = step.Role
 	}
+	if step.Variant != "" {
+		spec.Variant = step.Variant
+	}
 	if step.Engine != "" {
 		spec.Engine = step.Engine
 	}
@@ -183,6 +186,12 @@ func buildWorkerSpec(base *types.DispatchSpec, step PipelineStep, pipelineID str
 	}
 	if step.Timeout > 0 {
 		spec.TimeoutSec = step.Timeout
+	}
+	if len(step.ResolvedSkills) > 0 {
+		spec.Skills = append([]string(nil), step.ResolvedSkills...)
+	}
+	if step.ResolvedSystemPrompt != "" {
+		spec.SystemPrompt = step.ResolvedSystemPrompt
 	}
 	if base.EngineOpts != nil {
 		spec.EngineOpts = make(map[string]any, len(base.EngineOpts))

@@ -116,6 +116,34 @@ func TestBuildWorkerSpecResetsPerDispatchTraceability(t *testing.T) {
 	}
 }
 
+func TestBuildWorkerSpecAppliesResolvedRoleFields(t *testing.T) {
+	tmp := t.TempDir()
+	baseSpec := testBaseSpec(tmp)
+	baseSpec.SystemPrompt = "base prompt"
+	baseSpec.Skills = []string{"cli-skill"}
+
+	spec := buildWorkerSpec(baseSpec, PipelineStep{
+		Name:                 "plan",
+		Role:                 "lifter",
+		Variant:              "spark",
+		ResolvedSkills:       []string{"cli-skill", "role-skill"},
+		ResolvedSystemPrompt: "role prompt\n\nbase prompt",
+	}, "pipeline-123", 0, 0, filepath.Join(tmp, "worker-0"), "worker prompt")
+
+	if spec.Role != "lifter" {
+		t.Fatalf("role = %q, want %q", spec.Role, "lifter")
+	}
+	if spec.Variant != "spark" {
+		t.Fatalf("variant = %q, want %q", spec.Variant, "spark")
+	}
+	if got := spec.Skills; len(got) != 2 || got[0] != "cli-skill" || got[1] != "role-skill" {
+		t.Fatalf("skills = %#v, want merged skills", got)
+	}
+	if spec.SystemPrompt != "role prompt\n\nbase prompt" {
+		t.Fatalf("system_prompt = %q, want resolved layered prompt", spec.SystemPrompt)
+	}
+}
+
 func TestExecutePipeline_PartialFailure(t *testing.T) {
 	t.Parallel()
 

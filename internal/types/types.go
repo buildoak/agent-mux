@@ -1,6 +1,9 @@
 package types
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -78,13 +81,14 @@ type DispatchSpec struct {
 	SystemPrompt        string         `json:"system_prompt,omitempty"`
 	Cwd                 string         `json:"cwd"`
 	Skills              []string       `json:"skills,omitempty"`
-	Coordinator         string         `json:"coordinator,omitempty"`
+	Profile             string         `json:"-"`
 	Pipeline            string         `json:"pipeline,omitempty"`
 	ContextFile         string         `json:"context_file,omitempty"`
 	ArtifactDir         string         `json:"artifact_dir"`
 	TimeoutSec          int            `json:"timeout_sec,omitempty"`
 	GraceSec            int            `json:"grace_sec,omitempty"`
 	Role                string         `json:"role,omitempty"`
+	Variant             string         `json:"variant,omitempty"`
 	MaxDepth            int            `json:"max_depth"`
 	AllowSubdispatch    bool           `json:"allow_subdispatch"`
 	Depth               int            `json:"depth"`
@@ -99,6 +103,141 @@ type DispatchSpec struct {
 	ResponseMaxChars    int            `json:"response_max_chars,omitempty"`
 	EngineOpts          map[string]any `json:"engine_opts,omitempty"`
 	FullAccess          bool           `json:"full_access"`
+}
+
+type dispatchSpecJSON struct {
+	DispatchID          string         `json:"dispatch_id"`
+	Salt                string         `json:"salt,omitempty"`
+	TraceToken          string         `json:"trace_token,omitempty"`
+	Engine              string         `json:"engine"`
+	Model               string         `json:"model,omitempty"`
+	Effort              string         `json:"effort"`
+	Prompt              string         `json:"prompt"`
+	SystemPrompt        string         `json:"system_prompt,omitempty"`
+	Cwd                 string         `json:"cwd"`
+	Skills              []string       `json:"skills,omitempty"`
+	Profile             string         `json:"profile,omitempty"`
+	Coordinator         string         `json:"coordinator,omitempty"`
+	Pipeline            string         `json:"pipeline,omitempty"`
+	ContextFile         string         `json:"context_file,omitempty"`
+	ArtifactDir         string         `json:"artifact_dir"`
+	TimeoutSec          int            `json:"timeout_sec,omitempty"`
+	GraceSec            int            `json:"grace_sec,omitempty"`
+	Role                string         `json:"role,omitempty"`
+	Variant             string         `json:"variant,omitempty"`
+	MaxDepth            int            `json:"max_depth"`
+	AllowSubdispatch    bool           `json:"allow_subdispatch"`
+	Depth               int            `json:"depth"`
+	ParentDispatchID    string         `json:"parent_dispatch_id,omitempty"`
+	PipelineID          string         `json:"pipeline_id,omitempty"`
+	PipelineStep        int            `json:"pipeline_step"`
+	ContinuesDispatchID string         `json:"continues_dispatch_id,omitempty"`
+	Receives            string         `json:"receives,omitempty"`
+	PassOutputAs        string         `json:"pass_output_as,omitempty"`
+	Parallel            int            `json:"parallel,omitempty"`
+	HandoffMode         string         `json:"handoff_mode,omitempty"`
+	ResponseMaxChars    int            `json:"response_max_chars,omitempty"`
+	EngineOpts          map[string]any `json:"engine_opts,omitempty"`
+	FullAccess          bool           `json:"full_access"`
+}
+
+func (s DispatchSpec) MarshalJSON() ([]byte, error) {
+	wire := dispatchSpecJSON{
+		DispatchID:          s.DispatchID,
+		Salt:                s.Salt,
+		TraceToken:          s.TraceToken,
+		Engine:              s.Engine,
+		Model:               s.Model,
+		Effort:              s.Effort,
+		Prompt:              s.Prompt,
+		SystemPrompt:        s.SystemPrompt,
+		Cwd:                 s.Cwd,
+		Skills:              append([]string(nil), s.Skills...),
+		Profile:             s.Profile,
+		Pipeline:            s.Pipeline,
+		ContextFile:         s.ContextFile,
+		ArtifactDir:         s.ArtifactDir,
+		TimeoutSec:          s.TimeoutSec,
+		GraceSec:            s.GraceSec,
+		Role:                s.Role,
+		Variant:             s.Variant,
+		MaxDepth:            s.MaxDepth,
+		AllowSubdispatch:    s.AllowSubdispatch,
+		Depth:               s.Depth,
+		ParentDispatchID:    s.ParentDispatchID,
+		PipelineID:          s.PipelineID,
+		PipelineStep:        s.PipelineStep,
+		ContinuesDispatchID: s.ContinuesDispatchID,
+		Receives:            s.Receives,
+		PassOutputAs:        s.PassOutputAs,
+		Parallel:            s.Parallel,
+		HandoffMode:         s.HandoffMode,
+		ResponseMaxChars:    s.ResponseMaxChars,
+		EngineOpts:          s.EngineOpts,
+		FullAccess:          s.FullAccess,
+	}
+	return json.Marshal(wire)
+}
+
+func (s *DispatchSpec) UnmarshalJSON(data []byte) error {
+	var wire dispatchSpecJSON
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+
+	profile, err := resolveProfileAlias(wire.Profile, wire.Coordinator)
+	if err != nil {
+		return err
+	}
+
+	*s = DispatchSpec{
+		DispatchID:          wire.DispatchID,
+		Salt:                wire.Salt,
+		TraceToken:          wire.TraceToken,
+		Engine:              wire.Engine,
+		Model:               wire.Model,
+		Effort:              wire.Effort,
+		Prompt:              wire.Prompt,
+		SystemPrompt:        wire.SystemPrompt,
+		Cwd:                 wire.Cwd,
+		Skills:              append([]string(nil), wire.Skills...),
+		Profile:             profile,
+		Pipeline:            wire.Pipeline,
+		ContextFile:         wire.ContextFile,
+		ArtifactDir:         wire.ArtifactDir,
+		TimeoutSec:          wire.TimeoutSec,
+		GraceSec:            wire.GraceSec,
+		Role:                wire.Role,
+		Variant:             wire.Variant,
+		MaxDepth:            wire.MaxDepth,
+		AllowSubdispatch:    wire.AllowSubdispatch,
+		Depth:               wire.Depth,
+		ParentDispatchID:    wire.ParentDispatchID,
+		PipelineID:          wire.PipelineID,
+		PipelineStep:        wire.PipelineStep,
+		ContinuesDispatchID: wire.ContinuesDispatchID,
+		Receives:            wire.Receives,
+		PassOutputAs:        wire.PassOutputAs,
+		Parallel:            wire.Parallel,
+		HandoffMode:         wire.HandoffMode,
+		ResponseMaxChars:    wire.ResponseMaxChars,
+		EngineOpts:          wire.EngineOpts,
+		FullAccess:          wire.FullAccess,
+	}
+	return nil
+}
+
+func resolveProfileAlias(profile, coordinator string) (string, error) {
+	profile = strings.TrimSpace(profile)
+	coordinator = strings.TrimSpace(coordinator)
+	switch {
+	case profile == "":
+		return coordinator, nil
+	case coordinator == "" || coordinator == profile:
+		return profile, nil
+	default:
+		return "", fmt.Errorf("conflicting profile values: profile=%q coordinator=%q", profile, coordinator)
+	}
 }
 
 type EventKind int

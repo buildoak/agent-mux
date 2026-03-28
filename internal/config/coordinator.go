@@ -22,7 +22,7 @@ type CoordinatorSpec struct {
 	ExtraFields  map[string]any
 }
 
-func LoadCoordinator(name, cwd string) (*CoordinatorSpec, *Config, error) {
+func LoadProfile(name, cwd string) (*CoordinatorSpec, *Config, error) {
 	if cwd == "" {
 		var err error
 		cwd, err = os.Getwd()
@@ -39,7 +39,8 @@ func LoadCoordinator(name, cwd string) (*CoordinatorSpec, *Config, error) {
 	searchDirs := []string{
 		filepath.Join(cwd, ".claude", "agents"),
 		filepath.Join(cwd, "agents"),
-		filepath.Join(homeDir, ".config", "agent-mux", "agents"),
+		filepath.Join(cwd, ".agent-mux", "agents"),
+		filepath.Join(homeDir, ".agent-mux", "agents"),
 	}
 
 	for _, dir := range searchDirs {
@@ -49,10 +50,10 @@ func LoadCoordinator(name, cwd string) (*CoordinatorSpec, *Config, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, nil, fmt.Errorf("stat coordinator %q: %w", path, err)
+			return nil, nil, fmt.Errorf("stat profile %q: %w", path, err)
 		}
 		if info.IsDir() {
-			return nil, nil, fmt.Errorf("coordinator path %q is a directory", path)
+			return nil, nil, fmt.Errorf("profile path %q is a directory", path)
 		}
 
 		spec, err := loadCoordinatorSpec(path, name)
@@ -70,18 +71,18 @@ func LoadCoordinator(name, cwd string) (*CoordinatorSpec, *Config, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return nil, nil, fmt.Errorf("coordinator %q not found. Available coordinators: %v", name, available)
+	return nil, nil, fmt.Errorf("profile %q not found. Available profiles: %v", name, available)
 }
 
 func loadCoordinatorSpec(path, name string) (*CoordinatorSpec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read coordinator %q: %w", path, err)
+		return nil, fmt.Errorf("read profile %q: %w", path, err)
 	}
 
 	frontmatter, body, err := splitFrontmatter(data)
 	if err != nil {
-		return nil, fmt.Errorf("parse coordinator %q: %w", path, err)
+		return nil, fmt.Errorf("parse profile %q: %w", path, err)
 	}
 
 	spec := &CoordinatorSpec{
@@ -131,18 +132,22 @@ func loadCoordinatorCompanionConfig(path string) (*Config, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("stat coordinator companion config %q: %w", path, err)
+		return nil, fmt.Errorf("stat profile companion config %q: %w", path, err)
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("coordinator companion config %q is a directory", path)
+		return nil, fmt.Errorf("profile companion config %q is a directory", path)
 	}
 
 	var cfg Config
 	meta, err := toml.DecodeFile(path, &cfg)
 	if err != nil {
-		return nil, fmt.Errorf("decode coordinator companion config %q: %w", path, err)
+		return nil, fmt.Errorf("decode profile companion config %q: %w", path, err)
 	}
 	cfg.meta = &meta
+	for name, role := range cfg.Roles {
+		role.SourceDir = filepath.Dir(path)
+		cfg.Roles[name] = role
+	}
 	return &cfg, nil
 }
 
@@ -179,7 +184,7 @@ func availableCoordinators(dirs []string) ([]string, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read coordinator directory %q: %w", dir, err)
+			return nil, fmt.Errorf("read profile directory %q: %w", dir, err)
 		}
 		for _, entry := range entries {
 			if entry.IsDir() {
@@ -199,4 +204,8 @@ func availableCoordinators(dirs []string) ([]string, error) {
 	}
 	sort.Strings(available)
 	return available, nil
+}
+
+func LoadCoordinator(name, cwd string) (*CoordinatorSpec, *Config, error) {
+	return LoadProfile(name, cwd)
 }

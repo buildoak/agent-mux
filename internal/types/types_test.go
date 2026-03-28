@@ -247,8 +247,10 @@ func TestDispatchSpecRoundTrip(t *testing.T) {
 		Effort:           "high",
 		Prompt:           "Build the parser",
 		Cwd:              "/path/to/project",
+		Profile:          "planner",
 		Pipeline:         "review",
 		ArtifactDir:      "/tmp/agent-mux/01JQXYZ/",
+		Variant:          "spark",
 		MaxDepth:         2,
 		AllowSubdispatch: true,
 		PipelineStep:     -1,
@@ -274,8 +276,14 @@ func TestDispatchSpecRoundTrip(t *testing.T) {
 	if decoded.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
 		t.Errorf("trace_token = %q, want %q", decoded.TraceToken, "AGENT_MUX_GO_01JQXYZ")
 	}
+	if decoded.Profile != "planner" {
+		t.Errorf("profile = %q, want %q", decoded.Profile, "planner")
+	}
 	if decoded.Pipeline != "review" {
 		t.Errorf("pipeline = %q, want %q", decoded.Pipeline, "review")
+	}
+	if decoded.Variant != "spark" {
+		t.Errorf("variant = %q, want %q", decoded.Variant, "spark")
 	}
 	if decoded.PipelineStep != -1 {
 		t.Errorf("pipeline_step = %d, want -1", decoded.PipelineStep)
@@ -296,6 +304,8 @@ func TestDispatchSpecJSONTagNames(t *testing.T) {
 		Effort:              "high",
 		Prompt:              "test",
 		Cwd:                 "/tmp",
+		Profile:             "planner",
+		Variant:             "claude",
 		Pipeline:            "review",
 		ArtifactDir:         "/tmp/agent-mux/01JQXYZ/",
 		MaxDepth:            2,
@@ -318,7 +328,7 @@ func TestDispatchSpecJSONTagNames(t *testing.T) {
 
 	expectedKeys := []string{
 		"dispatch_id", "trace_token", "engine", "effort", "prompt", "cwd",
-		"pipeline",
+		"profile", "variant", "pipeline",
 		"artifact_dir", "max_depth", "allow_subdispatch", "depth",
 		"pipeline_step", "full_access", "continues_dispatch_id",
 		"response_max_chars",
@@ -327,6 +337,30 @@ func TestDispatchSpecJSONTagNames(t *testing.T) {
 		if _, exists := raw[key]; !exists {
 			t.Errorf("expected JSON key %q not found", key)
 		}
+	}
+	if _, exists := raw["coordinator"]; exists {
+		t.Errorf("legacy JSON key %q should be omitted when marshaling", "coordinator")
+	}
+}
+
+func TestDispatchSpecUnmarshalAcceptsLegacyCoordinatorAlias(t *testing.T) {
+	var spec DispatchSpec
+	if err := json.Unmarshal([]byte(`{"dispatch_id":"01JQXYZ","engine":"codex","prompt":"test","cwd":"/tmp","artifact_dir":"/tmp/agent-mux/01JQXYZ/","coordinator":"planner","allow_subdispatch":true,"depth":0,"pipeline_step":-1,"full_access":true}`), &spec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if spec.Profile != "planner" {
+		t.Fatalf("profile = %q, want %q", spec.Profile, "planner")
+	}
+}
+
+func TestDispatchSpecUnmarshalRejectsConflictingProfileAlias(t *testing.T) {
+	var spec DispatchSpec
+	err := json.Unmarshal([]byte(`{"engine":"codex","prompt":"test","cwd":"/tmp","artifact_dir":"/tmp/agent-mux/01JQXYZ/","profile":"planner","coordinator":"legacy","allow_subdispatch":true,"depth":0,"pipeline_step":-1,"full_access":true}`), &spec)
+	if err == nil {
+		t.Fatal("unmarshal error = nil, want conflict")
+	}
+	if err.Error() != `conflicting profile values: profile="planner" coordinator="legacy"` {
+		t.Fatalf("error = %q, want conflicting profile values", err)
 	}
 }
 
