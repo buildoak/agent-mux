@@ -189,7 +189,7 @@ func mergeConfig(base, overlay *Config) {
 			base.Models = make(map[string][]string, len(overlay.Models))
 		}
 		for engine, models := range overlay.Models {
-			base.Models[engine] = append([]string(nil), models...)
+			base.Models[engine] = deduplicateStrings(append(base.Models[engine], models...))
 		}
 	}
 
@@ -224,10 +224,10 @@ func mergeConfig(base, overlay *Config) {
 	merge(&base.Timeout.Grace, overlay.Timeout.Grace, overlay.defined("timeout", "grace"))
 
 	if overlay.defined("hooks", "deny") || len(overlay.Hooks.Deny) > 0 {
-		base.Hooks.Deny = append([]string(nil), overlay.Hooks.Deny...)
+		base.Hooks.Deny = deduplicateStrings(append(base.Hooks.Deny, overlay.Hooks.Deny...))
 	}
 	if overlay.defined("hooks", "warn") || len(overlay.Hooks.Warn) > 0 {
-		base.Hooks.Warn = append([]string(nil), overlay.Hooks.Warn...)
+		base.Hooks.Warn = deduplicateStrings(append(base.Hooks.Warn, overlay.Hooks.Warn...))
 	}
 	merge(&base.Hooks.EventDenyAction, overlay.Hooks.EventDenyAction, overlay.defined("hooks", "event_deny_action"))
 }
@@ -481,4 +481,22 @@ func validatePositiveInt(field, source string, value int) error {
 		Source: source,
 		Value:  value,
 	}
+}
+
+// deduplicateStrings returns a new slice with duplicate entries removed,
+// preserving the order of first occurrence.
+func deduplicateStrings(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }

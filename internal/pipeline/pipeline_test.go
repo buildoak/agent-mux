@@ -107,7 +107,7 @@ func TestBuildWorkerSpecResetsPerDispatchTraceability(t *testing.T) {
 	baseSpec.Salt = "shared-salt"
 	baseSpec.TraceToken = "AGENT_MUX_GO_base-dispatch"
 
-	spec := buildWorkerSpec(baseSpec, PipelineStep{Name: "plan"}, "pipeline-123", 0, 0, filepath.Join(tmp, "worker-0"), "worker prompt")
+	spec := buildWorkerSpec(baseSpec, PipelineStep{Name: "plan"}, "pipeline-123", 0, filepath.Join(tmp, "worker-0"), "worker prompt")
 
 	if spec.DispatchID == baseSpec.DispatchID {
 		t.Fatalf("dispatch_id = %q, want a new worker dispatch ID", spec.DispatchID)
@@ -132,7 +132,7 @@ func TestBuildWorkerSpecAppliesResolvedRoleFields(t *testing.T) {
 		Variant:              "spark",
 		ResolvedSkills:       []string{"cli-skill", "role-skill"},
 		ResolvedSystemPrompt: "role prompt\n\nbase prompt",
-	}, "pipeline-123", 0, 0, filepath.Join(tmp, "worker-0"), "worker prompt")
+	}, "pipeline-123", 0, filepath.Join(tmp, "worker-0"), "worker prompt")
 
 	if spec.Role != "lifter" {
 		t.Fatalf("role = %q, want %q", spec.Role, "lifter")

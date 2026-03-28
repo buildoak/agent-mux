@@ -340,6 +340,8 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			streamDone: make(chan struct{}),
 			procDone:   make(chan error, 1),
 		}
+		// Best-effort orphan guard: kill child process group if coordinator dies.
+		go supervisor.WatchParentDeath(proc.Cmd().Process.Pid)
 		go func(run *runHandle) {
 			defer close(run.streamDone)
 			e.scanHarnessOutput(run.stdout, runGen, spec.ArtifactDir, signals)

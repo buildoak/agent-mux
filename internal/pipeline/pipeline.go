@@ -46,7 +46,7 @@ func ExecutePipeline(
 			parallel = 1
 		}
 
-		prompt := buildStepPrompt(baseSpec.Prompt, step, stepOutputs, i)
+		prompt := buildStepPrompt(baseSpec.Prompt, step, stepOutputs)
 		stepArtifactDir := filepath.Join(pipelineArtifactDir, fmt.Sprintf("step-%d", i))
 		if err := os.MkdirAll(stepArtifactDir, 0o755); err != nil {
 			return NewFailedResultWithState(
@@ -73,7 +73,7 @@ func ExecutePipeline(
 				), fmt.Errorf("create worker artifact dir: %w", err)
 			}
 
-			spec := buildWorkerSpec(baseSpec, step, pipelineID, i, w, workerArtifactDir, prompt)
+			spec := buildWorkerSpec(baseSpec, step, pipelineID, i, workerArtifactDir, prompt)
 			if parallel > 1 && w < len(step.WorkerPrompts) && strings.TrimSpace(step.WorkerPrompts[w]) != "" {
 				spec.Prompt += "\n\n" + step.WorkerPrompts[w]
 			}
@@ -163,7 +163,7 @@ func fanOut(ctx context.Context, specs []*types.DispatchSpec, dispatch DispatchF
 	return results
 }
 
-func buildWorkerSpec(base *types.DispatchSpec, step PipelineStep, pipelineID string, stepIdx, workerIdx int, artifactDir, prompt string) *types.DispatchSpec {
+func buildWorkerSpec(base *types.DispatchSpec, step PipelineStep, pipelineID string, stepIdx int, artifactDir, prompt string) *types.DispatchSpec {
 	spec := *base
 	spec.DispatchID = ulid.Make().String()
 	spec.Salt = ""
@@ -207,7 +207,6 @@ func buildWorkerSpec(base *types.DispatchSpec, step PipelineStep, pipelineID str
 			spec.EngineOpts[k] = v
 		}
 	}
-	_ = workerIdx
 	return &spec
 }
 
@@ -364,7 +363,7 @@ func renderWorkerFailure(worker WorkerResult) string {
 	return fmt.Sprintf("Error: %s — %s\nPartial artifacts: %s", code, msg, worker.ArtifactDir)
 }
 
-func buildStepPrompt(userPrompt string, step PipelineStep, stepOutputs map[string]*StepOutput, stepIdx int) string {
+func buildStepPrompt(userPrompt string, step PipelineStep, stepOutputs map[string]*StepOutput) string {
 	var parts []string
 	if step.Receives != "" {
 		if prior, ok := stepOutputs[step.Receives]; ok {
@@ -375,7 +374,6 @@ func buildStepPrompt(userPrompt string, step PipelineStep, stepOutputs map[strin
 	if step.PassOutputAs != "" {
 		parts = append(parts, fmt.Sprintf("Please write your output so it can be identified as %q for downstream pipeline steps.", step.PassOutputAs))
 	}
-	_ = stepIdx
 	return strings.Join(parts, "\n\n")
 }
 

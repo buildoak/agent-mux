@@ -588,16 +588,17 @@ func TestExplicitConfigDirectoryMode(t *testing.T) {
 	})
 }
 
-func TestModelOverridesReplaceEarlierList(t *testing.T) {
+func TestModelOverridesAreAdditiveUnion(t *testing.T) {
 	base := DefaultConfig()
 	base.Models["codex"] = []string{"old-a", "old-b"}
-	overlay := &Config{Models: map[string][]string{"codex": []string{"new-a"}}}
+	overlay := &Config{Models: map[string][]string{"codex": {"new-a", "old-b"}}}
 
 	mergeConfig(base, overlay)
 
 	got := base.Models["codex"]
-	if len(got) != 1 || got[0] != "new-a" {
-		t.Fatalf("Models[codex] = %#v, want %#v", got, []string{"new-a"})
+	want := []string{"old-a", "old-b", "new-a"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Models[codex] = %#v, want %#v (union, deduplicated)", got, want)
 	}
 }
 
