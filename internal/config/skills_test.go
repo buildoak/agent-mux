@@ -11,7 +11,7 @@ func TestLoadSkillsSingleSkill(t *testing.T) {
 	cwd := t.TempDir()
 	writeSkillFile(t, cwd, "go", "Use Go conventions.")
 
-	prompt, pathDirs, err := LoadSkills([]string{"go"}, cwd)
+	prompt, pathDirs, err := LoadSkills([]string{"go"}, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestLoadSkillsTrimsTrailingNewlineBeforeClosingTag(t *testing.T) {
 	cwd := t.TempDir()
 	writeSkillFile(t, cwd, "go", "Use Go conventions.\n")
 
-	prompt, _, err := LoadSkills([]string{"go"}, cwd)
+	prompt, _, err := LoadSkills([]string{"go"}, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestLoadSkillsMultipleSkillsInOrder(t *testing.T) {
 	writeSkillFile(t, cwd, "go", "Go only.")
 	writeSkillFile(t, cwd, "review", "Review for regressions.")
 
-	prompt, pathDirs, err := LoadSkills([]string{"go", "review"}, cwd)
+	prompt, pathDirs, err := LoadSkills([]string{"go", "review"}, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestLoadSkillsDeduplicatesNames(t *testing.T) {
 	cwd := t.TempDir()
 	writeSkillFile(t, cwd, "go", "Only once.")
 
-	prompt, pathDirs, err := LoadSkills([]string{"go", "go"}, cwd)
+	prompt, pathDirs, err := LoadSkills([]string{"go", "go"}, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestLoadSkillsWithScriptsDir(t *testing.T) {
 		t.Fatalf("MkdirAll scripts: %v", err)
 	}
 
-	_, pathDirs, err := LoadSkills([]string{"go"}, cwd)
+	_, pathDirs, err := LoadSkills([]string{"go"}, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestLoadSkillsWithoutScriptsDir(t *testing.T) {
 	cwd := t.TempDir()
 	writeSkillFile(t, cwd, "go", "No scripts.")
 
-	_, pathDirs, err := LoadSkills([]string{"go"}, cwd)
+	_, pathDirs, err := LoadSkills([]string{"go"}, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestLoadSkillsNotFoundIncludesAvailableSkills(t *testing.T) {
 	writeSkillFile(t, cwd, "go", "Go only.")
 	writeSkillFile(t, cwd, "review", "Review only.")
 
-	_, _, err := LoadSkills([]string{"missing"}, cwd)
+	_, _, err := LoadSkills([]string{"missing"}, cwd, "")
 	if err == nil {
 		t.Fatal("LoadSkills error = nil, want error")
 	}
@@ -130,7 +130,7 @@ func TestLoadSkillsNotFoundIncludesAvailableSkills(t *testing.T) {
 func TestLoadSkillsEmptyNames(t *testing.T) {
 	cwd := t.TempDir()
 
-	prompt, pathDirs, err := LoadSkills(nil, cwd)
+	prompt, pathDirs, err := LoadSkills(nil, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestLoadSkillsEmptyNames(t *testing.T) {
 func TestLoadSkillsRejectsInvalidName(t *testing.T) {
 	cwd := t.TempDir()
 
-	_, _, err := LoadSkills([]string{"../bad"}, cwd)
+	_, _, err := LoadSkills([]string{"../bad"}, cwd, "")
 	if err == nil {
 		t.Fatal("LoadSkills error = nil, want invalid skill name")
 	}
@@ -163,13 +163,92 @@ func TestLoadSkillsSecondSkillHasScriptsDir(t *testing.T) {
 		t.Fatalf("MkdirAll scripts: %v", err)
 	}
 
-	_, pathDirs, err := LoadSkills([]string{"go", "review"}, cwd)
+	_, pathDirs, err := LoadSkills([]string{"go", "review"}, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
 
 	if len(pathDirs) != 1 || pathDirs[0] != scriptsDir {
 		t.Fatalf("pathDirs = %#v, want [%q]", pathDirs, scriptsDir)
+	}
+}
+
+// TestLoadSkillsConfigDirFallback covers Bug 2: a skill defined in the config
+// directory (configDir) should be found even when cwd is a completely different
+// directory that does not contain a .claude/skills tree.
+func TestLoadSkillsConfigDirFallback(t *testing.T) {
+	configDir := t.TempDir()
+	cwd := t.TempDir() // deliberately different from configDir
+
+	// Skill lives under configDir, NOT under cwd.
+	writeSkillFile(t, configDir, "gaal", "Gaal skill content.")
+
+	prompt, _, err := LoadSkills([]string{"gaal"}, cwd, configDir)
+	if err != nil {
+		t.Fatalf("LoadSkills with configDir fallback: %v", err)
+	}
+
+	want := "<skill name=\"gaal\">\nGaal skill content.\n</skill>\n"
+	if prompt != want {
+		t.Fatalf("prompt = %q, want %q", prompt, want)
+	}
+}
+
+// TestLoadSkillsConfigDirFallbackWithScriptsDir verifies that scripts/ from the
+// fallback (configDir-relative) skill are returned in pathDirs.
+func TestLoadSkillsConfigDirFallbackWithScriptsDir(t *testing.T) {
+	configDir := t.TempDir()
+	cwd := t.TempDir()
+
+	writeSkillFile(t, configDir, "gaal", "Gaal skill content.")
+	scriptsDir := filepath.Join(configDir, ".claude", "skills", "gaal", "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll scripts: %v", err)
+	}
+
+	_, pathDirs, err := LoadSkills([]string{"gaal"}, cwd, configDir)
+	if err != nil {
+		t.Fatalf("LoadSkills: %v", err)
+	}
+
+	if len(pathDirs) != 1 || pathDirs[0] != scriptsDir {
+		t.Fatalf("pathDirs = %#v, want [%q]", pathDirs, scriptsDir)
+	}
+}
+
+// TestLoadSkillsCwdTakesPrecedenceOverConfigDir verifies that a skill found
+// in cwd is used even when configDir also has the same skill name.
+func TestLoadSkillsCwdTakesPrecedenceOverConfigDir(t *testing.T) {
+	configDir := t.TempDir()
+	cwd := t.TempDir()
+
+	writeSkillFile(t, cwd, "shared", "cwd version")
+	writeSkillFile(t, configDir, "shared", "configDir version")
+
+	prompt, _, err := LoadSkills([]string{"shared"}, cwd, configDir)
+	if err != nil {
+		t.Fatalf("LoadSkills: %v", err)
+	}
+
+	if prompt != "<skill name=\"shared\">\ncwd version\n</skill>\n" {
+		t.Fatalf("prompt = %q, want cwd version to win", prompt)
+	}
+}
+
+// TestLoadSkillsConfigDirSameAsCwdNoDoubleSearch verifies that when
+// configDir == cwd, passing the same dir as fallback doesn't cause duplicate
+// work or errors.
+func TestLoadSkillsConfigDirSameAsCwd(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "go", "Go conventions.")
+
+	prompt, _, err := LoadSkills([]string{"go"}, dir, dir)
+	if err != nil {
+		t.Fatalf("LoadSkills: %v", err)
+	}
+
+	if prompt != "<skill name=\"go\">\nGo conventions.\n</skill>\n" {
+		t.Fatalf("prompt = %q", prompt)
 	}
 }
 

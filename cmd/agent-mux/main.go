@@ -316,6 +316,10 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if roleName == "" && variantName != "" {
 		return failResult(spec, "invalid_args", "--variant requires --role", "")
 	}
+	// roleConfigDir is the directory of the config file that defined the active
+	// role. It is used as a fallback skill search root when spec.Cwd does not
+	// contain the skill (Bug 2 fix).
+	var roleConfigDir string
 	if roleName != "" {
 		role, err := config.ResolveRole(cfg, roleName)
 		if err != nil {
@@ -355,6 +359,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		spec.Skills = mergeSkills(role.Skills, spec.Skills)
 		spec.Role = roleName
 		spec.Variant = variantName
+		roleConfigDir = role.SourceDir
 	}
 
 	applyDefaults()
@@ -395,7 +400,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 
 	if len(spec.Skills) > 0 {
-		skillPrompt, pathDirs, err := config.LoadSkills(spec.Skills, spec.Cwd)
+		skillPrompt, pathDirs, err := config.LoadSkills(spec.Skills, spec.Cwd, roleConfigDir)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
