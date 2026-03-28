@@ -1,7 +1,6 @@
 # Features
 
-Open feature requests and follow-up ideas that are real extensions beyond the
-current `agent-mux-v2` behavior.
+Open feature requests and follow-up ideas for agent-mux.
 
 ## Proposed
 
@@ -44,3 +43,33 @@ current `agent-mux-v2` behavior.
     `inspect`, and `signal` across multiple live dispatches.
   - Why: not needed now, but potentially useful for Jenkins/operator workflows
     and better caller-death tolerance.
+
+- Hooks: context-aware matching
+  - Current state: event-level deny/warn patterns use case-insensitive
+    substring matching on ALL event content, including files read during
+    harness workspace orientation. This causes false positives — e.g., a
+    `deny = ["DROP TABLE"]` pattern triggers when Codex reads a documentation
+    file that mentions SQL injection examples.
+  - Impact: hooks are effectively unusable for repos containing documentation
+    or test fixtures with deny-pattern strings. Currently disabled in
+    production config (marked WIP).
+  - Proposed: distinguish event sources. Only match deny patterns against
+    (a) the user prompt, (b) commands the worker executes, (c) code the
+    worker writes. Do NOT match against files the harness reads during
+    orientation or files the worker reads for context.
+  - Alternative: allow per-pattern scope: `deny = [{pattern = "DROP TABLE",
+    scope = "prompt+commands"}]` instead of flat strings.
+
+- Role dispatch: `skip_skills` / repo-agnostic mode
+  - Current state: roles in config.toml can have `skills = ["pratchett-read",
+    ...]` which resolve from `<cwd>/.claude/skills/<name>/SKILL.md`. When
+    dispatching against a repo that doesn't have those skills, the dispatch
+    fails with `config_error: skill not found`.
+  - Impact: roles are project-scoped — they can't be used for cross-repo
+    dispatches without falling back to raw engine/model/effort overrides.
+  - Proposed: add `"skip_skills": true` to DispatchSpec JSON (or `--no-skills`
+    CLI flag) that suppresses role-level skill injection. Alternatively,
+    make missing skills a warning rather than a fatal error.
+  - Alternative: per-dispatch skill override that replaces (not merges with)
+    role skills: `"skills": []` in JSON should mean "no skills" rather than
+    "use role defaults".

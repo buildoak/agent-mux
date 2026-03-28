@@ -66,13 +66,23 @@ Engine CLIs must be installed separately — agent-mux dispatches to them, it do
 - **Liveness supervision** — 5-second watchdog cycle detects hung harnesses. Process-group signals ensure grandchildren die with the harness.
 - **Artifact-first design** — Artifact directory created before the harness starts. `ScanArtifacts()` runs on every terminal state.
 
-## API Keys
+## Authentication
 
-| Engine | Env Var |
-|--------|---------|
-| Codex | `OPENAI_API_KEY` |
-| Claude | `ANTHROPIC_API_KEY` |
-| Gemini | `GEMINI_API_KEY` |
+| Engine | Env Var | Fallback |
+|--------|---------|----------|
+| Codex | `OPENAI_API_KEY` | OAuth device auth via `codex auth` (`~/.codex/auth.json`) |
+| Claude | `ANTHROPIC_API_KEY` | Device OAuth (subscription login) — **not recommended** |
+| Gemini | `GEMINI_API_KEY` | — |
+
+Both Codex and Claude support subscription-based OAuth as a fallback when no
+API key is set. agent-mux will attempt dispatch if any auth path is available —
+`MISSING_API_KEY` is a warning, not a hard failure.
+
+> **Anthropic ToS compliance:** The `claude` engine uses Claude Code SDK with
+> your API key (`ANTHROPIC_API_KEY`) — this is the fully compliant path. Device
+> OAuth (subscription login) falls under Anthropic's Consumer ToS §3.7 which
+> restricts automated/scripted access outside the API. **Always use
+> `ANTHROPIC_API_KEY` for the `claude` engine in automated workflows.**
 
 ## Documentation
 
