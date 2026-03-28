@@ -210,13 +210,18 @@ All output goes to `stdout` as JSON (`schema_version: 1`).
   "status": "completed",
   "dispatch_id": "01KM...",
   "dispatch_salt": "mint-ant-five",
+  "trace_token": "AGENT_MUX_GO_01KM...",
   "response": "...",
   "response_truncated": false,
   "full_output": null,
   "handoff_summary": "...",
   "artifacts": [],
+  "partial": false,
+  "recoverable": false,
+  "reason": "",
+  "error": null,
   "activity": {"files_changed":[],"files_read":[],"commands_run":[],"tool_calls":[]},
-  "metadata": {"engine":"codex","model":"gpt-5.4","tokens":{"input":0,"output":0},"turns":0,"cost_usd":0},
+  "metadata": {"engine":"codex","model":"gpt-5.4","role":"lifter","tokens":{"input":0,"output":0,"reasoning":0,"cache_read":0,"cache_write":0},"turns":0,"cost_usd":0,"session_id":""},
   "duration_ms": 12345
 }
 ```
@@ -304,7 +309,7 @@ Essential fields for JSON dispatch:
 | `timeout_sec` | int | no | Override timeout in seconds |
 | `continues_dispatch_id` | string | no | Recovery: prior dispatch ID |
 | `profile` | string | no | Coordinator persona name |
-| `response_max_chars` | int | no | Truncate response (default 4000) |
+| `response_max_chars` | int | no | Truncate response (default 2000) |
 | `full_access` | bool | no | Default true |
 | `allow_subdispatch` | bool | no | Default true |
 | `max_depth` | int | no | Recursive depth limit (default 2) |

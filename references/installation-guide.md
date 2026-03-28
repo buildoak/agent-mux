@@ -1,199 +1,120 @@
 # Installation Guide
 
-Practical install guide for `agent-mux` in both environments:
-- Claude Code (recommended)
-- Codex CLI
-
-This guide also covers coordinator mode (`--coordinator`) and a shared verification flow.
+Install and configure `agent-mux` -- the Go binary that dispatches work across Codex, Claude, and Gemini engines.
 
 ## Prerequisites
 
-1. `Bun >= 1.0.0` (required runtime for `agent-mux` itself)
-2. `Node.js` (only required if you use `--browser` / `agent-browser`)
-3. API auth for the engine(s) you plan to run
+- **Go 1.21+** (for building from source)
+- **API keys** for the engines you plan to use:
 
-| Engine | Env Var | Required When | Auth Notes |
-| --- | --- | --- | --- |
-| Codex (`--engine codex`) | `OPENAI_API_KEY` | Only when using Codex | Codex CLI can also use OAuth fallback via `codex auth` |
-| Claude (`--engine claude`) | `ANTHROPIC_API_KEY` | Only when using Claude | Claude SDK supports device OAuth when no API key is set |
-| OpenCode (`--engine opencode`) | `OPENROUTER_API_KEY` | Only when using OpenCode | Use only for OpenCode runs |
+| Engine | Env Var | Required When |
+|--------|---------|---------------|
+| Codex | `OPENAI_API_KEY` | Using `--engine codex` or any Codex role |
+| Claude | `ANTHROPIC_API_KEY` | Using `--engine claude` or any Claude role |
+| Gemini | `GEMINI_API_KEY` | Using `--engine gemini` or any Gemini role |
 
-## Claude Code Setup (Recommended)
+- **Engine CLIs on PATH:** `codex`, `claude`, and/or `gemini` binaries must be installed separately. agent-mux dispatches to these; it does not bundle them.
 
-Use this when Claude is your coordinator and `agent-mux` is a worker dispatcher.
+## Build and Install
 
-1. Clone into your Claude skills directory:
-
-```bash
-git clone https://github.com/buildoak/agent-mux.git ~/.claude/skills/agent-mux
-```
-
-2. Run setup:
-
-```bash
-cd ~/.claude/skills/agent-mux
-./setup.sh
-```
-
-3. Register global CLI command:
-
-```bash
-bun link
-```
-
-4. Copy the GSD coordinator spec into your target project:
-
-```bash
-mkdir -p /path/to/project/.claude/agents
-cp references/get-shit-done-agent.md /path/to/project/.claude/agents/get-shit-done-agent.md
-```
-
-5. From a Claude coordinator/subagent, dispatch a worker:
-
-```bash
-agent-mux --engine codex --cwd /path/to/project "prompt"
-```
-
-6. To spawn GSD from the main Claude thread, invoke:
-
-```text
-Task(subagent_type="gsd-coordinator")
-```
-
-7. Run coordinator mode directly from shell:
-
-```bash
-agent-mux --coordinator get-shit-done-agent --cwd /path/to/project "task"
-```
-
-## Codex CLI Setup
-
-Use this when Codex is your primary agent environment.
-
-1. Clone the repository:
+Clone the repo and build:
 
 ```bash
 git clone https://github.com/buildoak/agent-mux.git
 cd agent-mux
+go build -o ~/bin/agent-mux ./cmd/agent-mux/
 ```
 
-2. Run setup and register CLI:
+Ensure `~/bin` is on your PATH:
 
 ```bash
-./setup.sh
-bun link
+# Add to ~/.bashrc or ~/.zshrc if not already present
+export PATH="$HOME/bin:$PATH"
 ```
 
-3. Place skill in `.agents/skills/agent-mux/` (copy or symlink):
+## Config Setup
+
+Create the global config directory and a minimal config file:
 
 ```bash
-mkdir -p /path/to/project/.agents/skills
-ln -s /absolute/path/to/agent-mux /path/to/project/.agents/skills/agent-mux
+mkdir -p ~/.agent-mux
 ```
 
-Alternative (copy):
+Create `~/.agent-mux/config.toml` with defaults:
+
+```toml
+[defaults]
+engine = "codex"
+model = "gpt-5.4"
+effort = "high"
+
+[timeout]
+low = 120
+medium = 600
+high = 1800
+xhigh = 2700
+grace = 60
+
+[models]
+codex  = ["gpt-5.4", "gpt-5.4-mini"]
+claude = ["claude-sonnet-4-6", "claude-opus-4-6"]
+gemini = ["gemini-2.5-pro"]
+```
+
+Project-level config goes in `<project>/.agent-mux/config.toml` and overrides global settings. An explicit `--config <path>` flag takes highest precedence.
+
+## API Keys
+
+Export the keys for engines you use:
 
 ```bash
-cp -R /absolute/path/to/agent-mux /path/to/project/.agents/skills/agent-mux
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GEMINI_API_KEY="..."
 ```
 
-4. Use coordinator mode with a project that has `.claude/agents/` definitions:
+Add these to your shell profile for persistence. Only the key for the engine you invoke is required -- you do not need all three.
+
+## Verification
 
 ```bash
-agent-mux --coordinator get-shit-done-agent --cwd /path/to/dir-with-claude-agents "task"
+# Check binary is on PATH
+agent-mux --version
+
+# View available flags and modes
+agent-mux --help
+
+# Smoke test: single dispatch to Codex
+printf '{"role":"scout","prompt":"Say hello","cwd":"/tmp"}' | agent-mux --stdin
 ```
 
-5. Or load coordinator prompt directly as a system prompt file:
+Expected: JSON output on stdout with `"status": "completed"` and a `response` field.
+
+## Claude Code Integration
+
+Symlink the agent-mux repo into your Claude Code skills directory so Claude can read the SKILL.md and reference docs:
 
 ```bash
-agent-mux --system-prompt-file references/get-shit-done-agent.md "task"
+ln -s /absolute/path/to/agent-mux ~/.claude/skills/agent-mux
 ```
 
-6. Important behavior difference:
-- Codex does not have Claude’s built-in `Task` tool.
-- In Codex flows, GSD dispatch happens through shell execution of `agent-mux`, not via an internal `Task(...)` primitive.
-
-## Coordinator Mode Notes (Both Setups)
-
-- `--coordinator <name>` resolves: `<cwd>/.claude/agents/<name>.md`
-- For `get-shit-done-agent`, the expected file is:
-  - `/path/to/project/.claude/agents/get-shit-done-agent.md`
-- Use `--cwd` to point `agent-mux` at the project that contains `.claude/agents/`.
-
-## Verification (Both Setups)
-
-Run these three checks:
-
-1. Basic dispatch:
+To use GSD coordinators, copy the agent spec into your project:
 
 ```bash
-agent-mux --engine codex "Say hello"
+mkdir -p /path/to/project/.claude/agents
+cp /absolute/path/to/agent-mux/references/get-shit-done-agent.md \
+   /path/to/project/.claude/agents/get-shit-done-agent.md
 ```
 
-2. Skill injection:
-
-```bash
-agent-mux --engine codex --cwd /path/to/project --skill agent-mux "What skills do I have?"
-```
-
-3. Coordinator:
-
-```bash
-agent-mux --engine claude --cwd /path/to/project --coordinator get-shit-done-agent "List your capabilities"
-```
-
-Optional Codex binary override:
-
-```bash
-AGENT_MUX_CODEX_PATH=/absolute/path/to/codex agent-mux --engine codex "Say hello"
-agent-mux --engine codex --codex-path /absolute/path/to/codex "Say hello"
-```
-
-Notes:
-- The CLI flag wins over `AGENT_MUX_CODEX_PATH` when both are set.
-- Relative override paths resolve from `--cwd` (or the current directory if `--cwd` is unset).
-- If the override path does not exist or is not executable, agent-mux fails before starting the Codex SDK.
-
-Expected result for successful runs:
-- JSON output on stdout
-- Includes `"success": true`
+Then customize the spec for your project (add project-specific skills, output paths, role preferences).
 
 ## Troubleshooting
 
-- `agent-mux: command not found`
-  - Run `bun link` in the `agent-mux` repo.
-- `MISSING_API_KEY`
-  - Verify required env var for your selected engine.
-  - For Codex, run `codex auth` to use OAuth fallback.
-  - For Claude, device OAuth is supported when key is not set.
-- Invalid Codex binary override
-  - Check `--codex-path` or `AGENT_MUX_CODEX_PATH`.
-  - Confirm the path points to an existing executable file.
-- TypeScript errors during setup
-  - Usually non-blocking; Bun runs TypeScript directly.
-- `bun: command not found`
-  - Install Bun from `https://bun.sh`.
-- `Unknown MCP cluster: ...`
-  - Copy template config and edit it:
-
-```bash
-cp mcp-clusters.example.yaml ~/.config/agent-mux/mcp-clusters.yaml
-```
-
-- Coordinator not found
-  - Confirm file exists at `<cwd>/.claude/agents/<name>.md`.
-  - Confirm `--cwd` points at that project root.
-- SDK-specific errors
-  - Test with a simple prompt first:
-
-```bash
-agent-mux --engine codex "Say hello"
-```
-
-## What setup.sh Does
-
-`setup.sh` is idempotent and performs:
-1. Installs Bun dependencies.
-2. Runs TypeScript type-check.
-3. Copies MCP config template if none exists.
-4. Reports API key status.
+| Symptom | Fix |
+|---------|-----|
+| `agent-mux: command not found` | Ensure `~/bin` is on PATH and binary was built |
+| `engine_not_found` | Check `--engine` value is `codex`, `claude`, or `gemini` |
+| `model_not_found` | Check model name; error includes fuzzy-match suggestions |
+| API key errors | Verify the env var for your engine is exported |
+| `codex: command not found` | Install the Codex CLI separately |
+| Config not loading | Check `~/.agent-mux/config.toml` exists; use `--verbose` to see resolution |
