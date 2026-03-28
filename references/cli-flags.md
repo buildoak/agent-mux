@@ -55,7 +55,7 @@ Source of truth: `cmd/agent-mux/main.go` (cliFlags struct).
 |------|-------|------|---------|-------|
 | `--sandbox` | | string | `danger-full-access` | `danger-full-access`, `workspace-write`, `read-only` |
 | `--reasoning` | `-r` | string | `medium` | Codex reasoning effort |
-| `--add-dir` | `-d` | string[] | `[]` | Repeatable additional writable directories |
+| `--add-dir` | | string[] | `[]` | Repeatable additional writable directories |
 
 ### Claude-specific
 
@@ -100,7 +100,7 @@ When using `--stdin`, pipe a JSON object with these fields.
 | Max depth | `max_depth` | int | 2 | Recursive dispatch limit |
 | Allow subdispatch | `allow_subdispatch` | bool | true | Recursive dispatch toggle |
 | Full access | `full_access` | bool | true | Full filesystem access |
-| Response max chars | `response_max_chars` | int | 4000 | Truncation threshold |
+| Response max chars | `response_max_chars` | int | 16000 | Truncation threshold |
 | Salt | `salt` | string | auto | Human-readable identifier |
 | Dispatch ID | `dispatch_id` | string | auto ULID | Unique dispatch identifier |
 | Artifact dir | `artifact_dir` | string | auto | Override artifact directory |
@@ -173,7 +173,9 @@ Config file loading order (later wins on conflicts):
 
 ```
 ~/.agent-mux/config.toml (global)
+  > ~/.agent-mux/config.local.toml (global machine-local)
   > <cwd>/.agent-mux/config.toml (project)
-  > --config path (explicit overlay)
+  > <cwd>/.agent-mux/config.local.toml (project machine-local)
+  > --config path (explicit overlay — skips implicit lookup above)
   > coordinator companion .toml (if --profile is set)
 ```

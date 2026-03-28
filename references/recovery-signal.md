@@ -16,8 +16,11 @@
 Every dispatch gets an artifact directory. Default location:
 
 ```
-/tmp/agent-mux/<dispatch_id>/
+/tmp/agent-mux-<uid>/<dispatch_id>/
 ```
+
+If `$XDG_RUNTIME_DIR` is set, uses `$XDG_RUNTIME_DIR/agent-mux/` instead.
+The per-UID suffix ensures artifact isolation between users.
 
 Contents:
 
@@ -34,7 +37,7 @@ Contents:
 Pipeline dispatches create a nested structure:
 
 ```
-/tmp/agent-mux/<dispatch_id>/pipeline/
+/tmp/agent-mux-<uid>/<dispatch_id>/pipeline/
   step-0/worker-0/
     _dispatch_meta.json
     events.jsonl
@@ -86,8 +89,8 @@ You are continuing a previous dispatch (ID: 01KM...).
 Engine: codex, Model: gpt-5.4
 Previous status: timed_out.
 Artifacts from previous run:
-- /tmp/agent-mux/01KM.../src/parser.go
-- /tmp/agent-mux/01KM.../notes.md
+- /tmp/agent-mux-501/01KM.../src/parser.go
+- /tmp/agent-mux-501/01KM.../notes.md
 
 (Original prompt hash: sha256:... — re-read artifacts for context.)
 
@@ -121,7 +124,7 @@ Signals send steering messages to a running dispatch.
 ### CLI Invocation
 
 ```bash
-agent-mux-v2 --signal=01KM... "Focus on auth paths; skip tests"
+agent-mux --signal=01KM... "Focus on auth paths; skip tests"
 ```
 
 ### Signal Acknowledgement
@@ -130,7 +133,7 @@ agent-mux-v2 --signal=01KM... "Focus on auth paths; skip tests"
 {
   "status": "ok",
   "dispatch_id": "01KM...",
-  "artifact_dir": "/tmp/agent-mux/01KM...",
+  "artifact_dir": "/tmp/agent-mux-501/01KM...",
   "message": "Signal delivered to inbox"
 }
 ```
@@ -151,12 +154,13 @@ agent-mux-v2 --signal=01KM... "Focus on auth paths; skip tests"
 
 Control records map dispatch IDs to artifact directories.
 
-Location: `/tmp/agent-mux/control/<dispatch_id>.json`
+Location: `/tmp/agent-mux-<uid>/control/<dispatch_id>.json`
+(or `$XDG_RUNTIME_DIR/agent-mux/control/` if XDG is set)
 
 ```json
 {
   "dispatch_id": "01KM...",
-  "artifact_dir": "/tmp/agent-mux/01KM...",
+  "artifact_dir": "/tmp/agent-mux-501/01KM...",
   "dispatch_salt": "mint-ant-five",
   "trace_token": "AGENT_MUX_GO_01KM..."
 }
@@ -164,8 +168,8 @@ Location: `/tmp/agent-mux/control/<dispatch_id>.json`
 
 Resolution order for `--recover` and `--signal`:
 
-1. Control record at `/tmp/agent-mux/control/<id>.json`
-2. Legacy default directory at `/tmp/agent-mux/<id>/`
+1. Control record at `/tmp/agent-mux-<uid>/control/<id>.json`
+2. Legacy default directory at `/tmp/agent-mux-<uid>/<id>/`
 3. Error if neither found
 
 ---

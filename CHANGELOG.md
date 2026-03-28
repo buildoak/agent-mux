@@ -9,9 +9,9 @@ All notable changes to this project will be documented in this file.
 - **Role/variant system** — named roles in `config.toml` with engine, model, effort, skills, and permission-mode overrides; variants layer per-dispatch mutations on top of a role
 - **Pipeline orchestration** — multi-step sequential pipelines where each step can target a different role/variant; step outputs feed into the next step's prompt context
 - **Recovery and signal handling** — SIGINT/SIGTERM deliver partial results and a `recovery_hint` to callers; two-phase timeout (grace period before hard kill) ensures partial output is never silently dropped
-- **Event streaming** — 13 structured NDJSON event types emitted to stderr: `dispatch_start`, `dispatch_end`, `tool_start`, `tool_end`, `agent_turn`, `file_written`, `command_run`, `hook_triggered`, `signal_received`, `timeout_warning`, `liveness_ping`, `recovery_hint`, `pipeline_step`
-- **Hooks** — per-role `[hooks]` blocks in config with `deny`, `warn`, and `on_violation` rules; evaluated against agent activity in real time (WIP — see Known Limitations)
-- **Liveness supervision** — silence watchdog emits `liveness_ping` events at configurable intervals; distinguishes long-running work from hung processes
+- **Event streaming** — 15 structured NDJSON event types emitted to stderr: `dispatch_start`, `dispatch_end`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `file_read`, `command_run`, `progress`, `timeout_warning`, `frozen_warning`, `error`, `response_truncated`, `coordinator_inject`, `warning`
+- **Hooks** — global `[hooks]` block in config with `deny`, `warn`, and `event_deny_action` rules; evaluated against agent activity in real time (WIP — see Known Limitations)
+- **Liveness supervision** — silence watchdog emits `heartbeat` events at configurable intervals; `frozen_warning` for extended silence; distinguishes long-running work from hung processes
 - **Artifact-first design** — workers are prompted to produce file artifacts by default; inline output reserved for short responses; artifact paths surface in the output contract
 - **Config resolution** — `.agent-mux/` directory search walks up from `--cwd` to repo root; supports project-local and user-global config layers
 - **Coordinator/profile system** — `--coordinator <name>` loads role spec from `.claude/agents/<name>.md` with YAML frontmatter (skills, model, allowedTools) and markdown body as system prompt
@@ -19,14 +19,26 @@ All notable changes to this project will be documented in this file.
 - **Bundled agent templates** — 6 built-in role templates (researcher, coder, reviewer, planner, debugger, writer) as starting points for config.toml
 - **Skills pre-loading** — role-level `skills = [...]` in config.toml resolved from `<cwd>/.claude/skills/<name>/SKILL.md` and injected into the system prompt before dispatch
 - **Claude and Gemini adapters** — full engine registry with Codex, Claude Code, and Gemini adapters behind a common interface
-- **`--version` flag**
+- **`--version` flag** (emits JSON: `{"version":"agent-mux v2.0.0-dev"}`)
+- **Lifecycle subcommands** — `list`, `status`, `result`, `inspect`, `gc` for post-dispatch introspection; human-readable default, `--json` for machine parsing
+- **`list --engine` filter** — filter dispatch history by engine
+- **`result --artifacts` flag** — list artifact files instead of showing result text
+- **`inspect` subcommand** — full dump of dispatch record, response, artifacts, and dispatch metadata
+- **`gc` subcommand** — garbage-collect old dispatches with `--older-than` duration and `--dry-run` preview
+- **Orphan process reaper** — platform-specific (darwin/linux) reaper kills orphaned harness processes
+- **`config.local.toml` support** — machine-local config overlays at both global (`~/.agent-mux/config.local.toml`) and project (`<cwd>/.agent-mux/config.local.toml`) levels
+- **`response_max_chars` default raised to 16000** — from 2000; aligns with modern LLM context windows
+- **Config merge: union semantics** — `[models]` and `[hooks].deny`/`.warn` now union-merge with dedup (append + deduplicate), not replace
+- **`full_output_path` field** — separate field in dispatch result JSON pointing to the `full_output.md` file path when response is truncated
+- **`response_truncated` event** — structured NDJSON event emitted when response truncation occurs, with `full_output_path`
+- **Durable dispatch store** — JSONL-based dispatch index at `~/.agent-mux/store/` for lifecycle subcommand queries
 
 ### Changed
 - **Rewritten from TypeScript to Go** — entire runtime replaced; bun/Node.js no longer required
-- **Output contract** — schema bumped to `schema_version: 1`; top-level `status` field (`success` | `partial` | `error` | `timeout`) replaces the `success: boolean` field from v2; all paths emit structured JSON
+- **Output contract** — schema bumped to `schema_version: 1`; top-level `status` field (`completed` | `timed_out` | `failed`) replaces the `success: boolean` field from v2; all paths emit structured JSON
 - **Config format** — role and global config now in TOML (`config.toml`); inline CLI flags remain for one-shot dispatches
 - **Binary name** — installed as `agent-mux` (was `npx agent-mux` / `bunx agent-mux` in TS era)
-- **Timeout-as-partial** — timed-out runs return `status: "partial"` with collected output and a `recovery_hint`; callers no longer need to special-case timeout vs. error
+- **Timeout-as-partial** — timed-out runs return `status: "timed_out"` with `partial: true`, collected output, and `recoverable: true`; callers no longer need to special-case timeout vs. error
 
 ### Removed
 - **OpenCode engine** — replaced by Gemini adapter; OpenCode is no longer supported

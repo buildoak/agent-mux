@@ -28,8 +28,9 @@ Normal dispatch writes one JSON object to `stdout`:
   "response": "Worker response text",
   "response_truncated": false,
   "full_output": null,
+  "full_output_path": null,
   "handoff_summary": "Short summary for handoff",
-  "artifacts": ["/tmp/agent-mux/01KM.../notes.md"],
+  "artifacts": ["/tmp/agent-mux-501/01KM.../notes.md"],
   "partial": false,
   "recoverable": false,
   "reason": "",
@@ -80,7 +81,8 @@ Normal dispatch writes one JSON object to `stdout`:
 | `trace_token` | string | `AGENT_MUX_GO_<dispatch_id>` |
 | `response` | string | Final response text (may be truncated) |
 | `response_truncated` | bool | True when shortened to `response_max_chars` |
-| `full_output` | string/null | Path to `full_output.md` when truncated |
+| `full_output` | string/null | Full response content when truncated (or null) |
+| `full_output_path` | string/null | Path to `full_output.md` file when response was truncated (omitted when null) |
 | `handoff_summary` | string | Extracted from `## Summary`/`## Handoff` or shortened response |
 | `artifacts` | string[] | Files under artifact dir (excludes internal files) |
 | `partial` | bool | Present on timed-out runs |
@@ -232,16 +234,33 @@ Success:
 {
   "status": "ok",
   "dispatch_id": "01KM...",
-  "artifact_dir": "/tmp/agent-mux/01KM...",
+  "artifact_dir": "/tmp/agent-mux-501/01KM...",
   "message": "Signal delivered to inbox"
 }
 ```
 
-Failure: plain text error on stderr, non-zero exit.
+Failure: structured JSON on stdout with non-zero exit:
+```json
+{
+  "status": "error",
+  "dispatch_id": "01KM...",
+  "message": "invalid dispatch_id: ...",
+  "error": {
+    "code": "invalid_input",
+    "message": "invalid dispatch_id: ...",
+    "suggestion": "Provide a dispatch ID without path separators or traversal segments.",
+    "retryable": true,
+    "partial_artifacts": []
+  }
+}
+```
 
 ### --version
 
-Plain text: `agent-mux v2.0.0-dev`
+JSON on stdout:
+```json
+{"version":"agent-mux v2.0.0-dev"}
+```
 
 ### -o=text
 
@@ -259,6 +278,77 @@ Worker response text
 ```
 
 Pipeline mode ignores `-o=text` and always outputs JSON.
+
+---
+
+## Lifecycle Subcommand JSON
+
+Lifecycle subcommands (`list`, `status`, `result`, `inspect`, `gc`) default to
+human-readable tables. Pass `--json` for machine-parseable output.
+
+### list --json
+
+NDJSON — one `DispatchRecord` per line:
+
+```json
+{"id":"01KM...","salt":"mint-ant-five","status":"completed","engine":"codex","model":"gpt-5.4","role":"lifter","started":"2026-03-28T10:00:00Z","ended":"2026-03-28T10:01:24Z","duration_ms":84231,"cwd":"/repo","truncated":false,"artifact_dir":"/tmp/agent-mux-501/01KM..."}
+```
+
+Flags: `--limit N`, `--status completed|failed|timed_out`, `--engine codex|claude|gemini`.
+
+### status --json
+
+Single JSON object (same `DispatchRecord` shape):
+
+```json
+{"id":"01KM...","salt":"mint-ant-five","status":"completed","engine":"codex","model":"gpt-5.4","role":"lifter","started":"2026-03-28T10:00:00Z","ended":"2026-03-28T10:01:24Z","duration_ms":84231,"cwd":"/repo","truncated":false,"artifact_dir":"/tmp/agent-mux-501/01KM..."}
+```
+
+### result --json
+
+```json
+{"dispatch_id":"01KM...","response":"Worker response text..."}
+```
+
+With `--artifacts`:
+```json
+{"dispatch_id":"01KM...","artifact_dir":"/tmp/agent-mux-501/01KM...","artifacts":["/tmp/agent-mux-501/01KM.../notes.md"]}
+```
+
+### inspect --json
+
+Combines record, response, artifacts, and dispatch meta:
+
+```json
+{
+  "dispatch_id": "01KM...",
+  "record": {"id":"01KM...","salt":"mint-ant-five","status":"completed","engine":"codex","model":"gpt-5.4",...},
+  "response": "Worker response text...",
+  "artifact_dir": "/tmp/agent-mux-501/01KM...",
+  "artifacts": ["notes.md"],
+  "meta": {"dispatch_id":"01KM...","engine":"codex","model":"gpt-5.4","status":"completed",...}
+}
+```
+
+### gc
+
+Always JSON output:
+
+```json
+{"kind":"gc","removed":3,"kept":17,"cutoff":"2026-03-21T10:00:00Z"}
+```
+
+With `--dry-run`:
+```json
+{"kind":"gc_dry_run","would_remove":3,"dispatches":[{"id":"01KM...","started":"...","engine":"codex","status":"completed"}]}
+```
+
+### Lifecycle Errors
+
+All lifecycle errors emit:
+```json
+{"kind":"error","error":{"code":"not_found","message":"no dispatch found for prefix \"01KM\"","suggestion":"","retryable":true,"partial_artifacts":[]}}
+```
 
 ---
 
@@ -294,6 +384,7 @@ Every event includes:
 | `timeout_warning` | `message` | Approaching timeout |
 | `frozen_warning` | `silence_seconds`, `message` | Extended harness silence |
 | `error` | `error_code`, `message` | Error during dispatch |
+| `response_truncated` | `full_output_path` | Response exceeded `response_max_chars`, full output written to file |
 | `coordinator_inject` | `message` | Inbox message injected |
 | `warning` | `error_code`, `message` | Non-fatal warning |
 

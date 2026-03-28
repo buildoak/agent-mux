@@ -46,7 +46,7 @@ Dispatch output is always a single JSON object on stdout. Lifecycle subcommands 
 
 Roles, models, pipelines, and timeouts live in `.agent-mux/config.toml` alongside a `prompts/` directory for system prompt files.
 
-**Resolution order** (later wins): `~/.agent-mux/config.toml` (global) → `<cwd>/.agent-mux/config.toml` (project) → `--config` (explicit). Project config merges on top of global with **defined-wins** semantics — set fields override, absent fields inherit.
+**Resolution order** (later wins): `~/.agent-mux/config.toml` (global) → `~/.agent-mux/config.local.toml` (global machine-local) → `<cwd>/.agent-mux/config.toml` (project) → `<cwd>/.agent-mux/config.local.toml` (project machine-local) → `--config` (explicit). Project config merges on top of global with **defined-wins** semantics — set fields override, absent fields inherit. `config.local.toml` files are for per-machine overrides and should be gitignored.
 
 **Minimal role definition:**
 

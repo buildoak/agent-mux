@@ -141,14 +141,20 @@ hardcoded defaults (DefaultConfig())
       ↓
 ~/.agent-mux/config.toml              (global)
       ↓
+~/.agent-mux/config.local.toml        (global machine-local, gitignored)
+      ↓
 <cwd>/.agent-mux/config.toml          (project)
+      ↓
+<cwd>/.agent-mux/config.local.toml    (project machine-local, gitignored)
       ↓
 --config <path>                        (explicit overlay, highest precedence)
 ```
 
+The `config.local.toml` files are machine-local overlays intended for per-machine secrets, model overrides, or environment-specific settings. They should be added to `.gitignore` and not committed.
+
 Global path fallback: if `~/.agent-mux/config.toml` is absent, falls back to deprecated `~/.config/agent-mux/config.toml` with a stderr warning. Only one global file per invocation.
 
-`--config` resolution: if a `.toml` file, loaded directly. If a directory, tries `<dir>/.agent-mux/config.toml` then `<dir>/config.toml`. Error if neither exists.
+`--config` resolution: if a `.toml` file, loaded directly. If a directory, tries `<dir>/.agent-mux/config.toml` then `<dir>/config.toml`. Error if neither exists. When `--config` is used, the implicit global/project lookup is skipped entirely.
 
 ### TOML Schema Reference
 
@@ -161,7 +167,7 @@ Global path fallback: if `~/.agent-mux/config.toml` is absent, falls back to dep
 | `effort` | string | `"high"` | Effort tier; maps to timeout bucket |
 | `sandbox` | string | `"danger-full-access"` | Sandbox mode for harness |
 | `permission_mode` | string | `""` | Permission mode for harness |
-| `response_max_chars` | int | `2000` | Max chars before response truncation |
+| `response_max_chars` | int | `16000` | Max chars before response truncation |
 | `max_depth` | int | `2` | Max recursive sub-dispatch depth |
 | `allow_subdispatch` | bool | `true` | Whether workers may sub-dispatch |
 
@@ -175,7 +181,7 @@ codex  = ["gpt-5.4", "gpt-5.4-mini"]
 claude = ["claude-sonnet-4-6", "claude-opus-4-6"]
 ```
 
-Overlay replaces the entire list per engine key (not appended).
+Overlay is **union-merged** with the base list (appended and deduplicated). Existing models are preserved; new models are added.
 
 #### `[timeout]` -- TimeoutConfig
 
@@ -201,7 +207,7 @@ Overlay replaces the entire list per engine key (not appended).
 |-----|------|---------|---------|
 | `deny` | []string | nil | Patterns that trigger hard block |
 | `warn` | []string | nil | Patterns that trigger warning |
-| `event_deny_action` | string | `""` | Action on deny match in events: `"kill"` (default) or `"warn"` |
+| `event_deny_action` | string | `""` | Action on deny match in events: `"kill"` or `"warn"` (empty string = kill behavior) |
 
 #### `[pipelines.<name>]` -- PipelineConfig
 
@@ -254,13 +260,13 @@ func merge[T comparable](dst *T, value T, defined bool) {
 | Section | Conflict Resolution |
 |---------|-------------------|
 | `[defaults]` scalars | Last file with explicit definition wins |
-| `[models].<engine>` | Overlay list fully replaces base list |
+| `[models].<engine>` | Overlay list union-merged with base (appended + deduplicated) |
 | `[roles.<name>]` scalars | Last file with explicit definition wins |
 | `[roles.<name>].skills` | Overlay list fully replaces base list (no append) |
 | `[roles.<name>.variants.<v>]` | Additive map; name collisions deep-merged |
 | `[pipelines.<name>]` | Overlay fully replaces entire pipeline |
 | `[liveness]` / `[timeout]` scalars | Last file with explicit definition wins |
-| `[hooks].deny` / `.warn` | Overlay list fully replaces base list |
+| `[hooks].deny` / `.warn` | Overlay list union-merged with base (appended + deduplicated) |
 
 ### Profile Loading
 
@@ -298,7 +304,7 @@ Then: adapter lookup via `Registry.Get(engine)` -> model validation -> control r
 type HarnessAdapter interface {
     Binary() string                                                    // executable name on PATH
     BuildArgs(spec *DispatchSpec) []string                             // argv[1:] for initial invocation
-    EnvVars(spec *DispatchSpec) []string                               // additional KEY=VALUE env vars
+    EnvVars(spec *DispatchSpec) ([]string, error)                       // additional KEY=VALUE env vars
     ParseEvent(line string) (*HarnessEvent, error)                     // parse one stdout line
     SupportsResume() bool                                              // can resume via ResumeArgs?
     ResumeArgs(spec *DispatchSpec, sessionID string, msg string) []string // argv for resume invocation
@@ -328,7 +334,7 @@ Sandbox resolution:
 
 System prompt handling: prepended to prompt as `SystemPrompt + "\n\n" + Prompt`.
 
-**Resume:** `["exec", "resume", "-m", <model>, "--json", <sessionID>, <message>]`. Supported.
+**Resume:** `["exec", "resume", ["-m", <model>], "--json", <sessionID>, <message>]`. The `-m` flag is only present when `spec.Model` is non-empty. Session ID is a positional argument, not a flag. Supported.
 
 ### Claude Adapter
 

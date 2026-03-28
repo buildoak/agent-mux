@@ -48,8 +48,11 @@ Flag mappings:
 
 Resume path:
 ```bash
-codex exec resume --id <thread_id> --json "message"
+codex exec resume [-m <model>] --json <session_id> "message"
 ```
+
+Note: session ID is a positional argument, not a flag. The `-m` flag is only
+present when a model is specified.
 
 ### Claude
 
@@ -148,7 +151,7 @@ local Gemini CLI accepts.
 | Sandbox | `danger-full-access` |
 | Full access | `true` |
 | Max depth | `2` |
-| Response max chars | `2000` |
+| Response max chars | `16000` |
 | Heartbeat interval | `15` seconds |
 | Silence warning | `90` seconds |
 | Silence kill | `180` seconds |

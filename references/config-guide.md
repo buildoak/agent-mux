@@ -18,8 +18,14 @@ Config files are TOML. Loaded in order (later wins on conflicts):
 
 1. **Global:** `~/.agent-mux/config.toml`
    (legacy fallback: `~/.config/agent-mux/config.toml` — emits deprecation warning)
-2. **Project:** `<cwd>/.agent-mux/config.toml`
-3. **Explicit:** `--config <path>` (file or directory)
+2. **Global machine-local:** `~/.agent-mux/config.local.toml`
+3. **Project:** `<cwd>/.agent-mux/config.toml`
+4. **Project machine-local:** `<cwd>/.agent-mux/config.local.toml`
+5. **Explicit:** `--config <path>` (file or directory — skips implicit lookup above)
+
+The `config.local.toml` files are machine-local overlays for per-machine
+secrets, model overrides, or environment-specific settings. Add them to
+`.gitignore`.
 
 When `--config` points to a directory, v2 looks for
 `<dir>/.agent-mux/config.toml` then `<dir>/config.toml`.
@@ -39,14 +45,14 @@ model = "gpt-5.4"
 effort = "high"
 sandbox = "danger-full-access"
 permission_mode = ""
-response_max_chars = 4000
+response_max_chars = 16000
 max_depth = 2
 allow_subdispatch = true
 
 [liveness]
 heartbeat_interval_sec = 15
-silence_warn_seconds = 120
-silence_kill_seconds = 240
+silence_warn_seconds = 90
+silence_kill_seconds = 180
 
 [timeout]
 low = 120
@@ -63,7 +69,7 @@ gemini = ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-pro", 
 [hooks]
 deny = ["DROP TABLE", "vault.sh export"]
 warn = ["rm -rf", "git push --force", "curl", "wget"]
-event_deny_action = "deny"
+event_deny_action = "kill"
 
 [roles.NAME]
 engine = "codex"
@@ -95,7 +101,7 @@ role = "lifter"
 | `effort` | string | `high` | Default effort level |
 | `sandbox` | string | `danger-full-access` | Codex sandbox mode |
 | `permission_mode` | string | - | Claude permission mode |
-| `response_max_chars` | int | 2000 | Truncation threshold |
+| `response_max_chars` | int | 16000 | Truncation threshold |
 | `max_depth` | int | 2 | Recursive dispatch limit |
 | `allow_subdispatch` | bool | true | Allow recursive dispatches |
 
@@ -128,7 +134,7 @@ If absent, hardcoded fallback lists are used.
 |-----|------|---------|-------|
 | `deny` | string[] | `[]` | Block prompts/events matching these patterns |
 | `warn` | string[] | `[]` | Inject caution text for matching patterns |
-| `event_deny_action` | string | `deny` | `deny` (kill) or `warn` for event matches |
+| `event_deny_action` | string | `""` | `"kill"` or `"warn"` for event matches (empty string defaults to kill behavior) |
 
 ---
 

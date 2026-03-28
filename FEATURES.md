@@ -44,44 +44,20 @@ Open feature requests and follow-up ideas for agent-mux.
   - Why: not needed now, but potentially useful for Jenkins/operator workflows
     and better caller-death tolerance.
 
-- Response truncation: make configurable, not silent
-  - Current state: `response_max_chars` defaults to 2000. When exceeded,
-    response is silently truncated and `full_output.md` is written to the
-    artifact directory. The caller gets `response_truncated: true` but
-    must know to check the artifact path for the full text.
-  - Impact: auditor dispatches, research tasks, and any verbose worker
-    output gets silently cut. Callers that don't check `response_truncated`
-    lose data without warning.
-  - Proposed: (a) raise default to 8000-16000 chars (LLM context windows are
-    large enough), (b) emit a structured warning event when truncation occurs,
-    (c) add a `--no-truncate` flag or `response_max_chars: 0` to disable,
-    (d) include the `full_output` artifact path in the result JSON when
-    truncation occurs so callers don't have to construct it.
+- ~~Response truncation: make configurable, not silent~~ — **MOSTLY SHIPPED (2026-03-28)**.
+  (a) Default raised to 16000 chars. (b) `response_truncated` event emitted
+  when truncation occurs. (d) `full_output_path` field in result JSON points
+  to the full text file. Remaining: (c) `--no-truncate` / `response_max_chars: 0`
+  to fully disable truncation is not yet implemented.
 
-- BUG: result JSON goes to stderr, not stdout
-  - Current state: dispatch result JSON consistently lands on stderr instead
-    of stdout. The documented contract says "single JSON object on stdout"
-    but the binary writes it to stderr. This means `> result.json` captures
-    nothing; callers must parse stderr.
-  - Impact: every programmatic consumer must check stderr for results.
-    Breaks the documented contract. Discovered during 10+ dispatches in
-    a single coordination session.
+- ~~BUG: result JSON goes to stderr, not stdout~~ — **FIXED (2026-03-28)**.
+  `emitResult` now writes to stdout. Result JSON goes to stdout as documented.
 
-- Post-dispatch lifecycle commands (status, result, list)
-  - Current state: after a dispatch completes, the only way to inspect
-    results is to parse raw JSON files in /tmp/agent-mux/<dispatch_id>/.
-    No built-in commands for checking status, extracting the response text,
-    or listing recent dispatches.
-  - Proposed commands:
-    - `agent-mux status <dispatch_id>` — status, duration, truncated, artifact count
-    - `agent-mux result <dispatch_id>` — print response text (or full_output.md if truncated)
-    - `agent-mux list` — table of recent dispatches: id, role, status, duration
-  - Why: agent-mux has good dispatch ergonomics but zero post-dispatch
-    ergonomics. The dispatch-preview-signal-recover lifecycle is solid.
-    After completion, you're parsing JSON by hand. These three commands
-    close the loop.
-  - Note: `-o=text` exists for dispatch-time output but there's no
-    equivalent for post-dispatch inspection.
+- ~~Post-dispatch lifecycle commands (status, result, list)~~ — **SHIPPED (2026-03-28)**.
+  All three implemented plus `inspect` and `gc`. Human-readable default,
+  `--json` for machine parsing. `list` supports `--engine`, `--status`,
+  `--limit` filters. `result` supports `--artifacts` flag. `gc` supports
+  `--older-than` duration and `--dry-run`.
 
 - Hooks: context-aware matching
   - Current state: event-level deny/warn patterns use case-insensitive

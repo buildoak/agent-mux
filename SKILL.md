@@ -336,7 +336,7 @@ Essential fields for JSON dispatch:
 | `timeout_sec` | int | no | Override timeout in seconds |
 | `continues_dispatch_id` | string | no | Recovery: prior dispatch ID |
 | `profile` | string | no | Coordinator persona name |
-| `response_max_chars` | int | no | Truncate response (default 2000) |
+| `response_max_chars` | int | no | Truncate response (default 16000) |
 | `full_access` | bool | no | Default true |
 | `allow_subdispatch` | bool | no | Default true |
 | `max_depth` | int | no | Recursive depth limit (default 2) |
