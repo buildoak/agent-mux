@@ -190,35 +190,158 @@ func SecureArtifactRoot() string             // per-user runtime dir, 0700
 
 ---
 
-## 6. Implementation Priority
+## 6. Persistent Dispatch Store (`~/.agent-mux/data/`)
+
+### Problem
+
+Dispatch artifacts live in `/tmp/agent-mux/` — ephemeral (cleared on reboot), shared (security risk), invisible to the user. After reboot, all dispatch history is gone.
+
+### Design
+
+Move the durable dispatch record to `~/.agent-mux/data/`. `/tmp` stays as the live workspace during dispatch (events, inbox, scratch) but the permanent record lives in the user's home directory.
+
+```
+~/.agent-mux/
+  config.toml            # how to dispatch (existing)
+  config.local.toml      # machine-local overrides, git-ignored (NEW, see §7)
+  prompts/               # what to inject (existing)
+  data/                  # what happened (NEW)
+    dispatches.jsonl     # append-only index, one JSON line per dispatch
+    results/
+      <dispatch_id>.md   # response text for completed dispatches
+```
+
+**`dispatches.jsonl`** — one line per dispatch, ~200 bytes:
+```json
+{"id":"01KMT0WY","salt":"quick-newt-zero","status":"completed","engine":"codex","model":"gpt-5.4","role":"explorer","started":"2026-03-28T13:45:00Z","duration_ms":824000,"cwd":"/repo","truncated":true,"response_chars":3817}
+```
+
+**`results/<id>.md`** — the actual response text. Written on dispatch completion. If the dispatch was truncated, stores the FULL text (not the truncated version). This is what `agent-mux result <id>` reads.
+
+### Lifecycle
+
+1. **Dispatch starts** → `/tmp/agent-mux/<id>/` created (live workspace: events, inbox, artifacts)
+2. **Dispatch ends** → append record to `~/.agent-mux/data/dispatches.jsonl` + write `results/<id>.md`
+3. **Reboot** → `/tmp` cleared, doesn't matter — durable record in `~/.agent-mux/data/`
+4. **Cleanup** → `agent-mux gc --older-than 30d` removes old results (future)
+
+### Command mapping
+
+| Command | Reads from |
+|---------|------------|
+| `agent-mux list` | `dispatches.jsonl` — tail N lines, filter by status/engine/role |
+| `agent-mux status <id>` | `dispatches.jsonl` — grep for id prefix |
+| `agent-mux result <id>` | `results/<id>.md` — print the response text |
+| `agent-mux inspect <id>` | Extract salt from record → `gaal find-salt` → full session |
+
+### Properties
+
+- **Append-only.** Concurrent dispatches just append (file lock on write).
+- **Unix-friendly.** `tail`, `grep`, `jq` all work on the JSONL.
+- **No SQLite.** No binary dependency for a text file.
+- **Permissions.** `~/.agent-mux/data/` is `0700`, files are `0600`. Per-user, private.
+- **Survivable.** If `dispatches.jsonl` is lost, dispatches still work — it's a convenience index, not a dependency.
+
+---
+
+## 7. Config Layer Model (aligned with Claude Code)
+
+### Current State
+
+agent-mux already has two-layer config:
+```
+~/.agent-mux/config.toml           # global defaults
+<project>/.agent-mux/config.toml   # project overrides (defined-wins merge)
+```
+
+### Missing: Machine-Local Layer
+
+Claude Code has `settings.local.json` at both global and project level — git-ignored, for machine-specific overrides. agent-mux needs the same.
+
+### Proposed: Three-Layer Config
+
+```
+Resolution order (later wins on defined fields):
+
+1. ~/.agent-mux/config.toml           # global defaults (committed to dotfiles)
+2. ~/.agent-mux/config.local.toml     # machine-local global (git-ignored)
+3. <cwd>/.agent-mux/config.toml       # project config (committed to project repo)
+4. <cwd>/.agent-mux/config.local.toml # machine-local project (git-ignored)
+5. --config=/explicit/path.toml        # explicit override (sole source, no merge)
+```
+
+### What goes where
+
+| Content | Layer | Git? |
+|---------|-------|------|
+| Default engine/model preferences | Global config | Yes |
+| Role definitions for a team | Project config | Yes |
+| Custom binary paths (e.g., codex at non-standard location) | Local config | No |
+| Personal model overrides (prefer opus over sonnet) | Local config | No |
+| API key env var overrides | Local config | No |
+| Sandbox paths specific to this machine | Local config | No |
+| Pipeline definitions | Project config | Yes |
+| Hooks | Project config | Yes (but currently WIP) |
+
+### Merge Semantics (matching Claude Code patterns)
+
+| Type | Behavior |
+|------|----------|
+| Scalar defaults (engine, model, effort) | Later wins |
+| Role definitions | Project overrides global by role name |
+| Role skills arrays | Replacement, not union (current behavior) |
+| Pipeline definitions | Project overrides global by pipeline name |
+| Model validation lists | Union (both contribute valid models) |
+| Hooks deny/warn | Additive union (both apply) |
+
+### Agents and Prompts directories
+
+```
+~/.agent-mux/
+  agents/          # global coordinator/profile definitions
+  prompts/         # global system prompt files
+
+<project>/.agent-mux/
+  agents/          # project agents (override global by name)
+  prompts/         # project prompts (override global by filename)
+```
+
+Same pattern as Claude Code's `agents/` and `skills/`: both levels scanned, project wins on name collision.
+
+---
+
+## 8. Implementation Priority
 
 ### Phase 1: Foundation (unblocks everything else)
 1. Output contract fix (§1) — centralized result emitter, all paths write JSON to stdout
 2. `--yes` default for `--stdin` mode
 3. Test suite hermetic fix (`HOME` isolation)
+4. `config.local.toml` support (§7) — machine-local git-ignored layer
 
 ### Phase 2: Post-Dispatch Lifecycle (highest user-facing impact)
-4. `agent-mux list` command
-5. `agent-mux status <id>` command
-6. `agent-mux result <id>` command
-7. Response truncation fixes (raise default, include full_output_path)
+5. `~/.agent-mux/data/` persistent store (§6) — dispatches.jsonl + results/
+6. `agent-mux list` command
+7. `agent-mux status <id>` command
+8. `agent-mux result <id>` command
+9. Response truncation fixes (§3) — raise default, include full_output_path
 
 ### Phase 3: Security Hardening
-8. `internal/sanitize/` package
-9. Dispatch ID validation
-10. Per-user artifact root
-11. Hook + system_prompt fixes
-12. Skill/profile basename validation
+10. `internal/sanitize/` package
+11. Dispatch ID validation
+12. Per-user artifact root (live workspace moves to `$XDG_RUNTIME_DIR` or `/tmp/agent-mux-$UID/`)
+13. Hook + system_prompt fixes
+14. Skill/profile basename validation
 
 ### Phase 4: Contract & Correctness
-13. Pipeline output envelope unification
-14. Inbox framing fix (NDJSON)
-15. Timeout validation
-16. Non-atomic write fixes
-17. Gemini adapter fixes
+15. Pipeline output envelope unification
+16. Inbox framing fix (NDJSON)
+17. Timeout validation
+18. Non-atomic write fixes
+19. Gemini adapter fixes
 
 ### Phase 5: Polish
-18. Orphan process reaper
-19. Docs drift fixes
-20. Dead parameter cleanup
-21. `agent-mux inspect` (gaal bridge)
+20. Orphan process reaper
+21. Docs drift fixes (§5)
+22. Dead parameter cleanup
+23. `agent-mux inspect` (gaal bridge)
+24. `agent-mux gc` — cleanup old data/results
