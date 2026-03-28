@@ -58,6 +58,31 @@ Open feature requests and follow-up ideas for agent-mux.
     (d) include the `full_output` artifact path in the result JSON when
     truncation occurs so callers don't have to construct it.
 
+- BUG: result JSON goes to stderr, not stdout
+  - Current state: dispatch result JSON consistently lands on stderr instead
+    of stdout. The documented contract says "single JSON object on stdout"
+    but the binary writes it to stderr. This means `> result.json` captures
+    nothing; callers must parse stderr.
+  - Impact: every programmatic consumer must check stderr for results.
+    Breaks the documented contract. Discovered during 10+ dispatches in
+    a single coordination session.
+
+- Post-dispatch lifecycle commands (status, result, list)
+  - Current state: after a dispatch completes, the only way to inspect
+    results is to parse raw JSON files in /tmp/agent-mux/<dispatch_id>/.
+    No built-in commands for checking status, extracting the response text,
+    or listing recent dispatches.
+  - Proposed commands:
+    - `agent-mux status <dispatch_id>` — status, duration, truncated, artifact count
+    - `agent-mux result <dispatch_id>` — print response text (or full_output.md if truncated)
+    - `agent-mux list` — table of recent dispatches: id, role, status, duration
+  - Why: agent-mux has good dispatch ergonomics but zero post-dispatch
+    ergonomics. The dispatch-preview-signal-recover lifecycle is solid.
+    After completion, you're parsing JSON by hand. These three commands
+    close the loop.
+  - Note: `-o=text` exists for dispatch-time output but there's no
+    equivalent for post-dispatch inspection.
+
 - Hooks: context-aware matching
   - Current state: event-level deny/warn patterns use case-insensitive
     substring matching on ALL event content, including files read during
