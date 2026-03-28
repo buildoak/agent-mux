@@ -245,6 +245,6 @@ Skills are loaded from `<cwd>/.claude/skills/<name>/SKILL.md`.
 
 Behavior:
 - Content is wrapped in `<skill name="...">` XML blocks and prepended to prompt
-- If `<skillDir>/scripts/` exists, it is prepended to `PATH`
+- If `<skillDir>/scripts/` exists, it is added to the engine `add-dir` list (Codex `--add-dir`)
 - Role skills merge with CLI/JSON skills (role skills first, then explicit)
 - Duplicate skill names are deduplicated

@@ -146,6 +146,7 @@ Present only when `status` is `failed`:
 
 ```json
 {
+  "schema_version": 1,
   "pipeline_id": "01KM...",
   "status": "completed",
   "steps": [

@@ -40,7 +40,7 @@ printf '{"role":"scout","prompt":"Find all usages of deprecated API","cwd":"/rep
   | ./agent-mux --stdin
 ```
 
-Output is always a single JSON object on stdout. stderr carries NDJSON event stream and heartbeat lines.
+Dispatch output is always a single JSON object on stdout. Lifecycle subcommands (`list`, `status`, `result`, `inspect`, `gc`) default to human-readable but accept `--json`. stderr carries NDJSON event stream and heartbeat lines.
 
 ## Configuration
 
@@ -81,7 +81,7 @@ Engine CLIs must be installed separately — agent-mux dispatches to them, it do
 - **Pipeline orchestration** — Multi-step chains, fan-out parallelism, and handoff rendering between steps. Defined in TOML, not code.
 - **Recovery and signals** — Continue timed-out work with `--recover`. Steer live dispatches with inbox signals.
 - **Two-phase timeout** — Soft timeout fires a wrap-up signal, grace period allows clean exit, hard timeout kills. Artifacts are preserved at every phase.
-- **Event streaming** — 13 NDJSON event types on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `artifact_written`, `soft_timeout`, and more.
+- **Event streaming** — 15 NDJSON event types on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `timeout_warning`, and more.
 - **Hooks** — Pattern-based deny/warn rules evaluated on harness events. Safety preamble injection.
 - **Profiles and coordinators** — Load orchestrator personas from markdown specs with frontmatter-driven defaults.
 - **Skill injection** — Load `SKILL.md` runbooks into the dispatch prompt. Skills carry scripts, references, and setup.
