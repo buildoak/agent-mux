@@ -112,7 +112,7 @@ API key is set. agent-mux will attempt dispatch if any auth path is available â€
 |-----|------|
 | [DOCS.md](DOCS.md) | Full technical reference â€” architecture, config schema, dispatch lifecycle |
 | [SKILL.md](SKILL.md) | Operational manual for AI agents using agent-mux |
-| [FEATURES.md](FEATURES.md) | Open feature requests and known limitations |
+| [BACKLOG.md](BACKLOG.md) | Open bugs, feature requests, spec gaps, and known limitations |
 | [references/](references/) | Engine comparison, prompting guide, output contract, config guides, installation |
 
 ## License

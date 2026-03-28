@@ -67,9 +67,9 @@ All notable changes to this project will be documented in this file.
 - **Browser automation integration** — bundled agent-browser MCP server (shipped in v2.1.0) removed from the Go runtime; browser tooling must be wired externally if needed
 
 ### Known Limitations
-- **Gemini response capture broken** — Gemini dispatches return truncated or empty `response` field despite generating output; `turns: 0`, `tool_calls: []`. Root cause: NDJSON stream parsing in `internal/engine/adapter/gemini.go` likely drops the final response event. Fix tracked in FEATURES.md.
+- **Gemini response capture broken** — Gemini dispatches return truncated or empty `response` field despite generating output; `turns: 0`, `tool_calls: []`. Root cause: NDJSON stream parsing in `internal/engine/adapter/gemini.go` likely drops the final response event. Fix tracked in BACKLOG.md (B-1).
 - **Gemini no tool calling** — Gemini dispatches produce zero file reads, zero commands, zero tool calls. The `gemini` CLI does not expose a tool-use surface comparable to Codex or Claude. Gemini variants are currently reasoning-only; all context must be supplied in the prompt.
-- **Hooks false positives on workspace reads (WIP)** — deny/warn patterns match against all event content including files the harness reads during workspace orientation, not just agent-authored output. Hooks are disabled in production config until scope-aware matching is implemented. Fix tracked in FEATURES.md.
+- **Hooks false positives on workspace reads (WIP)** — deny/warn patterns match against all event content including files the harness reads during workspace orientation, not just agent-authored output. Hooks are disabled in production config until scope-aware matching is implemented. Fix tracked in BACKLOG.md (B-2).
 
 ---
 
