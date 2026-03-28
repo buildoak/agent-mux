@@ -278,7 +278,7 @@ type HarnessEvent struct {
 type HarnessAdapter interface {
 	Binary() string
 	BuildArgs(spec *DispatchSpec) []string
-	EnvVars(spec *DispatchSpec) []string
+	EnvVars(spec *DispatchSpec) ([]string, error)
 	ParseEvent(line string) (*HarnessEvent, error)
 	SupportsResume() bool
 	ResumeArgs(spec *DispatchSpec, sessionID string, message string) []string

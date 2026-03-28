@@ -39,8 +39,8 @@ func (a *ClaudeAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	return args
 }
 
-func (a *ClaudeAdapter) EnvVars(spec *types.DispatchSpec) []string {
-	return nil
+func (a *ClaudeAdapter) EnvVars(spec *types.DispatchSpec) ([]string, error) {
+	return nil, nil
 }
 
 type claudeEvent struct {

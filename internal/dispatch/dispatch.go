@@ -226,6 +226,7 @@ var ErrorCatalog = map[string]ErrorInfo{
 	"invalid_args":            {Suggestion: "Fix the dispatch arguments and retry. Check required fields such as engine, prompt, and working directory.", Retryable: true},
 	"invalid_input":           {Suggestion: "Provide dispatch inputs without path separators, traversal segments, or empty basenames, then retry.", Retryable: true},
 	"config_error":            {Suggestion: "Fix the referenced config or role definition, then retry the dispatch.", Retryable: true},
+	"parse_error":             {Suggestion: "The harness emitted malformed output and no final response could be trusted. Retry once; if it repeats, inspect raw harness output.", Retryable: false},
 	"process_killed":          {Suggestion: "Check harness stderr and recent events, then retry once the underlying process issue is resolved.", Retryable: true},
 	"recovery_failed":         {Message: "No artifacts found for the given dispatch ID.", Suggestion: "Previous dispatch may not have written artifacts. Check the artifact directory.", Retryable: false},
 	"output_parse_error":      {Suggestion: "The harness emitted output agent-mux could not parse cleanly. Retry once; if it repeats, inspect raw harness output.", Retryable: false},

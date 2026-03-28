@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -711,7 +710,11 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 	if spec.HandoffMode != "summary_and_refs" {
 		t.Fatalf("handoff_mode = %q, want %q", spec.HandoffMode, "summary_and_refs")
 	}
-	wantArtifactDir := filepath.ToSlash(filepath.Join("/tmp/agent-mux", spec.DispatchID)) + "/"
+	wantArtifactDirPath, err := recovery.DefaultArtifactDir(spec.DispatchID)
+	if err != nil {
+		t.Fatalf("DefaultArtifactDir: %v", err)
+	}
+	wantArtifactDir := filepath.ToSlash(wantArtifactDirPath) + "/"
 	if spec.ArtifactDir != wantArtifactDir {
 		t.Fatalf("artifact_dir = %q, want %q", spec.ArtifactDir, wantArtifactDir)
 	}
@@ -964,12 +967,125 @@ func TestLoadSystemPromptFileDirectPathBeforePromptsSubfolder(t *testing.T) {
 	}
 }
 
+func TestLoadSystemPromptFileRejectsAbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	absPath := filepath.Join(dir, "prompt.md")
+
+	_, err := loadSystemPromptFile(dir, absPath)
+	if err == nil {
+		t.Fatal("loadSystemPromptFile error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "absolute paths are not allowed") {
+		t.Fatalf("error = %q, want absolute path rejection", err)
+	}
+}
+
+func TestLoadSystemPromptFileRejectsEscapeOutsideSourceDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	_, err := loadSystemPromptFile(dir, "../secret.md")
+	if err == nil {
+		t.Fatal("loadSystemPromptFile error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "invalid system prompt file") {
+		t.Fatalf("error = %q, want invalid system prompt file", err)
+	}
+	if !strings.Contains(err.Error(), "escapes root") {
+		t.Fatalf("error = %q, want root escape rejection", err)
+	}
+}
+
 func TestPrependSystemPromptLayersRoleAndCLI(t *testing.T) {
 	t.Parallel()
 
 	got := prependSystemPrompt("role prompt", "cli file\n\ninline")
 	if got != "role prompt\n\ncli file\n\ninline" {
 		t.Fatalf("system prompt = %q, want layered prompt", got)
+	}
+}
+
+func TestRunRejectsDeniedSystemPromptContent(t *testing.T) {
+	isolateHome(t)
+
+	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
+	cfgPath := writeTempConfig(t, "[hooks]\ndeny = [\"blocked secret\"]\n")
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--engine", "codex",
+		"--artifact-dir", artifactDir,
+		"--config", cfgPath,
+		"--system-prompt", "do not expose blocked secret",
+		"summarize the repository",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
+	}
+	if result.Error == nil || result.Error.Code != "prompt_denied" {
+		t.Fatalf("error = %#v, want prompt_denied", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, `matched: "blocked secret"`) {
+		t.Fatalf("error.message = %q, want matched deny pattern", result.Error.Message)
+	}
+}
+
+func TestRunRejectsDeniedRoleSystemPromptFileContent(t *testing.T) {
+	isolateHome(t)
+
+	configDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(configDir, "prompts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cfgPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(filepath.Join(configDir, "prompts", "reviewer.md"), []byte("contains blocked payload"), 0o644); err != nil {
+		t.Fatalf("WriteFile prompt: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(strings.TrimSpace(`
+[hooks]
+deny = ["blocked payload"]
+
+[roles.reviewer]
+engine = "codex"
+model = "gpt-5.4"
+system_prompt_file = "prompts/reviewer.md"
+`)), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--config", cfgPath,
+		"--cwd", configDir,
+		"--role", "reviewer",
+		"--artifact-dir", filepath.Join(t.TempDir(), "artifacts") + "/",
+		"summarize the repository",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
+	}
+	if result.Error == nil || result.Error.Code != "prompt_denied" {
+		t.Fatalf("error = %#v, want prompt_denied", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, `matched: "blocked payload"`) {
+		t.Fatalf("error.message = %q, want matched deny pattern", result.Error.Message)
 	}
 }
 
@@ -1492,7 +1608,7 @@ func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 	relativeArtifactDir := filepath.Join("artifacts", "custom-dispatch")
 	absoluteArtifactDir := filepath.Join(startDir, relativeArtifactDir)
 	t.Cleanup(func() {
-		_ = os.Remove(filepath.Join("/tmp/agent-mux/control", url.PathEscape(dispatchID)+".json"))
+		_ = os.Remove(recovery.ControlRecordPath(dispatchID))
 	})
 	input := map[string]any{
 		"dispatch_id":  dispatchID,
@@ -2029,6 +2145,11 @@ func writeStoreRecord(t *testing.T, record store.DispatchRecord, response string
 }
 
 func testStoreRecord(id, status string) store.DispatchRecord {
+	artifactDir, err := recovery.DefaultArtifactDir(id)
+	if err != nil {
+		panic(err)
+	}
+
 	return store.DispatchRecord{
 		ID:            id,
 		Salt:          "quick-newt-zero",
@@ -2044,7 +2165,7 @@ func testStoreRecord(id, status string) store.DispatchRecord {
 		Cwd:           "/Users/otonashi/thinking/building/agent-mux",
 		Truncated:     true,
 		ResponseChars: 3817,
-		ArtifactDir:   filepath.Join("/tmp/agent-mux", id),
+		ArtifactDir:   artifactDir,
 	}
 }
 

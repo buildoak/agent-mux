@@ -430,10 +430,9 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 
 	hookEval := hooks.NewEvaluator(cfg.Hooks)
-	if denied, matched := hookEval.CheckPrompt(spec.Prompt); denied {
-		return failResult(spec, "prompt_denied",
-			fmt.Sprintf("prompt blocked by hooks policy (matched: %q)", matched),
-			"Remove the matching content from your prompt or adjust hook configuration.")
+	if denied, matched := checkPromptDenied(spec, hookEval); denied {
+		code, msg, suggestion := promptDeniedFailure(matched)
+		return failResult(spec, code, msg, suggestion)
 	}
 	if hookEval.HasRules() {
 		if inj := hookEval.PromptInjection(); inj != "" {
@@ -578,22 +577,27 @@ func loadSystemPromptFile(sourceDir, promptFile string) (string, error) {
 	if promptFile == "" {
 		return "", nil
 	}
-
-	// Absolute paths are used directly.
 	if filepath.IsAbs(promptFile) {
-		data, err := os.ReadFile(promptFile)
-		if err != nil {
-			return "", fmt.Errorf("read system prompt file %q: %w", promptFile, err)
-		}
-		return string(data), nil
+		return "", fmt.Errorf("system prompt file %q must be relative to the config source directory; absolute paths are not allowed", promptFile)
+	}
+	sourceDir = strings.TrimSpace(sourceDir)
+	if sourceDir == "" {
+		return "", fmt.Errorf("system prompt file %q cannot be resolved without a config source directory", promptFile)
 	}
 
-	// Relative path: try <sourceDir>/<file> first, then <sourceDir>/prompts/<file>.
-	candidates := []string{
-		filepath.Join(sourceDir, promptFile),
-		filepath.Join(sourceDir, "prompts", promptFile),
+	candidateChildren := []string{promptFile}
+	if filepath.Dir(promptFile) == "." {
+		candidateChildren = append(candidateChildren, filepath.Join("prompts", promptFile))
 	}
-	for _, path := range candidates {
+
+	tried := make([]string, 0, len(candidateChildren))
+	for _, child := range candidateChildren {
+		path, err := sanitize.SafeJoinPath(sourceDir, child)
+		if err != nil {
+			return "", fmt.Errorf("invalid system prompt file %q: %w", promptFile, err)
+		}
+		tried = append(tried, path)
+
 		data, err := os.ReadFile(path)
 		if err == nil {
 			return string(data), nil
@@ -602,7 +606,7 @@ func loadSystemPromptFile(sourceDir, promptFile string) (string, error) {
 			return "", fmt.Errorf("read system prompt file %q: %w", path, err)
 		}
 	}
-	return "", fmt.Errorf("read system prompt file %q: not found in %q or %q", promptFile, candidates[0], candidates[1])
+	return "", fmt.Errorf("read system prompt file %q: not found under %q (tried: %s)", promptFile, sourceDir, strings.Join(tried, ", "))
 }
 
 func prependSystemPrompt(prefix, existing string) string {
@@ -614,6 +618,37 @@ func prependSystemPrompt(prefix, existing string) string {
 	default:
 		return prefix + "\n\n" + existing
 	}
+}
+
+func checkPromptDenied(spec *types.DispatchSpec, hookEval *hooks.Evaluator) (bool, string) {
+	if spec == nil || hookEval == nil {
+		return false, ""
+	}
+	return hookEval.CheckPrompt(stripHookPromptInjection(spec.Prompt, hookEval), spec.SystemPrompt)
+}
+
+func stripHookPromptInjection(prompt string, hookEval *hooks.Evaluator) string {
+	if hookEval == nil {
+		return prompt
+	}
+	inj := hookEval.PromptInjection()
+	if inj == "" {
+		return prompt
+	}
+	withSpacing := inj + "\n\n"
+	if strings.HasPrefix(prompt, withSpacing) {
+		return strings.TrimPrefix(prompt, withSpacing)
+	}
+	if strings.HasPrefix(prompt, inj) {
+		return strings.TrimPrefix(prompt, inj)
+	}
+	return prompt
+}
+
+func promptDeniedFailure(matched string) (code, msg, suggestion string) {
+	return "prompt_denied",
+		fmt.Sprintf("prompt blocked by hooks policy (matched: %q)", matched),
+		"Remove the matching content from your prompt or adjust hook configuration."
 }
 
 func emitResult(w io.Writer, result interface{}) {
@@ -1396,6 +1431,16 @@ func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseS
 	}
 
 	dispatchFn := func(ctx context.Context, spec *types.DispatchSpec) *types.DispatchResult {
+		if denied, matched := checkPromptDenied(spec, hookEval); denied {
+			code, msg, suggestion := promptDeniedFailure(matched)
+			result := buildFailedResult(spec, code, msg, suggestion)
+			if result != nil && result.Metadata != nil {
+				result.Metadata.PipelineID = spec.PipelineID
+				result.Metadata.ParentDispatchID = spec.ParentDispatchID
+			}
+			return result
+		}
+
 		result, err := dispatchSpec(ctx, spec, cfg, stderr, verbose, hookEval)
 		if err != nil {
 			return dispatch.BuildFailedResult(

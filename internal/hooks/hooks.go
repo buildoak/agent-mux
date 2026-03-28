@@ -52,11 +52,11 @@ func NewEvaluator(cfg config.HooksConfig) *Evaluator {
 	}
 }
 
-func (e *Evaluator) CheckPrompt(prompt string) (denied bool, matched string) {
+func (e *Evaluator) CheckPrompt(parts ...string) (denied bool, matched string) {
 	if e == nil {
 		return false, ""
 	}
-	match := matchAny(e.deny, []string{prompt})
+	match := matchAny(e.deny, parts)
 	if match == "" {
 		return false, ""
 	}

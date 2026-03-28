@@ -163,7 +163,16 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		fmt.Sprintf("AGENT_MUX_ARTIFACT_DIR=%s", spec.ArtifactDir),
 		fmt.Sprintf("AGENT_MUX_DEPTH=%d", spec.Depth),
 	)
-	env = append(env, e.adapter.EnvVars(&dispatchSpec)...)
+	adapterEnv, err := e.adapter.EnvVars(&dispatchSpec)
+	if err != nil {
+		return buildFailureResult(
+			spec, metadata, startTime, emitter,
+			"artifact_dir_unwritable",
+			fmt.Sprintf("Set up %s adapter environment: %v", binary, err),
+			"Ensure the artifact directory is writable before retrying.",
+		), nil
+	}
+	env = append(env, adapterEnv...)
 	if spec.ContextFile != "" {
 		env = append(env, fmt.Sprintf("AGENT_MUX_CONTEXT=%s", spec.ContextFile))
 	}
@@ -189,7 +198,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		softTimedOut     bool
 		streamScanErr    error
 		dispatchErr      *types.DispatchError
+		sawResponse      bool
 	)
+	parseErrorCount := 0
 
 	setTerminal := func(state string) bool {
 		if terminalState != "" {
@@ -261,6 +272,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		case types.EventResponse:
 			lastResponse = evt.Text
+			sawResponse = true
 			if evt.Tokens != nil {
 				totalTokens = evt.Tokens
 			}
@@ -401,6 +413,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			pendingMessages = append(pendingMessages, sig.message)
 
 		case loopSignalParseError:
+			parseErrorCount++
 			_ = emitter.EmitError("output_parse_error", fmt.Sprintf("Parse harness event: %v", sig.err))
 
 		case loopSignalScanError:
@@ -616,6 +629,7 @@ buildResult:
 	turns := turnCount
 	sid := sessionID
 	act := activity
+	haveFinalResponse := sawResponse
 	mu.Unlock()
 
 	if tokens == nil {
@@ -640,6 +654,13 @@ buildResult:
 	default:
 		if dispatchErr != nil {
 			return finalizeFailed(spec, emitter, act, metadata, durationMS, dispatchErr), nil
+		}
+		if parseErrorCount > 0 && missingFinalResponse(response, haveFinalResponse) {
+			return finalizeFailed(spec, emitter, act, metadata, durationMS, dispatch.NewDispatchError(
+				"parse_error",
+				fmt.Sprintf("Harness output contained %d parse error(s) and no final response could be trusted.", parseErrorCount),
+				"",
+			)), nil
 		}
 		if softTimedOut {
 			return finalizeCompleted(spec, emitter, response, act, metadata, durationMS), nil
@@ -867,6 +888,13 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func missingFinalResponse(response string, sawResponse bool) bool {
+	if !sawResponse {
+		return true
+	}
+	return strings.TrimSpace(response) == ""
 }
 
 func intEngineOpt(spec *types.DispatchSpec, key string, fallback int) int {

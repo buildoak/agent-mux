@@ -1,7 +1,9 @@
 package adapter
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/buildoak/agent-mux/internal/types"
@@ -74,13 +76,46 @@ func TestGeminiEnvVarsWritesSystemPromptFile(t *testing.T) {
 		ArtifactDir:  t.TempDir(),
 	}
 
-	env := a.EnvVars(spec)
+	env, err := a.EnvVars(spec)
+	if err != nil {
+		t.Fatalf("EnvVars: %v", err)
+	}
 	if len(env) != 1 {
 		t.Fatalf("env = %#v, want single GEMINI_SYSTEM_MD", env)
 	}
 	want := "GEMINI_SYSTEM_MD=" + filepath.Join(spec.ArtifactDir, "system_prompt.md")
 	if env[0] != want {
 		t.Fatalf("env[0] = %q, want %q", env[0], want)
+	}
+	data, err := os.ReadFile(filepath.Join(spec.ArtifactDir, "system_prompt.md"))
+	if err != nil {
+		t.Fatalf("read system_prompt.md: %v", err)
+	}
+	if string(data) != spec.SystemPrompt {
+		t.Fatalf("system_prompt.md = %q, want %q", string(data), spec.SystemPrompt)
+	}
+}
+
+func TestGeminiEnvVarsReturnsWriteError(t *testing.T) {
+	a := &GeminiAdapter{}
+	artifactPath := filepath.Join(t.TempDir(), "artifact-file")
+	if err := os.WriteFile(artifactPath, []byte("not a directory"), 0644); err != nil {
+		t.Fatalf("write artifact file: %v", err)
+	}
+	spec := &types.DispatchSpec{
+		SystemPrompt: "You are a Go expert.",
+		ArtifactDir:  artifactPath,
+	}
+
+	env, err := a.EnvVars(spec)
+	if err == nil {
+		t.Fatal("EnvVars error = nil, want write failure")
+	}
+	if env != nil {
+		t.Fatalf("env = %#v, want nil", env)
+	}
+	if !strings.Contains(err.Error(), "write Gemini system prompt") {
+		t.Fatalf("error = %q, want Gemini system prompt context", err)
 	}
 }
 

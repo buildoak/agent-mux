@@ -157,11 +157,10 @@ func TestSecureArtifactRootUsesXDGRuntimeDir(t *testing.T) {
 
 func TestSecureArtifactRootFallsBackToPerUIDTempDir(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
-	tmpDir := t.TempDir()
-	t.Setenv("TMPDIR", tmpDir)
+	t.Setenv("TMPDIR", t.TempDir())
 
 	got := SecureArtifactRoot()
-	want := filepath.Join(tmpDir, fmt.Sprintf("agent-mux-%d", os.Getuid()))
+	want := filepath.Join("/tmp", fmt.Sprintf("agent-mux-%d", os.Getuid()))
 	if got != want {
 		t.Fatalf("SecureArtifactRoot() = %q, want %q", got, want)
 	}

@@ -31,6 +31,17 @@ func TestCheckPromptAllow(t *testing.T) {
 	}
 }
 
+func TestCheckPromptChecksAllParts(t *testing.T) {
+	eval := NewEvaluator(config.HooksConfig{Deny: []string{"rm -rf"}})
+	denied, matched := eval.CheckPrompt("safe user prompt", "system says rm -rf /tmp")
+	if !denied {
+		t.Fatalf("denied = false, want true")
+	}
+	if matched != "rm -rf" {
+		t.Fatalf("matched = %q, want %q", matched, "rm -rf")
+	}
+}
+
 func TestCheckEventDeny(t *testing.T) {
 	eval := NewEvaluator(config.HooksConfig{Deny: []string{"DELETE"}, EventDenyAction: "kill"})
 	evt := &types.HarnessEvent{Kind: types.EventCommandRun, Command: "DELETE FROM users"}

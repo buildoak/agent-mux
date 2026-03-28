@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,15 +61,15 @@ func (a *GeminiAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	return args
 }
 
-func (a *GeminiAdapter) EnvVars(spec *types.DispatchSpec) []string {
+func (a *GeminiAdapter) EnvVars(spec *types.DispatchSpec) ([]string, error) {
 	if spec == nil || spec.SystemPrompt == "" || spec.ArtifactDir == "" {
-		return nil
+		return nil, nil
 	}
 	path := filepath.Join(spec.ArtifactDir, "system_prompt.md")
 	if err := os.WriteFile(path, []byte(spec.SystemPrompt), 0644); err != nil {
-		return nil
+		return nil, fmt.Errorf("write Gemini system prompt %q: %w", path, err)
 	}
-	return []string{"GEMINI_SYSTEM_MD=" + path}
+	return []string{"GEMINI_SYSTEM_MD=" + path}, nil
 }
 
 func (a *GeminiAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {

@@ -57,8 +57,8 @@ func (a *CodexAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	return args
 }
 
-func (a *CodexAdapter) EnvVars(spec *types.DispatchSpec) []string {
-	return nil
+func (a *CodexAdapter) EnvVars(spec *types.DispatchSpec) ([]string, error) {
+	return nil, nil
 }
 
 type codexEvent struct {

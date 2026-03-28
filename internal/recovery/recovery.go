@@ -30,7 +30,7 @@ type controlRecord struct {
 }
 
 func DefaultArtifactDir(dispatchID string) (string, error) {
-	return artifactDirPath(dispatchID)
+	return artifactDirPath(currentArtifactRoot(), dispatchID)
 }
 
 func RegisterDispatch(dispatchID, artifactDir string) error {
@@ -55,6 +55,9 @@ func RegisterDispatchSpec(spec *types.DispatchSpec) error {
 
 func writeControlRecord(record controlRecord) error {
 	dispatchID, err := validateDispatchID(record.DispatchID)
+	if err != nil {
+		return err
+	}
 	artifactDir := strings.TrimSpace(record.ArtifactDir)
 	record.DispatchID = dispatchID
 	record.ArtifactDir = artifactDir
@@ -67,7 +70,8 @@ func writeControlRecord(record controlRecord) error {
 	if err != nil {
 		return fmt.Errorf("resolve artifact dir %q: %w", artifactDir, err)
 	}
-	if err := os.MkdirAll(controlRoot(), 0o755); err != nil {
+	controlRoot := currentControlRoot()
+	if err := os.MkdirAll(controlRoot, 0o700); err != nil {
 		return fmt.Errorf("create control root: %w", err)
 	}
 
@@ -77,7 +81,7 @@ func writeControlRecord(record controlRecord) error {
 		return fmt.Errorf("marshal control record: %w", err)
 	}
 
-	path, err := controlRecordPathE(dispatchID)
+	path, err := controlRecordPathE(controlRoot, dispatchID)
 	if err != nil {
 		return err
 	}
@@ -98,36 +102,55 @@ func ResolveArtifactDir(dispatchID string) (string, error) {
 		return "", err
 	}
 
-	recordPath, err := controlRecordPathE(dispatchID)
+	currentRoot := currentArtifactRoot()
+	currentControlPath, err := controlRecordPathE(currentControlRoot(), dispatchID)
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(recordPath)
-	if err == nil {
-		var record controlRecord
-		if err := json.Unmarshal(data, &record); err != nil {
-			return "", fmt.Errorf("parse control record %q: %w", recordPath, err)
-		}
-		if strings.TrimSpace(record.ArtifactDir) == "" {
-			return "", fmt.Errorf("control record %q is missing artifact_dir", recordPath)
-		}
-		return filepath.Clean(record.ArtifactDir), nil
-	}
-	if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("read control record %q: %w", recordPath, err)
+	legacyControlPath, err := controlRecordPathE(legacyControlRoot(), dispatchID)
+	if err != nil {
+		return "", err
 	}
 
-	dir, err := artifactDirPath(dispatchID)
-	if err != nil {
+	if dir, found, err := resolveArtifactDirFromControlRecord(currentControlPath); err != nil {
 		return "", err
-	}
-	if _, err := os.Stat(dir); err == nil {
+	} else if found {
 		return dir, nil
-	} else if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat legacy artifact directory %q: %w", dir, err)
+	}
+	if dir, found, err := resolveArtifactDirFromControlRecord(legacyControlPath); err != nil {
+		return "", err
+	} else if found {
+		return dir, nil
 	}
 
-	return "", fmt.Errorf("no artifact directory found for dispatch %q via control path %q or legacy path %q", dispatchID, recordPath, dir)
+	currentDir, err := artifactDirPath(currentRoot, dispatchID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(currentDir); err == nil {
+		return currentDir, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat artifact directory %q: %w", currentDir, err)
+	}
+
+	legacyDir, err := artifactDirPath(legacyArtifactRoot, dispatchID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(legacyDir); err == nil {
+		return legacyDir, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat legacy artifact directory %q: %w", legacyDir, err)
+	}
+
+	return "", fmt.Errorf(
+		"no artifact directory found for dispatch %q via control paths %q and %q or artifact paths %q and %q",
+		dispatchID,
+		currentControlPath,
+		legacyControlPath,
+		currentDir,
+		legacyDir,
+	)
 }
 
 func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
@@ -166,42 +189,68 @@ func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
 	}, nil
 }
 
-func controlRoot() string {
+func currentArtifactRoot() string {
+	return sanitize.SecureArtifactRoot()
+}
+
+func currentControlRoot() string {
+	return filepath.Join(currentArtifactRoot(), "control")
+}
+
+func legacyControlRoot() string {
 	return filepath.Join(legacyArtifactRoot, "control")
 }
 
 func ControlRecordPath(dispatchID string) string {
-	path, err := controlRecordPathE(dispatchID)
+	path, err := controlRecordPathE(currentControlRoot(), dispatchID)
 	if err != nil {
-		return filepath.Join(controlRoot(), url.PathEscape(strings.TrimSpace(dispatchID))+".json")
+		return filepath.Join(currentControlRoot(), url.PathEscape(strings.TrimSpace(dispatchID))+".json")
 	}
 	return path
 }
 
-func controlRecordPathE(dispatchID string) (string, error) {
+func controlRecordPathE(root, dispatchID string) (string, error) {
 	dispatchID, err := validateDispatchID(dispatchID)
 	if err != nil {
 		return "", err
 	}
 
-	path, err := sanitize.SafeJoinPath(controlRoot(), url.PathEscape(dispatchID)+".json")
+	path, err := sanitize.SafeJoinPath(root, url.PathEscape(dispatchID)+".json")
 	if err != nil {
 		return "", fmt.Errorf("build control record path for dispatch %q: %w", dispatchID, err)
 	}
 	return path, nil
 }
 
-func artifactDirPath(dispatchID string) (string, error) {
+func artifactDirPath(root, dispatchID string) (string, error) {
 	dispatchID, err := validateDispatchID(dispatchID)
 	if err != nil {
 		return "", err
 	}
 
-	path, err := sanitize.SafeJoinPath(legacyArtifactRoot, dispatchID)
+	path, err := sanitize.SafeJoinPath(root, dispatchID)
 	if err != nil {
 		return "", fmt.Errorf("build artifact dir for dispatch %q: %w", dispatchID, err)
 	}
 	return path, nil
+}
+
+func resolveArtifactDirFromControlRecord(recordPath string) (string, bool, error) {
+	data, err := os.ReadFile(recordPath)
+	if err == nil {
+		var record controlRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			return "", true, fmt.Errorf("parse control record %q: %w", recordPath, err)
+		}
+		if strings.TrimSpace(record.ArtifactDir) == "" {
+			return "", true, fmt.Errorf("control record %q is missing artifact_dir", recordPath)
+		}
+		return filepath.Clean(record.ArtifactDir), true, nil
+	}
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	return "", false, fmt.Errorf("read control record %q: %w", recordPath, err)
 }
 
 func validateDispatchID(dispatchID string) (string, error) {

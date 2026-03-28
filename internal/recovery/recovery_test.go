@@ -126,6 +126,66 @@ func TestResolveArtifactDirUsesAbsoluteRegisteredPath(t *testing.T) {
 	}
 }
 
+func TestResolveArtifactDirFallsBackToLegacyControlRecord(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	dispatchID := "legacy-control-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
+	artifactDir := t.TempDir()
+	recordPath, err := controlRecordPathE(legacyControlRoot(), dispatchID)
+	if err != nil {
+		t.Fatalf("controlRecordPathE(legacy): %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(recordPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(control dir): %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(recordPath)
+	})
+
+	data, err := json.MarshalIndent(controlRecord{
+		DispatchID:  dispatchID,
+		ArtifactDir: artifactDir,
+	}, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(controlRecord): %v", err)
+	}
+	if err := os.WriteFile(recordPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(controlRecord): %v", err)
+	}
+
+	resolved, err := ResolveArtifactDir(dispatchID)
+	if err != nil {
+		t.Fatalf("ResolveArtifactDir: %v", err)
+	}
+	if resolved != artifactDir {
+		t.Fatalf("resolved = %q, want %q", resolved, artifactDir)
+	}
+}
+
+func TestResolveArtifactDirFallsBackToLegacyDefaultArtifactDir(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	dispatchID := "legacy-dir-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
+	legacyDir, err := artifactDirPath(legacyArtifactRoot, dispatchID)
+	if err != nil {
+		t.Fatalf("artifactDirPath(legacy): %v", err)
+	}
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(legacyDir): %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(legacyDir)
+	})
+
+	resolved, err := ResolveArtifactDir(dispatchID)
+	if err != nil {
+		t.Fatalf("ResolveArtifactDir: %v", err)
+	}
+	if resolved != legacyDir {
+		t.Fatalf("resolved = %q, want %q", resolved, legacyDir)
+	}
+}
+
 func TestRegisterDispatchSpecPersistsTraceability(t *testing.T) {
 	artifactDir := t.TempDir()
 	spec := &types.DispatchSpec{

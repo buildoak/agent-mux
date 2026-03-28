@@ -90,7 +90,7 @@ func SecureArtifactRoot() string {
 		}
 	}
 
-	tmpDir := os.TempDir()
+	const tmpDir = "/tmp"
 	displayPath := filepath.Join(tmpDir, fmt.Sprintf("agent-mux-%d", os.Getuid()))
 	createPath := filepath.Join(resolveExistingPath(tmpDir), fmt.Sprintf("agent-mux-%d", os.Getuid()))
 	_ = ensurePrivateDir(createPath, 0o700)

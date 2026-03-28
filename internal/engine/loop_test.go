@@ -31,6 +31,8 @@ type scriptedAdapter struct {
 	supportsResume  bool
 	initialScript   string
 	initialPrompt   string
+	env             []string
+	envErr          error
 	resumeScript    func(sessionID, message string) string
 	resumeCalls     []resumeCall
 	failResumeStart bool
@@ -65,8 +67,14 @@ func (a *scriptedAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	return []string{"-c", a.initialScript}
 }
 
-func (a *scriptedAdapter) EnvVars(spec *types.DispatchSpec) []string {
-	return nil
+func (a *scriptedAdapter) EnvVars(spec *types.DispatchSpec) ([]string, error) {
+	if a.envErr != nil {
+		return nil, a.envErr
+	}
+	if len(a.env) == 0 {
+		return nil, nil
+	}
+	return append([]string(nil), a.env...), nil
 }
 
 func (a *scriptedAdapter) SupportsResume() bool {
@@ -356,6 +364,71 @@ func TestLoopEnginePersistsFailedDispatchToStore(t *testing.T) {
 	}
 	if storedResponse != "" {
 		t.Fatalf("stored response = %q, want empty string", storedResponse)
+	}
+}
+
+func TestLoopEngineFailsParseErrorWithoutFinalResponse(t *testing.T) {
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter("echo 'TURN:broken'")
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	result, err := engine.Dispatch(context.Background(), testDispatchSpec(artifactDir))
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "parse_error" {
+		t.Fatalf("error = %+v, want parse_error", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, "no final response could be trusted") {
+		t.Fatalf("error.message = %q, want parse error summary", result.Error.Message)
+	}
+}
+
+func TestLoopEngineKeepsCompletedStatusWhenParseErrorHasFinalResponse(t *testing.T) {
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'TURN:broken'",
+		"echo 'RESPONSE:real answer'",
+	}, "\n"))
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	result, err := engine.Dispatch(context.Background(), testDispatchSpec(artifactDir))
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed, error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "real answer" {
+		t.Fatalf("response = %q, want real answer", result.Response)
+	}
+}
+
+func TestLoopEngineFailsWhenAdapterEnvSetupFails(t *testing.T) {
+	artifactDir := t.TempDir()
+	markerPath := filepath.Join(artifactDir, "started")
+	adapter := newScriptedAdapter(fmt.Sprintf("touch %q", markerPath))
+	adapter.envErr = fmt.Errorf("write Gemini system prompt %q: permission denied", filepath.Join(artifactDir, "system_prompt.md"))
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	result, err := engine.Dispatch(context.Background(), testDispatchSpec(artifactDir))
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "artifact_dir_unwritable" {
+		t.Fatalf("error = %+v, want artifact_dir_unwritable", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, "write Gemini system prompt") {
+		t.Fatalf("error.message = %q, want surfaced env setup error", result.Error.Message)
+	}
+	if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
+		t.Fatalf("marker file exists or unexpected stat error = %v, harness should not have started", statErr)
 	}
 }
 
