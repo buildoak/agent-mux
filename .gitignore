@@ -1,6 +1,6 @@
-# Compiled binaries
-agent-mux
-agent-mux-v2
+# Compiled binaries (root only)
+/agent-mux
+/agent-mux-v2
 *.exe
 
 # Go build cache
@@ -13,6 +13,7 @@ dist/
 
 # Secrets
 mcp-clusters.yaml
+config.local.toml
 
 # OS
 .DS_Store

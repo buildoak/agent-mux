@@ -20,6 +20,13 @@ import (
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
+func isolateHome(t *testing.T) {
+	t.Helper()
+
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+}
+
 func TestVersionFlag(t *testing.T) {
 	t.Parallel()
 
@@ -36,6 +43,8 @@ func TestVersionFlag(t *testing.T) {
 }
 
 func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
+	isolateHome(t)
+
 	cwd := t.TempDir()
 	agentsDir := filepath.Join(cwd, ".claude", "agents")
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
@@ -115,6 +124,8 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 }
 
 func TestDispatchTTYConfirmationCancelsBeforeDispatch(t *testing.T) {
+	isolateHome(t)
+
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
 
 	var stdout bytes.Buffer
@@ -149,6 +160,8 @@ func TestDispatchTTYConfirmationCancelsBeforeDispatch(t *testing.T) {
 }
 
 func TestDispatchNonTTYEmitsPreviewBeforeDispatch(t *testing.T) {
+	isolateHome(t)
+
 	t.Setenv("PATH", t.TempDir())
 
 	var stdout bytes.Buffer
@@ -182,6 +195,8 @@ func TestDispatchNonTTYEmitsPreviewBeforeDispatch(t *testing.T) {
 }
 
 func TestDispatchTTYYesSkipsPreviewAndConfirmation(t *testing.T) {
+	isolateHome(t)
+
 	t.Setenv("PATH", t.TempDir())
 
 	var stdout bytes.Buffer
@@ -211,6 +226,8 @@ func TestDispatchTTYYesSkipsPreviewAndConfirmation(t *testing.T) {
 }
 
 func TestPreviewCommandCompactsPromptSummary(t *testing.T) {
+	isolateHome(t)
+
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
 	prompt := strings.Repeat("alpha beta gamma ", 40) + "final instruction"
 	systemPrompt := strings.Repeat("system rule ", 20)
@@ -262,6 +279,8 @@ func TestPreviewCommandCompactsPromptSummary(t *testing.T) {
 }
 
 func TestPreviewCommandResolvesRoleVariantAndSystemPromptLayering(t *testing.T) {
+	isolateHome(t)
+
 	configDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(configDir, "prompts"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -744,6 +763,8 @@ func TestNormalizeArgsAllowsFlagsAfterPrompt(t *testing.T) {
 }
 
 func TestStdinMode(t *testing.T) {
+	isolateHome(t)
+
 	t.Setenv("PATH", t.TempDir())
 
 	input := types.DispatchSpec{
@@ -798,6 +819,8 @@ func TestStdinMode(t *testing.T) {
 }
 
 func TestRunUnknownVariantReturnsConfigError(t *testing.T) {
+	isolateHome(t)
+
 	cfgPath := writeTempConfig(t, `
 [roles.lifter]
 engine = "codex"
@@ -826,6 +849,8 @@ model = "gpt-5.4"
 }
 
 func TestStdinModeResolvesVariantFromRole(t *testing.T) {
+	isolateHome(t)
+
 	t.Setenv("PATH", t.TempDir())
 
 	cfgPath := writeTempConfig(t, `
@@ -976,6 +1001,8 @@ func TestDecodeStdinDispatchSpecRejectsConflictingProfileAlias(t *testing.T) {
 }
 
 func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
+	isolateHome(t)
+
 	startDir := t.TempDir()
 	otherDir := t.TempDir()
 	prevWD, err := os.Getwd()
@@ -1078,7 +1105,7 @@ func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 }
 
 func TestStdinPipelineDispatch(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 
 	cfgPath := writeTempConfig(t, `
 [pipelines.review]
@@ -1124,7 +1151,7 @@ name = "review"
 }
 
 func TestPipelineStepVariantResolvesRole(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 
 	cfgPath := writeTempConfig(t, `
 [roles.lifter]
@@ -1260,6 +1287,8 @@ func TestWriteTextResultError(t *testing.T) {
 }
 
 func TestRunPrependsContextFilePreamble(t *testing.T) {
+	isolateHome(t)
+
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
 	contextFile := filepath.Join(t.TempDir(), "context.md")
 	if err := os.WriteFile(contextFile, []byte("context"), 0644); err != nil {
@@ -1297,6 +1326,8 @@ func TestRunPrependsContextFilePreamble(t *testing.T) {
 }
 
 func TestRunFailsWhenContextFileMissing(t *testing.T) {
+	isolateHome(t)
+
 	missingPath := filepath.Join(t.TempDir(), "nonexistent-12345.md")
 
 	var stdout bytes.Buffer
@@ -1323,6 +1354,8 @@ func TestRunFailsWhenContextFileMissing(t *testing.T) {
 }
 
 func TestRunLeavesPromptUnchangedWithoutContextFile(t *testing.T) {
+	isolateHome(t)
+
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
 	t.Setenv("PATH", t.TempDir())
 
@@ -1356,6 +1389,8 @@ func TestRunLeavesPromptUnchangedWithoutContextFile(t *testing.T) {
 }
 
 func TestRunInjectsHookRulesWithoutSelfDenying(t *testing.T) {
+	isolateHome(t)
+
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
 	cfgPath := writeTempConfig(t, "[hooks]\ndeny = [\"rm -rf\"]\n")
 	t.Setenv("PATH", t.TempDir())
@@ -1591,7 +1626,7 @@ func TestFlagSetVisitDoesNotTrackDefaults(t *testing.T) {
 }
 
 func TestRoleEffortAppliedWhenNoExplicitEffort(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 
 	cfgPath := writeTempConfig(t, "[roles.explorer]\nengine = \"codex\"\nmodel = \"gpt-5.4\"\neffort = \"medium\"\n")
 
@@ -1632,7 +1667,7 @@ func TestRoleEffortAppliedWhenNoExplicitEffort(t *testing.T) {
 }
 
 func TestRoleEffortNotAppliedWhenExplicitEffort(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 
 	cfgPath := writeTempConfig(t, "[roles.explorer]\nengine = \"codex\"\nmodel = \"gpt-5.4\"\neffort = \"medium\"\n")
 
@@ -1673,7 +1708,7 @@ func TestRoleEffortNotAppliedWhenExplicitEffort(t *testing.T) {
 }
 
 func TestRoleSkillsMergedWithCLISkills(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 
 	cwd := t.TempDir()
 	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
@@ -1709,7 +1744,7 @@ func TestRoleSkillsMergedWithCLISkills(t *testing.T) {
 }
 
 func TestRoleSkillsRoleOnly(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 
 	cwd := t.TempDir()
 	writeTestSkillFile(t, cwd, "pratchett-read", "Read Pratchett.")
@@ -1744,7 +1779,7 @@ func TestRoleSkillsRoleOnly(t *testing.T) {
 }
 
 func TestRoleSkillsEmpty(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 
 	cwd := t.TempDir()
 	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
@@ -1779,7 +1814,7 @@ func TestRoleSkillsEmpty(t *testing.T) {
 }
 
 func TestRoleSkillsDedup(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 
 	cwd := t.TempDir()
 	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
@@ -1814,7 +1849,7 @@ func TestRoleSkillsDedup(t *testing.T) {
 }
 
 func TestRoleSkillsStdinMerge(t *testing.T) {
-	t.Parallel()
+	isolateHome(t)
 
 	cwd := t.TempDir()
 	writeTestSkillFile(t, cwd, "pratchett-read", "Read Pratchett.")

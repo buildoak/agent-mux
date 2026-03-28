@@ -238,6 +238,117 @@ silence_warn_seconds = 45
 	}
 }
 
+func TestPrecedenceWithLocalConfigs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+
+	globalDir := filepath.Join(home, ".agent-mux")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll global: %v", err)
+	}
+	projectDir := filepath.Join(cwd, ".agent-mux")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll project: %v", err)
+	}
+
+	globalConfig := `
+[defaults]
+engine = "claude"
+model = "global-model"
+max_depth = 4
+
+[roles.reviewer]
+model = "global-role-model"
+skills = ["global-skill"]
+
+[timeout]
+medium = 700
+`
+	globalLocalConfig := `
+[defaults]
+model = "global-local-model"
+
+[roles.reviewer]
+model = "global-local-role-model"
+
+[timeout]
+medium = 650
+`
+	projectConfig := `
+[defaults]
+model = "project-model"
+max_depth = 9
+
+[roles.reviewer]
+skills = ["project-skill"]
+
+[liveness]
+silence_warn_seconds = 45
+`
+	projectLocalConfig := `
+[defaults]
+model = "project-local-model"
+
+[roles.reviewer]
+engine = "codex"
+system_prompt_file = "prompts/reviewer-local.md"
+`
+
+	files := map[string]string{
+		filepath.Join(globalDir, "config.toml"):        globalConfig,
+		filepath.Join(globalDir, "config.local.toml"):  globalLocalConfig,
+		filepath.Join(projectDir, "config.toml"):       projectConfig,
+		filepath.Join(projectDir, "config.local.toml"): projectLocalConfig,
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(strings.TrimSpace(content)), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", path, err)
+		}
+	}
+
+	cfg, err := LoadConfig("", cwd)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if cfg.Defaults.Engine != "claude" {
+		t.Fatalf("Defaults.Engine = %q, want %q", cfg.Defaults.Engine, "claude")
+	}
+	if cfg.Defaults.Model != "project-local-model" {
+		t.Fatalf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "project-local-model")
+	}
+	if cfg.Defaults.MaxDepth != 9 {
+		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 9)
+	}
+	if cfg.Timeout.Medium != 650 {
+		t.Fatalf("Timeout.Medium = %d, want %d", cfg.Timeout.Medium, 650)
+	}
+	if cfg.Liveness.SilenceWarnSeconds != 45 {
+		t.Fatalf("Liveness.SilenceWarnSeconds = %d, want %d", cfg.Liveness.SilenceWarnSeconds, 45)
+	}
+
+	role, ok := cfg.Roles["reviewer"]
+	if !ok {
+		t.Fatal("Roles[reviewer] missing")
+	}
+	if role.Engine != "codex" {
+		t.Fatalf("Roles[reviewer].Engine = %q, want %q", role.Engine, "codex")
+	}
+	if role.Model != "global-local-role-model" {
+		t.Fatalf("Roles[reviewer].Model = %q, want %q", role.Model, "global-local-role-model")
+	}
+	if !reflect.DeepEqual(role.Skills, []string{"project-skill"}) {
+		t.Fatalf("Roles[reviewer].Skills = %#v, want %#v", role.Skills, []string{"project-skill"})
+	}
+	if role.SystemPromptFile != "prompts/reviewer-local.md" {
+		t.Fatalf("Roles[reviewer].SystemPromptFile = %q, want %q", role.SystemPromptFile, "prompts/reviewer-local.md")
+	}
+	if role.SourceDir != projectDir {
+		t.Fatalf("Roles[reviewer].SourceDir = %q, want %q", role.SourceDir, projectDir)
+	}
+}
+
 // TestBackwardCompatXDGPath verifies that the old ~/.config/agent-mux/config.toml location
 // is used when the new ~/.agent-mux/config.toml does not exist.
 func TestBackwardCompatXDGPath(t *testing.T) {
@@ -298,9 +409,9 @@ func TestNewGlobalPathTakesPrecedenceOverXDG(t *testing.T) {
 	}
 }
 
-// TestExplicitConfigFileOverlaysGlobalAndProject verifies that --config with a .toml path
-// overlays on top of global + project configs.
-func TestExplicitConfigFileOverlaysGlobalAndProject(t *testing.T) {
+// TestExplicitConfigFileIsSoleSource verifies that --config with a .toml path
+// bypasses global + project config lookup.
+func TestExplicitConfigFileIsSoleSource(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cwd := t.TempDir()
@@ -334,12 +445,11 @@ func TestExplicitConfigFileOverlaysGlobalAndProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	// engine comes from global, model overridden by explicit.
-	if cfg.Defaults.Engine != "claude" {
-		t.Fatalf("Defaults.Engine = %q, want %q (global not replaced)", cfg.Defaults.Engine, "claude")
+	if cfg.Defaults.Engine != "" {
+		t.Fatalf("Defaults.Engine = %q, want empty default when --config is sole source", cfg.Defaults.Engine)
 	}
 	if cfg.Defaults.Model != "explicit-model" {
-		t.Fatalf("Defaults.Model = %q, want %q (explicit wins)", cfg.Defaults.Model, "explicit-model")
+		t.Fatalf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "explicit-model")
 	}
 }
 

@@ -247,6 +247,11 @@ func TimeoutForEffort(cfg *Config, effort string) int {
 }
 
 func configPaths(configPath string, cwd string) ([]string, error) {
+	// Explicit --config is the sole source; skip implicit global/project lookup.
+	if configPath != "" {
+		return resolveExplicitConfigPath(configPath)
+	}
+
 	if cwd == "" {
 		var err error
 		cwd, err = os.Getwd()
@@ -260,36 +265,36 @@ func configPaths(configPath string, cwd string) ([]string, error) {
 		return nil, fmt.Errorf("get home directory: %w", err)
 	}
 
-	paths := make([]string, 0, 3)
+	paths := make([]string, 0, 4)
 
 	// 1. Global config: ~/.agent-mux/config.toml (new canonical location).
+	// 2. Global machine-local config: ~/.agent-mux/config.local.toml
 	newGlobal := filepath.Join(homeDir, ".agent-mux", "config.toml")
+	newGlobalLocal := filepath.Join(homeDir, ".agent-mux", "config.local.toml")
 	oldGlobal := filepath.Join(homeDir, ".config", "agent-mux", "config.toml")
 
 	if _, err := os.Stat(newGlobal); err == nil {
 		// New location exists — use it.
-		paths = append(paths, newGlobal)
+		paths = append(paths, newGlobal, newGlobalLocal)
 	} else if os.IsNotExist(err) {
 		// New location absent — check old XDG location for backward compat.
 		if _, statErr := os.Stat(oldGlobal); statErr == nil {
 			fmt.Fprintf(os.Stderr, "agent-mux: deprecation: config found at %q; migrate to %q\n", oldGlobal, newGlobal)
 			paths = append(paths, oldGlobal)
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return nil, fmt.Errorf("stat global config %q: %w", oldGlobal, statErr)
 		}
+		paths = append(paths, newGlobalLocal)
 	} else {
 		return nil, fmt.Errorf("stat global config %q: %w", newGlobal, err)
 	}
 
-	// 2. Project config: <cwd>/.agent-mux/config.toml
-	paths = append(paths, filepath.Join(cwd, ".agent-mux", "config.toml"))
-
-	// 3. Explicit --config overlay (loaded last, highest precedence).
-	if configPath != "" {
-		explicit, err := resolveExplicitConfigPath(configPath)
-		if err != nil {
-			return nil, err
-		}
-		paths = append(paths, explicit...)
-	}
+	// 3. Project config: <cwd>/.agent-mux/config.toml
+	// 4. Project machine-local config: <cwd>/.agent-mux/config.local.toml
+	paths = append(paths,
+		filepath.Join(cwd, ".agent-mux", "config.toml"),
+		filepath.Join(cwd, ".agent-mux", "config.local.toml"),
+	)
 
 	return paths, nil
 }
