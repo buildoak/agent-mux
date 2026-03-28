@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.0] - 2026-03-28
+
+### Added
+- **Go binary** — static single-binary, no runtime dependencies (replaces bun/Node.js)
+- **Role/variant system** — named roles in `config.toml` with engine, model, effort, skills, and permission-mode overrides; variants layer per-dispatch mutations on top of a role
+- **Pipeline orchestration** — multi-step sequential pipelines where each step can target a different role/variant; step outputs feed into the next step's prompt context
+- **Recovery and signal handling** — SIGINT/SIGTERM deliver partial results and a `recovery_hint` to callers; two-phase timeout (grace period before hard kill) ensures partial output is never silently dropped
+- **Event streaming** — 13 structured NDJSON event types emitted to stderr: `dispatch_start`, `dispatch_end`, `tool_start`, `tool_end`, `agent_turn`, `file_written`, `command_run`, `hook_triggered`, `signal_received`, `timeout_warning`, `liveness_ping`, `recovery_hint`, `pipeline_step`
+- **Hooks** — per-role `[hooks]` blocks in config with `deny`, `warn`, and `on_violation` rules; evaluated against agent activity in real time (WIP — see Known Limitations)
+- **Liveness supervision** — silence watchdog emits `liveness_ping` events at configurable intervals; distinguishes long-running work from hung processes
+- **Artifact-first design** — workers are prompted to produce file artifacts by default; inline output reserved for short responses; artifact paths surface in the output contract
+- **Config resolution** — `.agent-mux/` directory search walks up from `--cwd` to repo root; supports project-local and user-global config layers
+- **Coordinator/profile system** — `--coordinator <name>` loads role spec from `.claude/agents/<name>.md` with YAML frontmatter (skills, model, allowedTools) and markdown body as system prompt
+- **JSON `--stdin` dispatch** — full `DispatchSpec` JSON on stdin for programmatic callers; supports role, variant, pipeline, skills, and all overrides in one payload
+- **Bundled agent templates** — 6 built-in role templates (researcher, coder, reviewer, planner, debugger, writer) as starting points for config.toml
+- **Skills pre-loading** — role-level `skills = [...]` in config.toml resolved from `<cwd>/.claude/skills/<name>/SKILL.md` and injected into the system prompt before dispatch
+- **Claude and Gemini adapters** — full engine registry with Codex, Claude Code, and Gemini adapters behind a common interface
+- **`--version` flag**
+
+### Changed
+- **Rewritten from TypeScript to Go** — entire runtime replaced; bun/Node.js no longer required
+- **Output contract** — schema bumped to `schema_version: 1`; top-level `status` field (`success` | `partial` | `error` | `timeout`) replaces the `success: boolean` field from v2; all paths emit structured JSON
+- **Config format** — role and global config now in TOML (`config.toml`); inline CLI flags remain for one-shot dispatches
+- **Binary name** — installed as `agent-mux` (was `npx agent-mux` / `bunx agent-mux` in TS era)
+- **Timeout-as-partial** — timed-out runs return `status: "partial"` with collected output and a `recovery_hint`; callers no longer need to special-case timeout vs. error
+
+### Removed
+- **OpenCode engine** — replaced by Gemini adapter; OpenCode is no longer supported
+- **bun runtime dependency** — Go binary is fully self-contained
+- **MCP cluster system** — YAML-based MCP cluster configuration from v2.0.0 is not carried forward; MCP tool access is now managed per-engine via permission mode
+- **Browser automation integration** — bundled agent-browser MCP server (shipped in v2.1.0) removed from the Go runtime; browser tooling must be wired externally if needed
+
+### Known Limitations
+- **Gemini response capture broken** — Gemini dispatches return truncated or empty `response` field despite generating output; `turns: 0`, `tool_calls: []`. Root cause: NDJSON stream parsing in `internal/engine/adapter/gemini.go` likely drops the final response event. Fix tracked in FEATURES.md.
+- **Gemini no tool calling** — Gemini dispatches produce zero file reads, zero commands, zero tool calls. The `gemini` CLI does not expose a tool-use surface comparable to Codex or Claude. Gemini variants are currently reasoning-only; all context must be supplied in the prompt.
+- **Hooks false positives on workspace reads (WIP)** — deny/warn patterns match against all event content including files the harness reads during workspace orientation, not just agent-authored output. Hooks are disabled in production config until scope-aware matching is implemented. Fix tracked in FEATURES.md.
+
+---
+
 ## [2.2.0] - 2026-02-18
 
 ### Added
