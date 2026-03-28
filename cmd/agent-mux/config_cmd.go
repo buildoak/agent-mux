@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -22,6 +24,8 @@ func runConfigCommand(args []string, stdout io.Writer) int {
 		return runConfigPipelines(rest, stdout)
 	case "models":
 		return runConfigModels(rest, stdout)
+	case "skills":
+		return runConfigSkills(rest, stdout)
 	default:
 		return runConfigRoot(args, stdout)
 	}
@@ -34,7 +38,7 @@ func splitConfigSub(args []string) (string, []string) {
 		return "", nil
 	}
 	switch args[0] {
-	case "roles", "pipelines", "models":
+	case "roles", "pipelines", "models", "skills":
 		return args[0], args[1:]
 	default:
 		return "", args
@@ -247,6 +251,61 @@ func runConfigModels(args []string, stdout io.Writer) int {
 		models := cfg.Models[engine]
 		fmt.Fprintf(stdout, "%s: %s\n", engine, strings.Join(models, ", "))
 	}
+	return 0
+}
+
+// --- agent-mux config skills ---
+
+func runConfigSkills(args []string, stdout io.Writer) int {
+	var flagOutput bytes.Buffer
+	fs := flag.NewFlagSet("agent-mux config skills", flag.ContinueOnError)
+	fs.SetOutput(&flagOutput)
+
+	var configPath, cwd string
+	var jsonOutput bool
+	fs.StringVar(&configPath, "config", "", "Override config path")
+	fs.StringVar(&cwd, "cwd", "", "Working directory for project config discovery")
+	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON array")
+
+	if err := fs.Parse(normalizeArgs(args)); err != nil {
+		return handleLifecycleParseError(stdout, &flagOutput, err)
+	}
+
+	cfg, sources, err := config.LoadConfigWithSources(configPath, cwd)
+	if err != nil {
+		return emitLifecycleError(stdout, 1, "config_error", fmt.Sprintf("load config: %v", err), "")
+	}
+
+	// Determine effective cwd for skill discovery.
+	effectiveCwd := cwd
+	if effectiveCwd == "" {
+		effectiveCwd, _ = os.Getwd()
+	}
+
+	// Determine configDir from the first loaded source (if any).
+	var configDir string
+	if len(sources) > 0 {
+		configDir = filepath.Dir(filepath.Dir(sources[0])) // strip .agent-mux/config.toml → parent
+	}
+
+	skills := config.DiscoverSkills(effectiveCwd, configDir, cfg.Skills.SearchPaths)
+
+	if jsonOutput {
+		writeCompactJSON(stdout, skills)
+		return 0
+	}
+
+	if len(skills) == 0 {
+		fmt.Fprintln(stdout, "No skills found.")
+		return 0
+	}
+
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tPATH\tSOURCE")
+	for _, s := range skills {
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", s.Name, s.Path, s.Source)
+	}
+	_ = tw.Flush()
 	return 0
 }
 
