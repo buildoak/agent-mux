@@ -567,6 +567,11 @@ Written atomically (tmp + rename). `artifact_dir` resolved to absolute path at r
 
 ### Hook System
 
+> **Experimental.** Event-level hook matching currently triggers on workspace
+> content read during harness orientation (e.g., a `deny` pattern appearing
+> in documentation files). Use with caution until context-aware matching is
+> implemented.
+
 **Deny patterns:** checked against prompt before dispatch (hard block, `prompt_denied` error). Checked against events at runtime (action determined by `event_deny_action`).
 
 **Warn patterns:** checked against events only. Not checked against prompt.
