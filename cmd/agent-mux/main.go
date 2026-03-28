@@ -45,6 +45,8 @@ const (
 	commandList     cliCommand = "list"
 	commandStatus   cliCommand = "status"
 	commandResult   cliCommand = "result"
+	commandInspect  cliCommand = "inspect"
+	commandGC       cliCommand = "gc"
 )
 
 type stringSlice []string
@@ -151,6 +153,10 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		return runStatusCommand(args, stdout)
 	case commandResult:
 		return runResultCommand(args, stdout)
+	case commandInspect:
+		return runInspectCommand(args, stdout)
+	case commandGC:
+		return runGCCommand(args, stdout)
 	}
 
 	var flagOutput bytes.Buffer
@@ -998,6 +1004,10 @@ func splitCommand(args []string) (cliCommand, []string, bool) {
 		return commandStatus, args[1:], true
 	case string(commandResult):
 		return commandResult, args[1:], true
+	case string(commandInspect):
+		return commandInspect, args[1:], true
+	case string(commandGC):
+		return commandGC, args[1:], true
 	default:
 		return commandDispatch, args, false
 	}

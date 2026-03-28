@@ -163,6 +163,47 @@ func FindRecord(storePath string, idPrefix string) (*DispatchRecord, error) {
 	return match, nil
 }
 
+// RewriteRecords atomically replaces the dispatches.jsonl file with the given records.
+// Used by gc to remove old entries.
+func RewriteRecords(storePath string, records []DispatchRecord) error {
+	path, err := ensureStorePath(storePath)
+	if err != nil {
+		return err
+	}
+
+	indexPath := dispatchesPath(path)
+	tmpPath := indexPath + ".tmp"
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, storeFilePerm)
+	if err != nil {
+		return fmt.Errorf("open temp dispatch index: %w", err)
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(tmpPath) // clean up on failure; no-op after rename
+	}()
+
+	for _, record := range records {
+		data, err := json.Marshal(record)
+		if err != nil {
+			return fmt.Errorf("marshal dispatch record: %w", err)
+		}
+		if _, err := f.Write(append(data, '\n')); err != nil {
+			return fmt.Errorf("write dispatch record: %w", err)
+		}
+	}
+
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync temp dispatch index: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close temp dispatch index: %w", err)
+	}
+	if err := os.Rename(tmpPath, indexPath); err != nil {
+		return fmt.Errorf("rename dispatch index: %w", err)
+	}
+	return nil
+}
+
 func ensureStorePath(storePath string) (string, error) {
 	if strings.TrimSpace(storePath) == "" {
 		storePath = DefaultStorePath()

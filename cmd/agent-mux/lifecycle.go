@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/recovery"
@@ -26,10 +28,12 @@ func runListCommand(args []string, stdout io.Writer) int {
 
 	limit := listDefaultLimit
 	statusFilter := ""
+	engineFilter := ""
 	jsonOutput := false
 
 	fs.IntVar(&limit, "limit", limit, "Maximum records to print (0 = all)")
 	fs.StringVar(&statusFilter, "status", "", "Filter by status: completed, failed, timed_out")
+	fs.StringVar(&engineFilter, "engine", "", "Filter by engine: codex, claude, gemini")
 	fs.BoolVar(&jsonOutput, "json", false, "Emit NDJSON")
 
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
@@ -46,6 +50,10 @@ func runListCommand(args []string, stdout io.Writer) int {
 	if statusFilter != "" && !isValidDispatchStatus(statusFilter) {
 		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid status %q: want completed, failed, or timed_out", statusFilter), "")
 	}
+	engineFilter = strings.TrimSpace(engineFilter)
+	if engineFilter != "" && !isValidEngine(engineFilter) {
+		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid engine %q: want codex, claude, or gemini", engineFilter), "")
+	}
 
 	records, err := store.ListRecords("", 0)
 	if err != nil {
@@ -53,6 +61,7 @@ func runListCommand(args []string, stdout io.Writer) int {
 	}
 
 	filtered := filterRecordsByStatus(records, statusFilter)
+	filtered = filterRecordsByEngine(filtered, engineFilter)
 	filtered = tailRecords(filtered, limit)
 
 	if jsonOutput {
@@ -117,7 +126,9 @@ func runResultCommand(args []string, stdout io.Writer) int {
 	fs.SetOutput(&flagOutput)
 
 	jsonOutput := false
+	showArtifacts := false
 	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON")
+	fs.BoolVar(&showArtifacts, "artifacts", false, "List artifact files instead of showing result text")
 
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
 		return handleLifecycleParseError(stdout, &flagOutput, err)
@@ -139,6 +150,37 @@ func runResultCommand(args []string, stdout io.Writer) int {
 	dispatchID := idPrefix
 	if record != nil && strings.TrimSpace(record.ID) != "" {
 		dispatchID = record.ID
+	}
+
+	if showArtifacts {
+		artifactDir := ""
+		if record != nil && strings.TrimSpace(record.ArtifactDir) != "" {
+			artifactDir = record.ArtifactDir
+		} else {
+			resolved, resolveErr := recovery.ResolveArtifactDir(dispatchID)
+			if resolveErr != nil {
+				return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no artifact directory found for dispatch %q: %v", dispatchID, resolveErr), "")
+			}
+			artifactDir = resolved
+		}
+		artifacts := dispatch.ScanArtifacts(artifactDir)
+		if jsonOutput {
+			writeCompactJSON(stdout, map[string]any{
+				"dispatch_id":  dispatchID,
+				"artifact_dir": artifactDir,
+				"artifacts":    artifacts,
+			})
+			return 0
+		}
+		fmt.Fprintf(stdout, "Artifact dir: %s\n", artifactDir)
+		if len(artifacts) == 0 {
+			fmt.Fprintln(stdout, "(no artifacts)")
+		} else {
+			for _, a := range artifacts {
+				fmt.Fprintln(stdout, a)
+			}
+		}
+		return 0
 	}
 
 	response, err := store.ReadResult("", dispatchID)
@@ -312,3 +354,264 @@ func legacyFullOutputPath(dispatchID string) (string, error) {
 	}
 	return filepath.Join(artifactDir, "full_output.md"), nil
 }
+
+// --- B1: engine filter ---
+
+func filterRecordsByEngine(records []store.DispatchRecord, engine string) []store.DispatchRecord {
+	if strings.TrimSpace(engine) == "" {
+		return records
+	}
+	filtered := make([]store.DispatchRecord, 0, len(records))
+	for _, record := range records {
+		if record.Engine == engine {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered
+}
+
+func isValidEngine(engine string) bool {
+	switch engine {
+	case "codex", "claude", "gemini":
+		return true
+	default:
+		return false
+	}
+}
+
+// --- B3: inspect subcommand ---
+
+func runInspectCommand(args []string, stdout io.Writer) int {
+	var flagOutput bytes.Buffer
+	fs := flag.NewFlagSet("agent-mux inspect", flag.ContinueOnError)
+	fs.SetOutput(&flagOutput)
+
+	jsonOutput := false
+	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON")
+
+	if err := fs.Parse(normalizeArgs(args)); err != nil {
+		return handleLifecycleParseError(stdout, &flagOutput, err)
+	}
+	if len(fs.Args()) != 1 {
+		return emitLifecycleError(stdout, 2, "invalid_args", "inspect requires exactly one dispatch_id argument", "Pass a full dispatch ID or unique prefix.")
+	}
+
+	idPrefix := strings.TrimSpace(fs.Args()[0])
+	if err := sanitize.ValidateDispatchID(idPrefix); err != nil {
+		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", idPrefix, err), "")
+	}
+
+	record, err := store.FindRecord("", idPrefix)
+	if err != nil {
+		return emitLifecycleError(stdout, 1, "lookup_failed", fmt.Sprintf("find dispatch %q: %v", idPrefix, err), "")
+	}
+	if record == nil {
+		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for prefix %q", idPrefix), "")
+	}
+
+	dispatchID := record.ID
+
+	// Read result text.
+	response, _ := store.ReadResult("", dispatchID)
+
+	// Resolve artifact directory and list contents.
+	artifactDir := record.ArtifactDir
+	if strings.TrimSpace(artifactDir) == "" {
+		if resolved, resolveErr := recovery.ResolveArtifactDir(dispatchID); resolveErr == nil {
+			artifactDir = resolved
+		}
+	}
+	var artifacts []string
+	if strings.TrimSpace(artifactDir) != "" {
+		artifacts = dispatch.ScanArtifacts(artifactDir)
+	}
+
+	// Read dispatch meta if available.
+	var meta *dispatch.DispatchMeta
+	if strings.TrimSpace(artifactDir) != "" {
+		if m, mErr := dispatch.ReadDispatchMeta(artifactDir); mErr == nil {
+			meta = m
+		}
+	}
+
+	if jsonOutput {
+		result := map[string]any{
+			"dispatch_id":  dispatchID,
+			"record":       record,
+			"response":     response,
+			"artifact_dir": artifactDir,
+			"artifacts":    artifacts,
+		}
+		if meta != nil {
+			result["meta"] = meta
+		}
+		writeCompactJSON(stdout, result)
+		return 0
+	}
+
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "Dispatch ID:\t%s\n", dispatchID)
+	fmt.Fprintf(tw, "Status:\t%s\n", dashIfEmpty(record.Status))
+	fmt.Fprintf(tw, "Engine:\t%s\n", dashIfEmpty(record.Engine))
+	fmt.Fprintf(tw, "Model:\t%s\n", dashIfEmpty(record.Model))
+	fmt.Fprintf(tw, "Role:\t%s\n", dashIfEmpty(record.Role))
+	fmt.Fprintf(tw, "Variant:\t%s\n", dashIfEmpty(record.Variant))
+	fmt.Fprintf(tw, "Started:\t%s\n", dashIfEmpty(record.StartedAt))
+	fmt.Fprintf(tw, "Ended:\t%s\n", dashIfEmpty(record.EndedAt))
+	fmt.Fprintf(tw, "Duration:\t%s\n", formatDuration(record.DurationMs))
+	fmt.Fprintf(tw, "Truncated:\t%t\n", record.Truncated)
+	fmt.Fprintf(tw, "Salt:\t%s\n", dashIfEmpty(record.Salt))
+	fmt.Fprintf(tw, "Cwd:\t%s\n", dashIfEmpty(record.Cwd))
+	fmt.Fprintf(tw, "ArtifactDir:\t%s\n", dashIfEmpty(artifactDir))
+	_ = tw.Flush()
+
+	if len(artifacts) > 0 {
+		fmt.Fprintln(stdout, "\nArtifacts:")
+		for _, a := range artifacts {
+			fmt.Fprintf(stdout, "  %s\n", a)
+		}
+	}
+
+	if strings.TrimSpace(response) != "" {
+		fmt.Fprintln(stdout, "\n--- Response ---")
+		_, _ = io.WriteString(stdout, response)
+		if !strings.HasSuffix(response, "\n") {
+			fmt.Fprintln(stdout)
+		}
+	}
+
+	return 0
+}
+
+// --- B4: gc subcommand ---
+
+func runGCCommand(args []string, stdout io.Writer) int {
+	var flagOutput bytes.Buffer
+	fs := flag.NewFlagSet("agent-mux gc", flag.ContinueOnError)
+	fs.SetOutput(&flagOutput)
+
+	olderThan := ""
+	dryRun := false
+	fs.StringVar(&olderThan, "older-than", "", "Delete dispatches older than this duration (e.g., 7d, 24h)")
+	fs.BoolVar(&dryRun, "dry-run", false, "List what would be deleted without actually deleting")
+
+	if err := fs.Parse(normalizeArgs(args)); err != nil {
+		return handleLifecycleParseError(stdout, &flagOutput, err)
+	}
+	if len(fs.Args()) != 0 {
+		return emitLifecycleError(stdout, 2, "invalid_args", "gc does not accept positional arguments", "Use --older-than and --dry-run flags.")
+	}
+
+	olderThan = strings.TrimSpace(olderThan)
+	if olderThan == "" {
+		return emitLifecycleError(stdout, 2, "invalid_args", "--older-than is required", "Example: agent-mux gc --older-than 7d")
+	}
+
+	dur, err := parseDuration(olderThan)
+	if err != nil {
+		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid duration %q: %v", olderThan, err), "Supported formats: Nd (days), Nh (hours). Example: 7d, 24h")
+	}
+
+	cutoff := time.Now().UTC().Add(-dur)
+
+	records, err := store.ListRecords("", 0)
+	if err != nil {
+		return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("list dispatch records: %v", err), "")
+	}
+
+	var keep []store.DispatchRecord
+	var remove []store.DispatchRecord
+	for _, record := range records {
+		started, parseErr := time.Parse(time.RFC3339, record.StartedAt)
+		if parseErr != nil {
+			keep = append(keep, record)
+			continue
+		}
+		if started.Before(cutoff) {
+			remove = append(remove, record)
+		} else {
+			keep = append(keep, record)
+		}
+	}
+
+	if len(remove) == 0 {
+		writeCompactJSON(stdout, map[string]any{
+			"kind":    "gc",
+			"removed": 0,
+			"message": fmt.Sprintf("No dispatches older than %s found.", olderThan),
+		})
+		return 0
+	}
+
+	if dryRun {
+		writeCompactJSON(stdout, map[string]any{
+			"kind":      "gc_dry_run",
+			"would_remove": len(remove),
+			"dispatches": gcRecordSummaries(remove),
+		})
+		return 0
+	}
+
+	// Delete result files and artifact directories for removed records.
+	storePath := store.DefaultStorePath()
+	for _, record := range remove {
+		if strings.TrimSpace(record.ID) != "" && strings.TrimSpace(storePath) != "" {
+			resultPath := filepath.Join(storePath, "results", record.ID+".md")
+			_ = os.Remove(resultPath)
+		}
+		if strings.TrimSpace(record.ArtifactDir) != "" {
+			_ = os.RemoveAll(record.ArtifactDir)
+		}
+	}
+
+	// Rewrite dispatches.jsonl with only the kept records.
+	if err := store.RewriteRecords("", keep); err != nil {
+		return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("rewrite dispatch index: %v", err), "")
+	}
+
+	writeCompactJSON(stdout, map[string]any{
+		"kind":    "gc",
+		"removed": len(remove),
+		"kept":    len(keep),
+		"cutoff":  cutoff.Format(time.RFC3339),
+	})
+	return 0
+}
+
+func gcRecordSummaries(records []store.DispatchRecord) []map[string]string {
+	out := make([]map[string]string, 0, len(records))
+	for _, r := range records {
+		out = append(out, map[string]string{
+			"id":      shortDispatchID(r.ID),
+			"started": r.StartedAt,
+			"engine":  dashIfEmpty(r.Engine),
+			"status":  dashIfEmpty(r.Status),
+		})
+	}
+	return out
+}
+
+func parseDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 {
+		return 0, fmt.Errorf("too short")
+	}
+	unit := s[len(s)-1]
+	numStr := s[:len(s)-1]
+	n, err := strconv.Atoi(numStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number %q", numStr)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("duration must be positive")
+	}
+	switch unit {
+	case 'd', 'D':
+		return time.Duration(n) * 24 * time.Hour, nil
+	case 'h', 'H':
+		return time.Duration(n) * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("unsupported unit %q: want d (days) or h (hours)", string(unit))
+	}
+}
+
