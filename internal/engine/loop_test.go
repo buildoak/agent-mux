@@ -28,6 +28,7 @@ type scriptedAdapter struct {
 	baseBinary      string
 	resumeBinary    string
 	supportsResume  bool
+	stdinNudgeBytes []byte
 	initialScript   string
 	initialPrompt   string
 	env             []string
@@ -74,6 +75,10 @@ func (a *scriptedAdapter) EnvVars(spec *types.DispatchSpec) ([]string, error) {
 		return nil, nil
 	}
 	return append([]string(nil), a.env...), nil
+}
+
+func (a *scriptedAdapter) StdinNudge() []byte {
+	return a.stdinNudgeBytes
 }
 
 func (a *scriptedAdapter) SupportsResume() bool {
@@ -126,6 +131,10 @@ func (a *scriptedAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {
 		return &types.HarnessEvent{Kind: types.EventFileWrite, FilePath: value}, nil
 	case "COMMAND":
 		return &types.HarnessEvent{Kind: types.EventCommandRun, Tool: "shell", Command: value}, nil
+	case "TOOL_START":
+		return &types.HarnessEvent{Kind: types.EventToolStart, Tool: "command_execution", Command: value}, nil
+	case "TOOL_END":
+		return &types.HarnessEvent{Kind: types.EventToolEnd, Tool: value}, nil
 	case "PROGRESS":
 		return &types.HarnessEvent{Kind: types.EventProgress, Text: value}, nil
 	case "RESPONSE":
@@ -851,4 +860,221 @@ func containsString(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestLongCommandExtendsSilenceThreshold(t *testing.T) {
+	// A TOOL_START with "cargo build" should extend the silence kill threshold.
+	// With silence_kill=2 and long_command_silence=20, the watchdog must NOT
+	// kill at 2s while a cargo build is active. Sleep must exceed 5s (watchdog
+	// ticker interval) so the watchdog fires during the silent period.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:lc-extend'",
+		"echo 'TOOL_START:cargo build --release'",
+		"sleep 7",
+		"echo 'TOOL_END:command_execution'",
+		"echo 'RESPONSE:build completed'",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01LONGCMD",
+		Salt:        "test-salt",
+		Engine:      "codex",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"silence_warn_seconds":          1,
+			"silence_kill_seconds":          2,
+			"long_command_silence_seconds":  20,
+		},
+	}
+
+	var eventBuf strings.Builder
+	engine := NewLoopEngine(adapter, &eventBuf, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "build completed" {
+		t.Fatalf("response = %q, want 'build completed'", result.Response)
+	}
+	events := eventBuf.String()
+	if !strings.Contains(events, "long_command_detected") {
+		t.Fatalf("event stream missing long_command_detected; got:\n%s", events)
+	}
+}
+
+func TestUnknownCommandKilledAtNormalThreshold(t *testing.T) {
+	// A TOOL_START with "curl" (not a known long-running prefix) should NOT
+	// extend the threshold. With silence_kill=2, the process should be killed.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:lc-unknown'",
+		"echo 'TOOL_START:curl http://example.com'",
+		"trap 'exit 0' TERM",
+		"while :; do sleep 0.1; done",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01SHORTCMD",
+		Salt:        "test-salt",
+		Engine:      "codex",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"silence_warn_seconds":          1,
+			"silence_kill_seconds":          3,
+			"long_command_silence_seconds":  30,
+		},
+	}
+
+	var eventBuf strings.Builder
+	engine := NewLoopEngine(adapter, &eventBuf, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed (frozen kill)", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "frozen_killed" {
+		t.Fatalf("error = %+v, want frozen_killed", result.Error)
+	}
+	events := eventBuf.String()
+	if strings.Contains(events, "long_command_detected") {
+		t.Fatalf("long_command_detected should NOT appear for curl command")
+	}
+}
+
+func TestLongCommandEndResumesNormalThreshold(t *testing.T) {
+	// After TOOL_END, the normal silence threshold should resume. A period
+	// of silence exceeding normal kill should terminate the process even
+	// though a long command was previously active.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:lc-resume'",
+		"echo 'TOOL_START:go build ./...'",
+		"sleep 0.5",
+		"echo 'TOOL_END:command_execution'",
+		// Now go silent without an active long command — should be killed at normal threshold
+		"trap 'exit 0' TERM",
+		"while :; do sleep 0.1; done",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01LONGEND",
+		Salt:        "test-salt",
+		Engine:      "codex",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"silence_warn_seconds":          1,
+			"silence_kill_seconds":          3,
+			"long_command_silence_seconds":  30,
+		},
+	}
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed (frozen kill after tool_end)", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "frozen_killed" {
+		t.Fatalf("error = %+v, want frozen_killed", result.Error)
+	}
+}
+
+func TestStdinNudgeOnFrozenWarning(t *testing.T) {
+	artifactDir := t.TempDir()
+
+	// Script: emit one event then go silent. The process reads stdin and if
+	// it receives a nudge, emits a RESPONSE and exits. This proves the nudge
+	// was delivered via the stdin pipe.
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:nudge-test'",
+		"read -t 10 line",          // block until stdin nudge or 10s
+		"echo 'RESPONSE:nudge-ok'", // emit response after nudge
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+	adapter.supportsResume = false
+	adapter.stdinNudgeBytes = []byte("\n")
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01NUDGE",
+		Salt:        "test-salt",
+		Engine:      "codex",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"silence_warn_seconds": 2,
+			"silence_kill_seconds": 20,
+		},
+	}
+
+	var eventBuf strings.Builder
+	engine := NewLoopEngine(adapter, &eventBuf, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "nudge-ok" {
+		t.Fatalf("response = %q, want nudge-ok", result.Response)
+	}
+
+	events := eventBuf.String()
+	if !strings.Contains(events, "stdin_nudge") {
+		t.Fatalf("event stream missing stdin_nudge event; got:\n%s", events)
+	}
+	if !strings.Contains(events, "frozen_warning") {
+		t.Fatalf("event stream missing frozen_warning event; got:\n%s", events)
+	}
 }

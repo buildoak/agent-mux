@@ -33,6 +33,7 @@ type LoopEngine struct {
 type runHandle struct {
 	proc       *supervisor.Process
 	stdout     io.ReadCloser
+	stdinPipe  io.WriteCloser
 	streamDone chan struct{}
 	procDone   chan error
 }
@@ -212,6 +213,14 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 	silenceWarn := intEngineOpt(spec, "silence_warn_seconds", 90)
 	silenceKill := intEngineOpt(spec, "silence_kill_seconds", 180)
+	longCommandSilence := intEngineOpt(spec, "long_command_silence_seconds", 540)
+	longCommandExtraPrefixes := parseLongCommandPrefixes(spec)
+	var (
+		activeCommand       string
+		commandStartTime    time.Time
+		longCommandExtended bool
+	)
+	_ = commandStartTime // used for future diagnostics
 	stopHeartbeat, updateActivity := emitter.HeartbeatTicker(intEngineOpt(spec, "heartbeat_interval_sec", 15))
 	defer stopHeartbeat()
 	signals := make(chan loopSignal, 512)
@@ -239,6 +248,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 				activity.ToolCalls = append(activity.ToolCalls, evt.Tool)
 			}
 			if evt.Command != "" {
+				activeCommand = evt.Command
+				commandStartTime = time.Now()
+				longCommandExtended = false
 				_ = emitter.EmitToolStart(evt.Tool, evt.Command)
 				updateActivity(fmt.Sprintf("running: %s", truncate(evt.Command, 60)))
 			} else {
@@ -247,6 +259,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			}
 
 		case types.EventToolEnd:
+			activeCommand = ""
+			commandStartTime = time.Time{}
+			longCommandExtended = false
 			_ = emitter.EmitToolEnd(evt.Tool, evt.DurationMS)
 
 		case types.EventFileWrite:
@@ -261,6 +276,11 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		case types.EventCommandRun:
 			activity.ToolCalls = appendUnique(activity.ToolCalls, evt.Tool)
 			activity.CommandsRun = appendUnique(activity.CommandsRun, evt.Command)
+			if evt.Command != "" {
+				activeCommand = evt.Command
+				commandStartTime = time.Now()
+				longCommandExtended = false
+			}
 			_ = emitter.EmitCommandRun(evt.Command)
 			updateActivity(fmt.Sprintf("running: %s", truncate(evt.Command, 60)))
 
@@ -327,16 +347,23 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		if err != nil {
 			return nil, nil, fmt.Errorf("set up stdout pipe for %s: %w", runBinary, err)
 		}
+		stdinPipe, err := cmd.StdinPipe()
+		if err != nil {
+			_ = stdout.Close()
+			return nil, nil, fmt.Errorf("set up stdin pipe for %s: %w", runBinary, err)
+		}
 		var stderrBuf strings.Builder
 		cmd.Stderr = &stderrBuf
 		if err := proc.Start(); err != nil {
 			_ = stdout.Close()
+			_ = stdinPipe.Close()
 			return nil, &stderrBuf, fmt.Errorf("failed to start %s: %w", runBinary, err)
 		}
 
 		run := &runHandle{
 			proc:       proc,
 			stdout:     stdout,
+			stdinPipe:  stdinPipe,
 			streamDone: make(chan struct{}),
 			procDone:   make(chan error, 1),
 		}
@@ -377,6 +404,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	stopCurrentRun := func() {
 		if currentRun == nil {
 			return
+		}
+		if currentRun.stdinPipe != nil {
+			_ = currentRun.stdinPipe.Close()
 		}
 		_ = currentRun.proc.GracefulStop(spec.GraceSec)
 		<-currentRun.streamDone
@@ -581,12 +611,20 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			}
 			mu.Lock()
 			silence := int(time.Since(lastActivity).Seconds())
+			effectiveKill := silenceKill
+			if activeCommand != "" && isLongRunningCommand(activeCommand, longCommandExtraPrefixes) {
+				effectiveKill = longCommandSilence
+				if !longCommandExtended {
+					longCommandExtended = true
+					_ = emitter.EmitLongCommandDetected(activeCommand, longCommandSilence)
+				}
+			}
 			shouldWarn := silence >= silenceWarn && !frozenWarned
 			if shouldWarn {
 				frozenWarned = true
 			}
 			mu.Unlock()
-			if silence >= silenceKill && setTerminal("failed") {
+			if silence >= effectiveKill && setTerminal("failed") {
 				_ = emitter.EmitError("frozen_tool_call", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence))
 				dispatchErr = dispatch.NewDispatchError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence), "")
 				_ = currentRun.proc.GracefulStop(5)
@@ -595,6 +633,11 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			}
 			if shouldWarn {
 				_ = emitter.EmitFrozenWarning(silence, fmt.Sprintf("No harness events for %ds.", silence))
+				if nudge := e.adapter.StdinNudge(); nudge != nil && currentRun != nil && currentRun.stdinPipe != nil {
+					if _, err := currentRun.stdinPipe.Write(nudge); err == nil {
+						_ = emitter.EmitInfo("stdin_nudge", "Sent stdin nudge to frozen process")
+					}
+				}
 			}
 
 		case <-inboxTicker.C:
@@ -902,6 +945,67 @@ func missingFinalResponse(response string, sawResponse bool) bool {
 		return true
 	}
 	return strings.TrimSpace(response) == ""
+}
+
+// longCommandPrefixes lists command prefixes known to produce long silence
+// (build tools, package managers, compilers). The watchdog extends its kill
+// threshold when the active command matches one of these.
+var longCommandPrefixes = []string{
+	"cargo",
+	"make",
+	"nvcc",
+	"go build",
+	"go test",
+	"cmake",
+	"npm install",
+	"npm run build",
+	"pip install",
+	"docker build",
+	"rustc",
+	"gcc",
+	"g++",
+	"clang",
+}
+
+// isLongRunningCommand returns true if cmd starts with a known long-running
+// build/install prefix.
+func isLongRunningCommand(cmd string, extraPrefixes []string) bool {
+	trimmed := strings.TrimSpace(cmd)
+	if trimmed == "" {
+		return false
+	}
+	for _, prefix := range longCommandPrefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	for _, prefix := range extraPrefixes {
+		if prefix != "" && strings.HasPrefix(trimmed, strings.TrimSpace(prefix)) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseLongCommandPrefixes splits a comma-separated engine opt string into
+// a slice of prefix strings, trimming whitespace from each entry.
+func parseLongCommandPrefixes(spec *types.DispatchSpec) []string {
+	if spec == nil || spec.EngineOpts == nil {
+		return nil
+	}
+	raw, ok := spec.EngineOpts["long_command_prefixes"].(string)
+	if !ok || raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func intEngineOpt(spec *types.DispatchSpec, key string, fallback int) int {

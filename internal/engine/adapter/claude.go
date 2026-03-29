@@ -147,6 +147,10 @@ func (a *ClaudeAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {
 	}
 }
 
+func (a *ClaudeAdapter) StdinNudge() []byte {
+	return nil
+}
+
 func (a *ClaudeAdapter) SupportsResume() bool {
 	return true
 }

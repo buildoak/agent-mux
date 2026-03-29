@@ -27,7 +27,7 @@ All six are confirmed implemented in code. None are aspirational.
 
 **Why Go.** Goroutines power the LoopEngine: stdout scanner, watchdog ticker (5s), inbox ticker (250ms), soft/hard timeout timers -- all concurrent via `select`. `context.Context` propagates SIGINT/SIGTERM through dispatch to subprocess. Process groups (`Setpgid: true` + `Kill(-pgid, sig)`) ensure grandchildren die with the harness. Static binary, no runtime dependencies.
 
-**Why single binary with adapters.** The three harnesses are structurally identical: spawn binary, read event stream, parse events, supervise. One `LoopEngine` + one `HarnessAdapter` interface covers all three. Adding a new harness is ~120 lines implementing 6 methods.
+**Why single binary with adapters.** The three harnesses are structurally identical: spawn binary, read event stream, parse events, supervise. One `LoopEngine` + one `HarnessAdapter` interface covers all three. Adding a new harness is ~120 lines implementing 7 methods.
 
 **Why artifact-first.** Origin: 15+ real failures where harness hard-kills destroyed completed work that existed on disk but was invisible to the coordinator. Fix: treat every write as potentially the last. Prompt preamble instructs incremental writes; artifact dir exists before the harness starts; `ScanArtifacts` runs on every terminal state.
 
@@ -120,7 +120,7 @@ DispatchSpec (JSON or CLI flags)
        │
        ▼
   Event loop: scanHarnessOutput → adapter.ParseEvent → event stream
-       │         ├── watchdog: 90s warn, 180s kill
+       │         ├── watchdog: 90s warn + stdin nudge, 180s kill
        │         ├── timeout: soft → grace → hard
        │         └── inbox: poll at event boundary + 250ms ticker
        │
@@ -326,6 +326,7 @@ type HarnessAdapter interface {
     ParseEvent(line string) (*HarnessEvent, error)                     // parse one stdout line
     SupportsResume() bool                                              // can resume via ResumeArgs?
     ResumeArgs(spec *DispatchSpec, sessionID string, msg string) []string // argv for resume invocation
+    StdinNudge() []byte                                                // bytes to write as liveness nudge, or nil
 }
 ```
 
@@ -492,10 +493,12 @@ Events emitted as NDJSON to stderr AND `<artifact_dir>/events.jsonl`. Every even
 | `progress` | `message` |
 | `timeout_warning` | `message` |
 | `frozen_warning` | `silence_seconds`, `message` |
+| `long_command_detected` | `command`, `timeout_seconds`, `message` |
+| `info` | `error_code` (as info code), `message` |
 | `error` | `error_code`, `message` |
 | `coordinator_inject` | `message` |
 
-Additional types used internally: `warning` (non-fatal conditions).
+Additional types used internally: `warning` (non-fatal conditions). The `info` type carries diagnostic codes like `stdin_nudge`.
 
 **Heartbeat protocol:** Background goroutine emits heartbeat every 15s (configurable). Carries `elapsed_s`, `interval_s`, `last_activity` (e.g., `"tool: Bash"`, `"wrote: src/foo.go"`). Stopped via deferred cancel before result return.
 
@@ -534,10 +537,15 @@ Watchdog ticker fires every 5 seconds. `lastActivity` is reset on every parsed h
 
 | Threshold | Default | Action |
 |-----------|---------|--------|
-| `silence_warn_seconds` | 90s | Emit `frozen_warning` event. Set `frozenWarned` to prevent repeats. |
+| `silence_warn_seconds` | 90s | Emit `frozen_warning` event. Send stdin nudge if adapter supports it. Set `frozenWarned` to prevent repeats. |
 | `silence_kill_seconds` | 180s | Emit `error` with code `frozen_tool_call`. `GracefulStop(5)`. Result: `"failed"`. |
+| `long_command_silence_seconds` | 540s (9 min) | Extended kill threshold applied when the active command matches a known long-running prefix. |
 
-Both thresholds are also readable from `spec.EngineOpts` for per-dispatch tuning without config changes.
+**Long-command protection.** Legitimate build tools (`cargo`, `make`, `nvcc`, `go build`, `go test`, `cmake`, `npm install`, `npm run build`, `pip install`, `docker build`, `rustc`, `gcc`, `g++`, `clang`) can run for minutes without producing harness events. The watchdog tracks the active command via `EventToolStart`/`EventCommandRun` (set) and `EventToolEnd` (clear). When the active command matches a known prefix, the effective kill threshold becomes `long_command_silence_seconds` (default 540s). A `long_command_detected` event is emitted once per command for observability. When `EventToolEnd` fires, the normal `silence_kill_seconds` threshold resumes immediately. Custom prefixes can be added via `engine_opts["long_command_prefixes"]` (comma-separated string).
+
+**Stdin nudge (soft steering).** At the warn threshold, the LoopEngine calls `adapter.StdinNudge()`. If the adapter returns non-nil bytes (e.g. Codex returns `"\n"`), those bytes are written to the process's stdin pipe. This gives the harness a chance to recover from a frozen state before the hard kill at `silence_kill_seconds`. An `info` event with code `stdin_nudge` is emitted on successful write. Adapters that don't support stdin recovery (Claude, Gemini) return `nil` and no write occurs.
+
+All thresholds are also readable from `spec.EngineOpts` for per-dispatch tuning without config changes.
 
 `frozen_tool_call` error: `Suggestion: "Worker may be stuck in a hanging command or tool call. Retry with a narrower task or longer timeout. Partial work was preserved."`, `Retryable: true`.
 
@@ -992,4 +1000,6 @@ Error codes are implemented across the catalog. Key codes:
 3. **`EnvVars()` on HarnessAdapter**: spec interface (SS6.1) does not include this method. Clean extension for per-adapter env injection.
 4. **`SecondaryKind` on HarnessEvent**: dual-kind event handling not in spec.
 5. **Inbox checked on every stdout line**: spec says "at event boundaries"; code is more aggressive (every line + 250ms ticker + 5s watchdog).
-6. **Per-dispatch liveness tuning via `EngineOpts`**: `intEngineOpt()` reads thresholds from spec, not only from config.
+6. **Per-dispatch liveness tuning via `EngineOpts`**: `intEngineOpt()` reads thresholds from spec, not only from config. Includes `long_command_silence_seconds` (int, default 540) and `long_command_prefixes` (comma-separated string of additional prefixes).
+7. **`StdinNudge()` on HarnessAdapter**: soft steering via stdin pipe at frozen-warn threshold. Codex returns `"\n"`, others return nil. Not in spec.
+8. **Long-command watchdog protection**: tracks active command from `EventToolStart`/`EventCommandRun`, clears on `EventToolEnd`. Known build tools get an extended silence threshold to prevent false-positive kills.

@@ -476,6 +476,7 @@ Every event includes:
 | `progress` | `message` | Free-form progress update |
 | `timeout_warning` | `message` | Approaching timeout |
 | `frozen_warning` | `silence_seconds`, `message` | Extended harness silence |
+| `info` | `error_code` (info code), `message` | Diagnostic info (e.g. `stdin_nudge`) |
 | `error` | `error_code`, `message` | Error during dispatch |
 | `response_truncated` | `full_output_path` | Response exceeded `response_max_chars`, full output written to file |
 | `coordinator_inject` | `message` | Inbox message injected |
@@ -499,6 +500,7 @@ With `--verbose`, raw harness lines are also written to stderr prefixed with
 | `event_denied` | Hook denied an event |
 | `frozen_killed` | Harness killed after prolonged silence (frozen watchdog) |
 | `frozen_tool_call` | Harness silence exceeded warn threshold (event code) |
+| `stdin_nudge` | Stdin nudge sent to frozen process (info event, not error) |
 | `interrupted` | Context cancelled / signal received |
 | `invalid_args` | Invalid arguments or missing required fields |
 | `max_depth_exceeded` | Recursive dispatch depth limit hit |

@@ -213,6 +213,10 @@ func geminiStatsToTokens(stats *geminiStats) *types.TokenUsage {
 	}
 }
 
+func (a *GeminiAdapter) StdinNudge() []byte {
+	return nil
+}
+
 func (a *GeminiAdapter) SupportsResume() bool {
 	return true
 }

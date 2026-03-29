@@ -286,4 +286,7 @@ type HarnessAdapter interface {
 	ParseEvent(line string) (*HarnessEvent, error)
 	SupportsResume() bool
 	ResumeArgs(spec *DispatchSpec, sessionID string, message string) []string
+	// StdinNudge returns the bytes to write to stdin as a liveness nudge,
+	// or nil if the engine does not support stdin-driven recovery.
+	StdinNudge() []byte
 }

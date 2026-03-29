@@ -39,6 +39,7 @@ type Event struct {
 	Message        string   `json:"message,omitempty"`
 	Status         string   `json:"status,omitempty"`
 	SilenceSeconds int      `json:"silence_seconds,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 	ErrorCode      string   `json:"error_code,omitempty"`
 	FullOutputPath string   `json:"full_output_path,omitempty"`
 }
@@ -147,8 +148,18 @@ func (e *Emitter) EmitTimeoutWarning(message string) error {
 func (e *Emitter) EmitFrozenWarning(silenceSeconds int, message string) error {
 	return e.emitType("frozen_warning", Event{SilenceSeconds: silenceSeconds, Message: message})
 }
+func (e *Emitter) EmitLongCommandDetected(command string, timeoutSeconds int) error {
+	return e.emitType("long_command_detected", Event{
+		Command:        command,
+		TimeoutSeconds: timeoutSeconds,
+		Message:        fmt.Sprintf("Long-running command detected: %s. Silence threshold extended to %ds.", command, timeoutSeconds),
+	})
+}
 func (e *Emitter) EmitError(code, message string) error {
 	return e.emitType("error", Event{ErrorCode: code, Message: message})
+}
+func (e *Emitter) EmitInfo(code, message string) error {
+	return e.emitType("info", Event{ErrorCode: code, Message: message})
 }
 func (e *Emitter) EmitResponseTruncated(fullOutputPath string) error {
 	return e.emitType("response_truncated", Event{FullOutputPath: fullOutputPath})
