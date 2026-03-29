@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,13 +16,9 @@ import (
 	"time"
 )
 
-// dispatch runs agent-mux with the given TestCase and returns a parsed Result.
-func dispatch(t *testing.T, binary string, tc TestCase) Result {
+func marshalDispatchSpec(t *testing.T, tc TestCase, artifactDir string) []byte {
 	t.Helper()
 
-	artifactDir := t.TempDir()
-
-	// Build the JSON dispatch spec for --stdin mode.
 	spec := map[string]any{
 		"engine":       tc.Engine,
 		"model":        tc.Model,
@@ -46,6 +43,15 @@ func dispatch(t *testing.T, binary string, tc TestCase) Result {
 	if err != nil {
 		t.Fatalf("marshal dispatch spec: %v", err)
 	}
+	return specJSON
+}
+
+// dispatch runs agent-mux with the given TestCase and returns a parsed Result.
+func dispatch(t *testing.T, binary string, tc TestCase) Result {
+	t.Helper()
+
+	artifactDir := t.TempDir()
+	specJSON := marshalDispatchSpec(t, tc, artifactDir)
 
 	// Set up context with wall-clock timeout.
 	wallClock := tc.MaxWallClock
@@ -116,14 +122,114 @@ func dispatch(t *testing.T, binary string, tc TestCase) Result {
 	return result
 }
 
+// startAsyncDispatch starts an async dispatch and returns as soon as the
+// async_started acknowledgement is emitted on stdout.
+func startAsyncDispatch(t *testing.T, binary string, tc TestCase) Result {
+	t.Helper()
+
+	artifactDir := t.TempDir()
+	specJSON := marshalDispatchSpec(t, tc, artifactDir)
+
+	cmdArgs := []string{"--stdin", "--yes"}
+	cmdArgs = append(cmdArgs, tc.ExtraFlags...)
+	cmd := exec.Command(binary, cmdArgs...)
+	cmd.Stdin = bytes.NewReader(specJSON)
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start async dispatch: %v", err)
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- cmd.Wait()
+	}()
+
+	stderrDone := make(chan []byte, 1)
+	go func() {
+		data, _ := io.ReadAll(stderrPipe)
+		stderrDone <- data
+	}()
+
+	reader := bufio.NewReader(stdoutPipe)
+	ackLineCh := make(chan []byte, 1)
+	ackErrCh := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			ackErrCh <- err
+			return
+		}
+		ackLineCh <- bytes.TrimSpace(line)
+	}()
+
+	ackTimeout := 15 * time.Second
+	if tc.MaxWallClock > 0 && tc.MaxWallClock < ackTimeout {
+		ackTimeout = tc.MaxWallClock
+	}
+
+	failAsyncStart := func(reason string, err error) Result {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		<-waitDone
+		stderr := <-stderrDone
+		t.Fatalf("%s: %v\nstderr=%s", reason, err, string(stderr))
+		return Result{}
+	}
+
+	var ackLine []byte
+	select {
+	case ackLine = <-ackLineCh:
+	case err := <-ackErrCh:
+		return failAsyncStart("read async ack", err)
+	case <-time.After(ackTimeout):
+		return failAsyncStart("read async ack", fmt.Errorf("timed out after %s", ackTimeout))
+	}
+
+	// Async dispatches should not write to stdout after the initial ack.
+	_ = stdoutPipe.Close()
+
+	t.Cleanup(func() {
+		select {
+		case <-waitDone:
+		case <-time.After(10 * time.Second):
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			<-waitDone
+		}
+		select {
+		case <-stderrDone:
+		case <-time.After(1 * time.Second):
+		}
+	})
+
+	return Result{
+		ArtifactDir: artifactDir,
+		Duration:    time.Since(start),
+		ExitCode:    0,
+		RawStdout:   ackLine,
+	}
+}
+
 // dispatchAsync runs agent-mux with --async and returns two Results:
 // 1. The async ack (from the initial --async dispatch stdout)
 // 2. The collected result (from `ax result <id>`)
 func dispatchAsync(t *testing.T, binary string, tc TestCase) (ack Result, collected Result) {
 	t.Helper()
 
-	// First dispatch with --async.
-	ack = dispatch(t, binary, tc)
+	// Start the async dispatch and return on the initial ack.
+	ack = startAsyncDispatch(t, binary, tc)
 
 	// Parse the async_started ack to get the dispatch_id.
 	var ackJSON map[string]any
@@ -194,8 +300,8 @@ func dispatchAsyncSteer(t *testing.T, binary string, tc TestCase) (ack Result, s
 		t.Fatal("dispatchAsyncSteer called without SteerSpec")
 	}
 
-	// Step 1: Dispatch with --async.
-	ack = dispatch(t, binary, tc)
+	// Step 1: Start the async dispatch and return on the initial ack.
+	ack = startAsyncDispatch(t, binary, tc)
 
 	// Parse dispatch_id from ack.
 	var ackJSON map[string]any

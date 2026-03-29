@@ -1,10 +1,10 @@
 {
-  "run_id": "trace-1774805366",
-  "timestamp": "2026-03-29T17:29:26Z",
+  "run_id": "trace-1774811858",
+  "timestamp": "2026-03-29T19:17:38Z",
   "verdicts": [
     {
       "case": "complete-simple",
-      "dispatch_id": "01KMX9Z7P78C9X8K42EYWKFATG",
+      "dispatch_id": "01KMXG67V3W75B19B1GTCKWST0",
       "trace_session": "",
       "pass": true,
       "flags": [
@@ -12,16 +12,71 @@
         "efficient",
         "clean_completion"
       ],
-      "reasoning": "The agent started by creating the target file directly, then verified its contents and checked for unintended file changes. The trace shows no errors or course corrections, and the behavior matches the simple file-creation task.",
+      "reasoning": "The agent immediately used the correct shell command to create `hello.txt` with exactly the requested contents. There were no errors, no unnecessary extra steps, and the semantic intent was satisfied on the first try.",
+      "cost_usd": 0,
+      "turns_used": 1,
+      "tool_calls": 2,
+      "error_count": 0,
+      "first_action": "Ran `/bin/bash -lc \"printf 'hello world' \u003e hello.txt\"` to create the requested file",
+      "source": "llm"
+    },
+    {
+      "case": "analyze-repo",
+      "dispatch_id": "01KMXG6WR3TX1M9MY3FRJRGF22",
+      "trace_session": "4a679379",
+      "pass": true,
+      "flags": [
+        "good_first_attempt",
+        "efficient",
+        "clean_completion"
+      ],
+      "reasoning": "The agent started by inspecting `main.go`, then broadened to `rg --files`, `README.md`, `fixed_main.go`, and runtime checks to understand behavior and confirm bugs. There were no recorded tool errors, and it appears to have finished the analysis by writing a summary artifact.",
+      "cost_usd": 0,
+      "turns_used": 1,
+      "tool_calls": 17,
+      "error_count": 0,
+      "first_action": "Ran `sed -n '1,260p' main.go` to inspect the target file.",
+      "source": "llm"
+    },
+    {
+      "case": "count-loc",
+      "dispatch_id": "01KMXGAQ5W23HAQ8W1ZZ5EMBRJ",
+      "trace_session": "",
+      "pass": true,
+      "flags": [
+        "good_first_attempt",
+        "efficient",
+        "clean_completion"
+      ],
+      "reasoning": "The agent started with the correct direct line-count command, then located the files when needed and produced the combined total of 65. It finished in one turn with no errors and only minimal extra work.",
       "cost_usd": 0,
       "turns_used": 1,
       "tool_calls": 4,
       "error_count": 0,
-      "first_action": "tool:file_change"
+      "first_action": "Ran `wc -l main.go helpers.py`.",
+      "source": "llm"
     },
     {
-      "case": "analyze-repo",
-      "dispatch_id": "01KMXA0JSMD76P1W5BKW31DV15",
+      "case": "run-bash",
+      "dispatch_id": "01KMXGBP8652NAGK7HQ475P3YM",
+      "trace_session": "",
+      "pass": true,
+      "flags": [
+        "good_first_attempt",
+        "efficient",
+        "clean_completion"
+      ],
+      "reasoning": "It immediately ran the requested `wc -l main.go` command and completed without detours or retries, which matches the task exactly. No error recovery was needed because the first attempt was already the correct approach.",
+      "cost_usd": 0,
+      "turns_used": 1,
+      "tool_calls": 2,
+      "error_count": 0,
+      "first_action": "Ran `/bin/bash -lc 'wc -l main.go'` in the current directory.",
+      "source": "llm"
+    },
+    {
+      "case": "multi-step-reason",
+      "dispatch_id": "01KMXGCH4CCQ5BCDQ1D27VNQVH",
       "trace_session": "",
       "pass": true,
       "flags": [
@@ -29,63 +84,13 @@
         "clean_completion",
         "efficient"
       ],
-      "reasoning": "The agent started with repo reconnaissance, then read `README.md` and `main.go`, exercised the program with multiple argument sets, and finished with `go test ./...`. That is the right workflow for this task, and there were no errors or recovery loops.",
+      "reasoning": "The agent inspected `main.go`, checked the repository context, then isolated and fixed the off-by-one loop, wrote `fixed_main.go`, formatted it, and validated it with `go run`. There were no errors or repeated mistakes, and the requested semantic fix appears completed.",
       "cost_usd": 0,
       "turns_used": 1,
-      "tool_calls": 11,
+      "tool_calls": 14,
       "error_count": 0,
-      "first_action": "command:/bin/bash -lc 'ls -la'"
-    },
-    {
-      "case": "count-loc",
-      "dispatch_id": "01KMXA3DQ01X8YDW0G8J51S47H",
-      "trace_session": "",
-      "pass": true,
-      "flags": [
-        "good_first_attempt",
-        "efficient",
-        "clean_completion"
-      ],
-      "reasoning": "The agent first checked the artifact path, then counted both files with `wc -l` and wrote the summed result `66` to the artifact directory. No errors occurred, and it finished the task in one turn with minimal tool use.",
-      "cost_usd": 0,
-      "turns_used": 1,
-      "tool_calls": 4,
-      "error_count": 0,
-      "first_action": "command:/bin/bash -lc \"printf '%s\\\\n' \\\"\"'$AGENT_MUX_ARTIFACT_DIR\"'"
-    },
-    {
-      "case": "run-bash",
-      "dispatch_id": "01KMXA601J1NS20515E833X96A",
-      "trace_session": "",
-      "pass": true,
-      "flags": [
-        "good_first_attempt",
-        "efficient",
-        "clean_completion"
-      ],
-      "reasoning": "The agent’s first move was the correct shell command, with a harmless `tee` to preserve the exact output. There were no errors or repeated attempts, and the one-turn, one-command path was sufficient for this simple task.",
-      "cost_usd": 0,
-      "turns_used": 1,
-      "tool_calls": 2,
-      "error_count": 0,
-      "first_action": "command:/bin/bash -lc 'wc -l main.go | tee \"$AGENT_MUX_ARTIFACT_DIR/wc_main_go.txt\"'"
-    },
-    {
-      "case": "multi-step-reason",
-      "dispatch_id": "01KMXA7BWDQY01ZXKFGHPWNRHK",
-      "trace_session": "",
-      "pass": true,
-      "flags": [
-        "good_first_attempt",
-        "efficient",
-        "clean_completion"
-      ],
-      "reasoning": "It started by inspecting `main.go`, which is the right first step, then wrote `fixed_main.go` and ran a validation command. There were no errors or repeated failed attempts, so the trace looks like a clean completion of the requested off-by-one fix.",
-      "cost_usd": 0,
-      "turns_used": 1,
-      "tool_calls": 6,
-      "error_count": 0,
-      "first_action": "command:/bin/bash -lc \"sed -n '1,220p' main.go\""
+      "first_action": "Read `main.go` with `sed -n '1,220p' main.go`.",
+      "source": "llm"
     }
   ],
   "summary": {
@@ -98,5 +103,10 @@
       "efficient",
       "clean_completion"
     ]
+  },
+  "diff": {
+    "regressions": null,
+    "improvements": null,
+    "stable": 5
   }
 }

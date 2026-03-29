@@ -12,8 +12,7 @@ func processNames(names []string) []string {
 	seen := make(map[string]bool)
 	var unique []string
 
-	// Off-by-one: should be i < len(names), not i < len(names)-1
-	for i := 0; i < len(names)-1; i++ {
+	for i := 0; i < len(names); i++ {
 		lower := strings.ToLower(names[i])
 		if !seen[lower] {
 			seen[lower] = true
