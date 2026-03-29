@@ -15,7 +15,7 @@ const (
 	CatError       Category = "error"
 	CatEvents      Category = "events"
 	CatStreaming   Category = "streaming"
-	CatSteering   Category = "steering"
+	CatSteering    Category = "steering"
 )
 
 // TestCase defines a single ax-eval behavioral test.
@@ -30,13 +30,14 @@ type TestCase struct {
 	TimeoutSec   int           // agent-mux --timeout value
 	MaxWallClock time.Duration // test-level context timeout
 	SkipSkills   bool
-	ExtraFlags   []string              // additional CLI flags (e.g. "--stream", "--async")
-	IsAsync      bool                  // true = use dispatchAsync flow (dispatch + result collection)
-	SteerSpec    *SteerSpec            // non-nil = dispatch async, sleep, steer, then collect
-	Evaluate     func(Result) Verdict  // deterministic check (always runs)
+	SkipReason   string
+	ExtraFlags   []string                                   // additional CLI flags (e.g. "--stream", "--async")
+	IsAsync      bool                                       // true = use dispatchAsync flow (dispatch + result collection)
+	SteerSpec    *SteerSpec                                 // non-nil = dispatch async, sleep, steer, then collect
+	Evaluate     func(Result) Verdict                       // deterministic check (always runs)
 	EvalAsync    func(ack Result, collected Result) Verdict // async-specific evaluator
-	JudgePrompt  string                // non-empty = run LLM-as-judge tier 2
-	EngineOpts   map[string]string     // e.g. silence thresholds for liveness
+	JudgePrompt  string                                     // non-empty = run LLM-as-judge tier 2
+	EngineOpts   map[string]string                          // e.g. silence thresholds for liveness
 }
 
 // Result captures everything from a single dispatch.
@@ -73,7 +74,7 @@ type SteerSpec struct {
 // Verdict is the outcome of evaluating a Result.
 type Verdict struct {
 	Pass   bool
-	Score  float64  // 0.0-1.0
+	Score  float64 // 0.0-1.0
 	Reason string
 	Events []string // event types observed
 }

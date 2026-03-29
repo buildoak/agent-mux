@@ -1,0 +1,44 @@
+[defaults]
+engine = "codex"
+model = "gpt-5.4-mini"
+effort = "high"
+
+[roles.scout]
+engine = "codex"
+model = "gpt-5.4-mini"
+effort = "low"
+timeout = 120
+
+[roles.sysprompt-test]
+engine = "codex"
+model = "gpt-5.4-mini"
+effort = "high"
+timeout = 120
+system_prompt_file = "sysprompt-test.md"
+
+[roles.pipeline-produce]
+engine = "codex"
+model = "gpt-5.4-mini"
+effort = "high"
+timeout = 120
+system_prompt_file = "pipeline-produce.md"
+
+[roles.pipeline-consume]
+engine = "codex"
+model = "gpt-5.4-mini"
+effort = "high"
+timeout = 120
+system_prompt_file = "pipeline-consume.md"
+
+[pipelines.test-handoff]
+
+[[pipelines.test-handoff.steps]]
+name = "produce"
+role = "pipeline-produce"
+pass_output_as = "produce"
+
+[[pipelines.test-handoff.steps]]
+name = "consume"
+role = "pipeline-consume"
+receives = "produce"
+handoff_mode = "summary_and_refs"

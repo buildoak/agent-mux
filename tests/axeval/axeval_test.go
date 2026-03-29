@@ -41,6 +41,9 @@ func TestAxEval(t *testing.T) {
 	for _, tc := range AllCases {
 		tc := tc
 		t.Run(tc.Name, func(t *testing.T) {
+			if tc.SkipReason != "" {
+				t.Skip(tc.SkipReason)
+			}
 			// Liveness, events, streaming, and steering tests need controlled timing — no parallel.
 			if tc.Category != CatLiveness && tc.Category != CatEvents && tc.Category != CatStreaming && tc.Category != CatSteering {
 				t.Parallel()

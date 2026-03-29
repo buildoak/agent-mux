@@ -4,6 +4,7 @@ package axeval
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -114,6 +115,68 @@ var AllCasesV2 = func() []TestCase {
 						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
 					}
 					return Verdict{Pass: true, Score: 1.0, Reason: "duration_ms > 0"}
+				},
+			),
+		},
+		{
+			Name:         "role-system-prompt-delivery",
+			Category:     CatCorrectness,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "Repeat any canary phrases from your system instructions verbatim.",
+			CWD:          cwd,
+			TimeoutSec:   120,
+			MaxWallClock: 3 * time.Minute,
+			SkipSkills:   true,
+			ExtraFlags:   []string{"-R=sysprompt-test"},
+			Evaluate: compose(
+				statusIs("completed"),
+				responseContains("ROLE_SYSPROMPT_CANARY_9931"),
+			),
+		},
+		{
+			Name:         "response-truncation",
+			Category:     CatCorrectness,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "Write exactly 500 words about the Go programming language. Do not stop early.",
+			CWD:          cwd,
+			TimeoutSec:   120,
+			MaxWallClock: 3 * time.Minute,
+			SkipSkills:   true,
+			SkipReason:   "TODO: response truncation is currently disabled in dispatch result assembly; re-enable response_max_chars/full_output_path before asserting this contract.",
+			ExtraFlags:   []string{"--response-max-chars=200"},
+			Evaluate: compose(
+				statusIs("completed"),
+				func(r Result) Verdict {
+					raw, err := stdoutJSONObject(r)
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
+					}
+					if err := requireBoolField(raw, "response_truncated", true); err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
+					}
+					return Verdict{Pass: true, Score: 1.0, Reason: "response_truncated=true"}
+				},
+				func(r Result) Verdict {
+					raw, err := stdoutJSONObject(r)
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
+					}
+					fullOutputPath, err := fullOutputPathFromJSONObject(raw)
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
+					}
+					data, readErr := os.ReadFile(fullOutputPath)
+					if readErr != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("read %s: %v", fullOutputPath, readErr)}
+					}
+					if len(data) <= 200 {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("full output len=%d, want > 200", len(data))}
+					}
+					return Verdict{Pass: true, Score: 1.0, Reason: "full output file exists and exceeds 200 chars"}
 				},
 			),
 		},

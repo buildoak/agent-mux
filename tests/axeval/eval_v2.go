@@ -103,6 +103,17 @@ func requirePositiveNumberField(obj map[string]any, key string) error {
 	return nil
 }
 
+func requireBoolField(obj map[string]any, key string, want bool) error {
+	value, ok := obj[key].(bool)
+	if !ok {
+		return fmt.Errorf("%s missing or not a bool", key)
+	}
+	if value != want {
+		return fmt.Errorf("%s=%v, want %v", key, value, want)
+	}
+	return nil
+}
+
 func requirePresentKeys(obj map[string]any, keys ...string) error {
 	for _, key := range keys {
 		if _, ok := obj[key]; !ok {
@@ -110,4 +121,14 @@ func requirePresentKeys(obj map[string]any, keys ...string) error {
 		}
 	}
 	return nil
+}
+
+func fullOutputPathFromJSONObject(obj map[string]any) (string, error) {
+	for _, key := range []string{"full_output_path", "full_output"} {
+		value, ok := jsonStringField(obj, key)
+		if ok && strings.TrimSpace(value) != "" {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("full_output_path/full_output missing or empty")
 }
