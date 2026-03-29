@@ -137,13 +137,6 @@ func ReadDispatchMeta(artifactDir string) (*DispatchMeta, error) {
 	return &meta, nil
 }
 
-func TruncateResponse(response string, maxChars int) (string, bool) {
-	if maxChars <= 0 || len(response) <= maxChars {
-		return response, false
-	}
-
-	return truncateAtBoundary(response, maxChars), true
-}
 func WriteFullOutput(artifactDir, response string) (string, error) {
 	path := filepath.Join(artifactDir, "full_output.md")
 	if err := os.WriteFile(path, []byte(response), 0644); err != nil {
@@ -310,19 +303,6 @@ func levenshtein(a, b string) int {
 }
 func BuildCompletedResult(spec *types.DispatchSpec, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, responseMaxChars int) *types.DispatchResult {
 	result := baseResult(spec, types.StatusCompleted, response, activity, metadata, durationMS)
-
-	if responseMaxChars > 0 {
-		truncated, wasTruncated := TruncateResponse(response, responseMaxChars)
-		if wasTruncated {
-			fullPath, err := WriteFullOutput(spec.ArtifactDir, response)
-			if err == nil {
-				result.Response = truncated
-				result.ResponseTruncated = true
-				result.FullOutput = &fullPath
-				result.FullOutputPath = &fullPath
-			}
-		}
-	}
 
 	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
 	return result

@@ -171,35 +171,6 @@ func TestUpdateDispatchMetaPropagatesWriteErrors(t *testing.T) {
 	}
 }
 
-func TestTruncateResponse(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     string
-		max       int
-		wantTrunc bool
-	}{
-		{"no truncation needed", "short", 100, false},
-		{"exact limit", "hello", 5, false},
-		{"unlimited", "anything", 0, false},
-		{"truncate at sentence", "First sentence. Second sentence. Third sentence.", 20, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, truncated := TruncateResponse(tt.input, tt.max)
-			if truncated != tt.wantTrunc {
-				t.Errorf("truncated = %v, want %v", truncated, tt.wantTrunc)
-			}
-			if tt.wantTrunc && len(result) > tt.max {
-				t.Errorf("result length %d exceeds max %d", len(result), tt.max)
-			}
-			if !tt.wantTrunc && result != tt.input {
-				t.Errorf("result = %q, want %q", result, tt.input)
-			}
-		})
-	}
-}
-
 func TestExtractHandoffSummary(t *testing.T) {
 	// With ## Summary section
 	withSummary := "Some text\n\n## Summary\n\nThis is the summary.\n\n## Next Section\n\nMore text."
@@ -304,7 +275,7 @@ func TestBuildCompletedResult(t *testing.T) {
 	}
 }
 
-func TestBuildCompletedResultTruncationIncludesFullOutputPath(t *testing.T) {
+func TestBuildCompletedResultNeverTruncates(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID:  "01JQXYZ",
@@ -325,32 +296,14 @@ func TestBuildCompletedResultTruncationIncludesFullOutputPath(t *testing.T) {
 	}
 	response := "First sentence. Second sentence. Third sentence."
 
+	// Even with a small responseMaxChars, truncation no longer happens
 	result := BuildCompletedResult(spec, response, activity, metadata, 5000, 20)
 
-	if !result.ResponseTruncated {
-		t.Fatal("response_truncated = false, want true")
+	if result.ResponseTruncated {
+		t.Fatal("response_truncated = true, want false (truncation removed)")
 	}
-	if result.FullOutput == nil {
-		t.Fatal("full_output = nil, want path")
-	}
-	if result.FullOutputPath == nil {
-		t.Fatal("full_output_path = nil, want path")
-	}
-	if *result.FullOutput != *result.FullOutputPath {
-		t.Fatalf("full_output = %q, full_output_path = %q, want same path", *result.FullOutput, *result.FullOutputPath)
-	}
-	if !filepath.IsAbs(*result.FullOutputPath) {
-		t.Fatalf("full_output_path = %q, want absolute path", *result.FullOutputPath)
-	}
-	data, err := os.ReadFile(*result.FullOutputPath)
-	if err != nil {
-		t.Fatalf("read full_output: %v", err)
-	}
-	if string(data) != response {
-		t.Fatalf("full_output contents = %q, want %q", string(data), response)
-	}
-	if !containsArtifact(result.Artifacts, *result.FullOutputPath) {
-		t.Fatalf("artifacts = %#v, want full_output path %q", result.Artifacts, *result.FullOutputPath)
+	if result.Response != response {
+		t.Fatalf("response = %q, want full response %q", result.Response, response)
 	}
 }
 

@@ -23,8 +23,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Defaults.PermissionMode != "" {
 		t.Fatalf("Defaults.PermissionMode = %q, want %q", cfg.Defaults.PermissionMode, "")
 	}
-	if cfg.Defaults.ResponseMaxChars != 16000 {
-		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 16000)
+	if cfg.Defaults.ResponseMaxChars != 0 {
+		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 0)
 	}
 	if cfg.Defaults.MaxDepth != 2 {
 		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 2)
