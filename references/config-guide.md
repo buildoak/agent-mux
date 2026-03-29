@@ -112,6 +112,7 @@ role = "lifter"
 | `heartbeat_interval_sec` | int | 15 | Heartbeat emission interval |
 | `silence_warn_seconds` | int | 90 | Emit frozen_warning after this silence |
 | `silence_kill_seconds` | int | 180 | Kill harness after this silence |
+| `long_command_silence_seconds` | int | 540 | Extended kill threshold for known long-running commands (cargo, make, nvcc, etc.) |
 
 ### Timeout Section
 
