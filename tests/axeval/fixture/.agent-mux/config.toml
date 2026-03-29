@@ -16,6 +16,14 @@ effort = "high"
 timeout = 120
 system_prompt_file = "sysprompt-test.md"
 
+[roles.variant-test]
+engine = "codex"
+model = "gpt-5.4"
+effort = "high"
+
+[roles.variant-test.variants.mini]
+model = "gpt-5.4-mini"
+
 [roles.pipeline-produce]
 engine = "codex"
 model = "gpt-5.4-mini"
@@ -42,3 +50,25 @@ name = "consume"
 role = "pipeline-consume"
 receives = "produce"
 handoff_mode = "summary_and_refs"
+
+[pipelines.test-refs]
+
+[[pipelines.test-refs.steps]]
+name = "produce"
+role = "pipeline-produce"
+pass_output_as = "produce"
+handoff_mode = "refs_only"
+
+[[pipelines.test-refs.steps]]
+name = "consume"
+role = "pipeline-consume"
+receives = "produce"
+
+[pipelines.test-fanout]
+max_parallel = 2
+
+[[pipelines.test-fanout.steps]]
+name = "fanout"
+role = "pipeline-produce"
+parallel = 2
+pass_output_as = "fanout"

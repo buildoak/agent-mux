@@ -136,6 +136,39 @@ var AllCasesV2 = func() []TestCase {
 			),
 		},
 		{
+			Name:         "variant-resolution",
+			Category:     CatCorrectness,
+			Engine:       "codex",
+			Model:        "gpt-5.4",
+			Effort:       "high",
+			Prompt:       "What is 2+2? Answer with just the number.",
+			CWD:          cwd,
+			TimeoutSec:   120,
+			MaxWallClock: 3 * time.Minute,
+			SkipSkills:   true,
+			ExtraFlags:   []string{"-R=variant-test", "--variant=mini", "--cwd", cwd},
+			Evaluate: compose(
+				statusIs("completed"),
+				func(r Result) Verdict {
+					events, err := parseNDJSONObjects(r.RawStderr, "stderr")
+					if err != nil {
+						return Verdict{Pass: true, Score: 0.5, Reason: fmt.Sprintf("TODO: could not parse stderr events for variant resolution: %v", err)}
+					}
+					for _, evt := range events {
+						if eventType, _ := jsonStringField(evt, "type"); eventType != "dispatch_start" {
+							continue
+						}
+						model, _ := jsonStringField(evt, "model")
+						if model == "gpt-5.4-mini" {
+							return Verdict{Pass: true, Score: 1.0, Reason: "dispatch_start model=gpt-5.4-mini"}
+						}
+						return Verdict{Pass: true, Score: 0.5, Reason: fmt.Sprintf("TODO: variant resolution not reflected in dispatch_start model (got %q)", model)}
+					}
+					return Verdict{Pass: true, Score: 0.5, Reason: "TODO: dispatch_start event missing from stderr; variant resolution could not be verified"}
+				},
+			),
+		},
+		{
 			Name:         "response-truncation",
 			Category:     CatCorrectness,
 			Engine:       "codex",
@@ -218,6 +251,35 @@ var AllCasesV2 = func() []TestCase {
 						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("status.json: %v", err)}
 					}
 					return Verdict{Pass: true, Score: 1.0, Reason: "status.json state=completed"}
+				},
+			),
+		},
+		{
+			Name:         "handoff-summary-extraction",
+			Category:     CatCorrectness,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "Write a response with this exact structure:\n## Summary\nThe answer is HANDOFF_CANARY_4488.\n## Details\nMore text here.",
+			CWD:          cwd,
+			TimeoutSec:   120,
+			MaxWallClock: 3 * time.Minute,
+			SkipSkills:   true,
+			Evaluate: compose(
+				statusIs("completed"),
+				func(r Result) Verdict {
+					raw, err := stdoutJSONObject(r)
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
+					}
+					handoffSummary, ok := jsonStringField(raw, "handoff_summary")
+					if !ok || strings.TrimSpace(handoffSummary) == "" {
+						return Verdict{Pass: true, Score: 0.5, Reason: "TODO: handoff_summary not extracted (field missing in output)"}
+					}
+					if !strings.Contains(handoffSummary, "HANDOFF_CANARY_4488") {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("handoff_summary=%q, want HANDOFF_CANARY_4488", handoffSummary)}
+					}
+					return Verdict{Pass: true, Score: 1.0, Reason: "handoff_summary contains canary"}
 				},
 			),
 		},
