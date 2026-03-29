@@ -340,7 +340,7 @@ func ScanArtifacts(dir string) []string {
 			return nil
 		}
 		name := d.Name()
-		if name == "_dispatch_meta.json" || name == "events.jsonl" || name == "inbox.md" {
+		if name == "_dispatch_meta.json" || name == "events.jsonl" || name == "inbox.md" || name == "status.json" || name == "host.pid" {
 			return nil
 		}
 		artifacts = append(artifacts, path)

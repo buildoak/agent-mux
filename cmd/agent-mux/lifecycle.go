@@ -99,10 +99,13 @@ func runStatusCommand(args []string, stdout io.Writer) int {
 	if err != nil {
 		return emitLifecycleError(stdout, 1, "lookup_failed", fmt.Sprintf("find dispatch %q: %v", idPrefix, err), "")
 	}
+
+	// If no store record exists, try reading live status from artifact dir.
 	if record == nil {
-		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for prefix %q", idPrefix), "")
+		return statusFromLiveDispatch(idPrefix, jsonOutput, stdout)
 	}
 
+	// Dispatch is in the store (completed/failed/timed_out).
 	if jsonOutput {
 		writeCompactJSON(stdout, record)
 		return 0
@@ -120,6 +123,41 @@ func runStatusCommand(args []string, stdout io.Writer) int {
 	return 0
 }
 
+func statusFromLiveDispatch(idPrefix string, jsonOutput bool, stdout io.Writer) int {
+	artifactDir, err := recovery.ResolveArtifactDir(idPrefix)
+	if err != nil {
+		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for prefix %q", idPrefix), "")
+	}
+
+	liveStatus, err := dispatch.ReadStatusJSON(artifactDir)
+	if err != nil {
+		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no status found for dispatch %q", idPrefix), "")
+	}
+
+	// Check if host process is still alive.
+	if liveStatus.State == "running" {
+		pid, pidErr := dispatch.ReadHostPID(artifactDir)
+		if pidErr == nil && !dispatch.IsProcessAlive(pid) {
+			liveStatus.State = "orphaned"
+		}
+	}
+
+	if jsonOutput {
+		writeCompactJSON(stdout, liveStatus)
+		return 0
+	}
+
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "State:\t%s\n", liveStatus.State)
+	fmt.Fprintf(tw, "Elapsed:\t%ds\n", liveStatus.ElapsedS)
+	fmt.Fprintf(tw, "Last Activity:\t%s\n", dashIfEmpty(liveStatus.LastActivity))
+	fmt.Fprintf(tw, "Tools Used:\t%d\n", liveStatus.ToolsUsed)
+	fmt.Fprintf(tw, "Files Changed:\t%d\n", liveStatus.FilesChanged)
+	fmt.Fprintf(tw, "ArtifactDir:\t%s\n", artifactDir)
+	_ = tw.Flush()
+	return 0
+}
+
 func runResultCommand(args []string, stdout io.Writer) int {
 	var flagOutput bytes.Buffer
 	fs := flag.NewFlagSet("agent-mux result", flag.ContinueOnError)
@@ -127,8 +165,10 @@ func runResultCommand(args []string, stdout io.Writer) int {
 
 	jsonOutput := false
 	showArtifacts := false
+	noWait := false
 	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON")
 	fs.BoolVar(&showArtifacts, "artifacts", false, "List artifact files instead of showing result text")
+	fs.BoolVar(&noWait, "no-wait", false, "Return error if dispatch is not done instead of blocking")
 
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
 		return handleLifecycleParseError(stdout, &flagOutput, err)
@@ -145,6 +185,27 @@ func runResultCommand(args []string, stdout io.Writer) int {
 	record, err := store.FindRecord("", idPrefix)
 	if err != nil {
 		return emitLifecycleError(stdout, 1, "lookup_failed", fmt.Sprintf("find dispatch %q: %v", idPrefix, err), "")
+	}
+
+	// If no record found, dispatch may still be running.
+	if record == nil {
+		artifactDir, resolveErr := recovery.ResolveArtifactDir(idPrefix)
+		if resolveErr != nil {
+			return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no stored result found for prefix %q", idPrefix), "Use `agent-mux list` to find a durable dispatch ID.")
+		}
+		liveStatus, statusErr := dispatch.ReadStatusJSON(artifactDir)
+		if statusErr == nil && (liveStatus.State == "running" || liveStatus.State == "initializing") {
+			if noWait {
+				writeCompactJSON(stdout, map[string]any{
+					"error":       "dispatch_running",
+					"dispatch_id": idPrefix,
+					"state":       liveStatus.State,
+				})
+				return 1
+			}
+			// Block: poll status.json until dispatch completes.
+			return pollUntilDone(idPrefix, artifactDir, jsonOutput, showArtifacts, stdout)
+		}
 	}
 
 	dispatchID := idPrefix
@@ -613,5 +674,172 @@ func parseDuration(s string) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("unsupported unit %q: want d (days) or h (hours)", string(unit))
 	}
+}
+
+// pollUntilDone polls status.json every 1s until the dispatch reaches a
+// terminal state, then reads and returns the result from the store.
+func pollUntilDone(idPrefix, artifactDir string, jsonOutput, showArtifacts bool, stdout io.Writer) int {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		// Check if a store record appeared (dispatch finished and persisted).
+		record, _ := store.FindRecord("", idPrefix)
+		if record != nil {
+			// Dispatch completed. Delegate to normal result display.
+			return showResult(record.ID, record, jsonOutput, showArtifacts, stdout)
+		}
+
+		// Check live status.
+		liveStatus, err := dispatch.ReadStatusJSON(artifactDir)
+		if err != nil {
+			continue
+		}
+		switch liveStatus.State {
+		case "completed", "failed", "timed_out", "orphaned":
+			// Terminal state reached. Try store once more.
+			record, _ = store.FindRecord("", idPrefix)
+			if record != nil {
+				return showResult(record.ID, record, jsonOutput, showArtifacts, stdout)
+			}
+			// No store record but terminal state — return status.
+			writeCompactJSON(stdout, liveStatus)
+			return 0
+		}
+		// Still running — keep polling.
+	}
+	return 1
+}
+
+// showResult returns the result for a completed dispatch (shared by result and wait).
+func showResult(dispatchID string, record *store.DispatchRecord, jsonOutput, showArtifacts bool, stdout io.Writer) int {
+	if showArtifacts {
+		artifactDir := ""
+		if record != nil && strings.TrimSpace(record.ArtifactDir) != "" {
+			artifactDir = record.ArtifactDir
+		} else {
+			resolved, resolveErr := recovery.ResolveArtifactDir(dispatchID)
+			if resolveErr != nil {
+				return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no artifact directory found for dispatch %q: %v", dispatchID, resolveErr), "")
+			}
+			artifactDir = resolved
+		}
+		artifacts := dispatch.ScanArtifacts(artifactDir)
+		if jsonOutput {
+			writeCompactJSON(stdout, map[string]any{
+				"dispatch_id":  dispatchID,
+				"artifact_dir": artifactDir,
+				"artifacts":    artifacts,
+			})
+			return 0
+		}
+		fmt.Fprintf(stdout, "Artifact dir: %s\n", artifactDir)
+		if len(artifacts) == 0 {
+			fmt.Fprintln(stdout, "(no artifacts)")
+		} else {
+			for _, a := range artifacts {
+				fmt.Fprintln(stdout, a)
+			}
+		}
+		return 0
+	}
+
+	response, err := store.ReadResult("", dispatchID)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no stored result found for dispatch %q", dispatchID), "")
+		}
+		return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("read result for dispatch %q: %v", dispatchID, err), "")
+	}
+
+	if jsonOutput {
+		writeCompactJSON(stdout, map[string]any{
+			"dispatch_id": dispatchID,
+			"response":    response,
+		})
+		return 0
+	}
+
+	_, _ = io.WriteString(stdout, response)
+	return 0
+}
+
+// runWaitCommand blocks until a dispatch completes, emitting periodic status lines.
+func runWaitCommand(args []string, stdout, stderr io.Writer) int {
+	var flagOutput bytes.Buffer
+	fs := flag.NewFlagSet("agent-mux wait", flag.ContinueOnError)
+	fs.SetOutput(&flagOutput)
+
+	jsonOutput := false
+	pollInterval := "5s"
+	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON result when done")
+	fs.StringVar(&pollInterval, "poll", pollInterval, "Status line interval (e.g., 5s, 10s)")
+
+	if err := fs.Parse(normalizeArgs(args)); err != nil {
+		return handleLifecycleParseError(stdout, &flagOutput, err)
+	}
+	if len(fs.Args()) != 1 {
+		return emitLifecycleError(stdout, 2, "invalid_args", "wait requires exactly one dispatch_id argument", "Pass a full dispatch ID or unique prefix.")
+	}
+
+	idPrefix := strings.TrimSpace(fs.Args()[0])
+	if err := sanitize.ValidateDispatchID(idPrefix); err != nil {
+		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", idPrefix, err), "")
+	}
+
+	interval, err := time.ParseDuration(pollInterval)
+	if err != nil {
+		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid poll interval %q: %v", pollInterval, err), "Use Go duration format: 5s, 10s, 1m.")
+	}
+	if interval < 1*time.Second {
+		interval = 1 * time.Second
+	}
+
+	// Check if already done.
+	record, _ := store.FindRecord("", idPrefix)
+	if record != nil {
+		return showResult(record.ID, record, jsonOutput, false, stdout)
+	}
+
+	artifactDir, resolveErr := recovery.ResolveArtifactDir(idPrefix)
+	if resolveErr != nil {
+		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for prefix %q", idPrefix), "")
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		// Check store first.
+		record, _ = store.FindRecord("", idPrefix)
+		if record != nil {
+			return showResult(record.ID, record, jsonOutput, false, stdout)
+		}
+
+		liveStatus, statusErr := dispatch.ReadStatusJSON(artifactDir)
+		if statusErr != nil {
+			fmt.Fprintf(stderr, "[?] status unknown\n")
+			continue
+		}
+
+		switch liveStatus.State {
+		case "completed", "failed", "timed_out":
+			// Terminal. Try store one more time.
+			record, _ = store.FindRecord("", idPrefix)
+			if record != nil {
+				return showResult(record.ID, record, jsonOutput, false, stdout)
+			}
+			writeCompactJSON(stdout, liveStatus)
+			return 0
+		case "orphaned":
+			writeCompactJSON(stdout, liveStatus)
+			return 1
+		default:
+			// Emit status line to stderr.
+			fmt.Fprintf(stderr, "[%ds] %s | %d tools | %d files changed\n",
+				liveStatus.ElapsedS, liveStatus.State, liveStatus.ToolsUsed, liveStatus.FilesChanged)
+		}
+	}
+	return 1
 }
 

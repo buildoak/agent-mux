@@ -206,6 +206,8 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		streamScanErr    error
 		dispatchErr      *types.DispatchError
 		sawResponse      bool
+		toolsUsedCount   int
+		filesChangedCount int
 	)
 	parseErrorCount := 0
 
@@ -252,6 +254,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		case types.EventToolStart:
 			if evt.Tool != "" {
 				activity.ToolCalls = append(activity.ToolCalls, evt.Tool)
+				toolsUsedCount++
 			}
 			if evt.Command != "" {
 				activeCommand = evt.Command
@@ -272,6 +275,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		case types.EventFileWrite:
 			activity.FilesChanged = appendUnique(activity.FilesChanged, evt.FilePath)
+			filesChangedCount++
 			_ = emitter.EmitFileWrite(evt.FilePath)
 			updateActivity(fmt.Sprintf("wrote: %s", evt.FilePath))
 
@@ -629,7 +633,22 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			if shouldWarn {
 				frozenWarned = true
 			}
+			statusActivity := fmt.Sprintf("last activity %ds ago", silence)
+			if activeCommand != "" {
+				statusActivity = fmt.Sprintf("running: %s", truncate(activeCommand, 60))
+			}
+			statusToolsUsed := toolsUsedCount
+			statusFilesChanged := filesChangedCount
 			mu.Unlock()
+			// Atomic status.json write for pull-based status.
+			_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
+				State:        "running",
+				ElapsedS:     int(time.Since(startTime).Seconds()),
+				LastActivity: statusActivity,
+				ToolsUsed:    statusToolsUsed,
+				FilesChanged: statusFilesChanged,
+				DispatchID:   spec.DispatchID,
+			})
 			if silence >= effectiveKill && setTerminal("failed") {
 				_ = emitter.EmitError("frozen_tool_call", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence))
 				dispatchErr = dispatch.NewDispatchError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence), "")
@@ -754,6 +773,14 @@ func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, activity *typ
 }
 
 func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
+		State:        "completed",
+		ElapsedS:     int(durationMS / 1000),
+		LastActivity: "done",
+		ToolsUsed:    len(activity.ToolCalls),
+		FilesChanged: len(activity.FilesChanged),
+		DispatchID:   spec.DispatchID,
+	})
 	result := dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS, spec.ResponseMaxChars)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", result.Artifacts); err != nil {
 		if emitter != nil {
@@ -774,6 +801,14 @@ func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, respons
 }
 
 func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
+		State:        "timed_out",
+		ElapsedS:     int(durationMS / 1000),
+		LastActivity: "timed_out",
+		ToolsUsed:    len(activity.ToolCalls),
+		FilesChanged: len(activity.FilesChanged),
+		DispatchID:   spec.DispatchID,
+	})
 	result := dispatch.BuildTimedOutResult(spec, response, fmt.Sprintf("Soft timeout at %ds, hard kill after %ds grace.", spec.TimeoutSec, spec.GraceSec), activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "timed_out", result.Artifacts); err != nil {
 		if emitter != nil {
@@ -791,6 +826,14 @@ func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response
 }
 
 func finalizeFailed(spec *types.DispatchSpec, emitter *event.Emitter, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, dispErr *types.DispatchError) *types.DispatchResult {
+	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
+		State:        "failed",
+		ElapsedS:     int(durationMS / 1000),
+		LastActivity: "failed",
+		ToolsUsed:    len(activity.ToolCalls),
+		FilesChanged: len(activity.FilesChanged),
+		DispatchID:   spec.DispatchID,
+	})
 	result := dispatch.BuildFailedResult(spec, dispErr, activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "failed", result.Artifacts); err != nil {
 		if emitter != nil {

@@ -48,6 +48,7 @@ const (
 	commandResult   cliCommand = "result"
 	commandInspect  cliCommand = "inspect"
 	commandGC       cliCommand = "gc"
+	commandWait     cliCommand = "wait"
 	commandConfig   cliCommand = "config"
 )
 
@@ -72,7 +73,7 @@ type cliFlags struct {
 	permissionMode, sandbox, reasoning                                                              string
 	output, pipeline                                                                                string
 	timeout, maxDepth, responseMaxChars, maxTurns                                                   int
-	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes, stream                    bool
+	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes, stream, async             bool
 	skills, addDirs                                                                                 stringSlice
 }
 
@@ -160,6 +161,8 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		return runInspectCommand(args, stdout)
 	case commandGC:
 		return runGCCommand(args, stdout)
+	case commandWait:
+		return runWaitCommand(args, stdout, stderr)
 	case commandConfig:
 		return runConfigCommand(args, stdout)
 	}
@@ -496,12 +499,19 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	defer cancel()
 
 	if spec.Pipeline != "" {
+		if flags.async {
+			return failResult(spec, "invalid_args", "--async is not supported with pipelines", "Run pipeline dispatches synchronously.")
+		}
 		result, err := runPipeline(ctx, pipelineCfg, spec, cfg, stderr, flags.verbose, flags.stream)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
 		emitResult(stdout, result)
 		return 0
+	}
+
+	if flags.async {
+		return runAsyncDispatch(ctx, spec, cfg, stderr, stdout, flags.verbose, flags.stream, hookEval)
 	}
 
 	result, err := dispatchSpec(ctx, spec, cfg, stderr, flags.verbose, flags.stream, hookEval)
@@ -1018,6 +1028,8 @@ func splitCommand(args []string) (cliCommand, []string, bool) {
 		return commandInspect, args[1:], true
 	case string(commandGC):
 		return commandGC, args[1:], true
+	case string(commandWait):
+		return commandWait, args[1:], true
 	case string(commandConfig):
 		return commandConfig, args[1:], true
 	default:
@@ -1204,6 +1216,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	bindStr(fs, &flags.output, "Output format (json, text)", "json", "output", "o")
 	bindBool(fs, &flags.verbose, "Verbose mode", false, "verbose", "v")
 	bindBool(fs, &flags.stream, "Stream all events to stderr (default: silent)", false, "stream", "S")
+	fs.BoolVar(&flags.async, "async", false, "Return immediately with dispatch ID, run worker in background")
 
 	return fs, flags
 }
@@ -1582,6 +1595,7 @@ func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {
 		"max-turns",
 		"add-dir",
 		"stream", "S",
+		"async",
 	} {
 		if flagsSet[name] {
 			return true
