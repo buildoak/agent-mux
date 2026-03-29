@@ -666,6 +666,8 @@ event_deny_action = "warn"   # "kill" (default) or "warn"
 | `--add-dir` | []string | `[]` | Additional writable dir (repeatable, Codex) |
 | `--output`, `-o` | string | `"json"` | Output format: `json` or `text` |
 | `--skip-skills` | bool | `false` | Skip skill injection (keep role engine/model/effort) |
+| `--stream`, `-S` | bool | `false` | Stream all events to stderr (default: silent, only bookend + failure events) |
+| `--async` | bool | `false` | Return immediately with dispatch ID, run worker in background |
 | `--verbose`, `-v` | bool | `false` | Verbose mode |
 | `--version` | bool | `false` | Print version |
 
@@ -687,6 +689,8 @@ event_deny_action = "warn"   # "kill" (default) or "warn"
 | `agent-mux result <id> [flags]` | lifecycle: dispatch result |
 | `agent-mux inspect <id> [flags]` | lifecycle: deep dispatch view |
 | `agent-mux gc [flags]` | lifecycle: garbage collection |
+| `agent-mux wait <id> [flags]` | async: block until dispatch completes |
+| `agent-mux steer <id> <action> [args]` | steering: mid-flight dispatch control |
 
 ### Config Subcommand
 
@@ -757,7 +761,7 @@ agent-mux list --limit 5 --status failed --engine codex
 agent-mux status [--json] <dispatch_id>
 ```
 
-Accepts full ID or unique prefix. Shows: Status, Engine/Model, Duration, Started, Truncated, Salt, ArtifactDir.
+Accepts full ID or unique prefix. Shows: Status, Engine/Model, Duration, Started, Truncated, Salt, ArtifactDir. For running dispatches, reads live `status.json` from the artifact directory. Detects orphaned processes (host PID dead but dispatch never completed).
 
 Example:
 ```
@@ -767,10 +771,10 @@ agent-mux status 01JA
 **`agent-mux result <dispatch_id>`** — retrieve dispatch response or artifact listing.
 
 ```
-agent-mux result [--json] [--artifacts] <dispatch_id>
+agent-mux result [--json] [--artifacts] [--no-wait] <dispatch_id>
 ```
 
-Accepts full ID or unique prefix. Default: prints stored result text. Falls back to `full_output.md` in the artifact directory for truncated/legacy dispatches. `--artifacts` lists files in the artifact directory instead.
+Accepts full ID or unique prefix. Default: prints stored result text. Falls back to `full_output.md` in the artifact directory for truncated/legacy dispatches. `--artifacts` lists files in the artifact directory instead. If the dispatch is still running, blocks until completion by default. `--no-wait` returns an error instead of blocking.
 
 Example — list artifacts:
 ```
@@ -802,6 +806,59 @@ Example — dry run, dispatches older than 7 days:
 ```
 agent-mux gc --older-than 7d --dry-run
 ```
+
+### Async Dispatch
+
+`--async` starts the dispatch in the background and immediately returns an ack to stdout:
+
+```json
+{"schema_version":1,"kind":"async_started","dispatch_id":"01JQXYZ...","salt":"coral-fox-nine","artifact_dir":"/tmp/agent-mux/01JQXYZ..."}
+```
+
+The worker runs in the current process with stdout/stderr redirected to `/dev/null`. Use `ax wait` or `ax result` to collect output.
+
+**`agent-mux wait <dispatch_id> [--poll <duration>]`** — block until an async dispatch completes. Reads `status.json` until state is terminal. Optional `--poll` sets check interval (default: `2s`). Prints the final `DispatchResult` JSON to stdout on completion.
+
+Example:
+```
+agent-mux wait 01JQXYZ --poll 5s
+```
+
+**`agent-mux result <dispatch_id> [--no-wait]`** — retrieve dispatch result. If the dispatch is still running, blocks until completion (default) or returns an error (`--no-wait`). Otherwise behaves identically to the existing `result` subcommand.
+
+### Mid-Flight Steering
+
+`ax steer <dispatch_id> <action> [args]` provides live control over running dispatches.
+
+**`agent-mux steer <id> abort`** — kill the worker process. Tries SIGTERM to host PID first (async dispatches). Falls back to writing `control.json` with `abort: true` for foreground dispatches.
+
+**`agent-mux steer <id> nudge [message]`** — send a wrap-up message via inbox. Default message: "Please wrap up your current work and provide a final summary."
+
+**`agent-mux steer <id> redirect "instructions"`** — redirect the worker with new instructions via inbox. Requires an instructions argument.
+
+Example:
+```
+agent-mux steer 01JQXYZ redirect "focus on the tests, skip the refactor"
+```
+
+**`agent-mux steer <id> extend <seconds>`** — extend the watchdog kill threshold by writing `control.json` with `extend_kill_seconds`. The watchdog reads this on each tick and applies the extension.
+
+Example:
+```
+agent-mux steer 01JQXYZ extend 300
+```
+
+**`agent-mux steer <id> status`** — read live status from `status.json`. Detects orphaned processes (host PID dead but state still "running").
+
+All steer commands output a JSON ack with `action`, `dispatch_id`, and `delivered: true`. Errors follow the standard envelope: `{"kind":"error","error":{...}}`.
+
+### Streaming Protocol v2
+
+**Default (silent mode):** Only bookend events (`dispatch_start`, `dispatch_end`) and failure/error events are emitted to stderr. All events are still written to `events.jsonl` in the artifact directory for post-hoc inspection via `ax inspect`.
+
+**`--stream` / `-S` (streaming mode):** All events pass through to stderr, restoring the pre-3.2.0 behavior. Useful for human debugging and real-time monitoring.
+
+The `status.json` file in the artifact directory provides an alternative observability path for programmatic callers: it contains live state (`running`, `completed`, `failed`), elapsed seconds, last activity description, tool count, and files changed count. Updated on each event boundary.
 
 ### --stdin JSON
 

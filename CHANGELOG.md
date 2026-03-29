@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.0] - 2026-03-29
+
+### Added
+- **Streaming Protocol v2** — silent stderr is now the default. Only bookend events (`dispatch_start`, `dispatch_end`) and failure events pass through to stderr. All events still written to `events.jsonl` in the artifact directory. `--stream` / `-S` flag opts in to full event streaming (previous behavior)
+- **Async dispatch** — `--async` flag returns immediately with a `{"kind":"async_started","dispatch_id":"...","salt":"..."}` ack. Worker runs in background. New commands:
+  - `ax wait <id> [--poll <duration>]` — block until dispatch completes, optional periodic status output
+  - `ax result <id> --no-wait` — return error instead of blocking if dispatch still running
+- **Mid-flight steering** — `ax steer <id> <action>` for live dispatch control:
+  - `abort` — kill worker process (SIGTERM or control.json fallback)
+  - `nudge [message]` — send wrap-up message via inbox
+  - `redirect "instructions"` — redirect worker via inbox with new instructions
+  - `extend <seconds>` — extend watchdog kill threshold via control.json
+  - `status` — read live status (detects orphaned processes)
+- **`status.json` live observability** — running dispatches write live state (running/completed/failed), elapsed time, last activity, tool count, and files changed to `status.json` in the artifact directory
+- **`control.json` watchdog overrides** — watchdog reads `control.json` from artifact directory on each tick for abort and extend-kill-seconds directives
+- **ax-eval streaming test cases** — `silent-default`, `stream-flag`, `async-dispatch` (3 new cases, 15 total)
+
+### Changed
+- **`ax status <id>`** — now reads live `status.json` for running dispatches and detects orphaned processes
+- **`ax result <id>`** — now blocks if dispatch still running; `--no-wait` returns error instead
+
+### Fixed
+- **engine_opts per-dispatch precedence** — per-dispatch `engine_opts` (e.g. `silence_warn_seconds`, `silence_kill_seconds` from `--stdin` JSON or role config) now take precedence over config defaults. Previously, config defaults unconditionally overwrote per-dispatch values, breaking liveness test thresholds
+- **`intEngineOpt` string type support** — JSON-sourced engine_opts (string type from `--stdin` dispatch) are now correctly parsed as integers for liveness thresholds. Previously only `int` and `float64` types were handled, causing string values like `"10"` to fall back to config defaults
+
+---
+
 ## [3.1.0] - 2026-03-28
 
 ### Added

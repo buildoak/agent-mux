@@ -11,8 +11,8 @@ Replaces `FEATURES.md` (preserved at `_archive/FEATURES.md`).
 
 ## P0 — Next Up
 
-### F-6: Soft steering via stdin before hard kill
-**Type:** feature | **Priority:** P0 | **Status:** open — needs implementation
+### F-6: Soft steering via stdin before hard kill — SHIPPED
+**Type:** feature | **Priority:** P0 | **Status:** shipped — commit `2fd7fda`, session `acabe588`
 **Location:** `internal/engine/loop.go` (watchdog), adapters
 **Decided:** `acabe588` (2026-03-29)
 
@@ -36,8 +36,8 @@ froze at 244s. A stdin nudge at 90s could have unblocked it without killing.
 
 ---
 
-### F-8: Distinct error codes for process_killed
-**Type:** feature | **Priority:** P0 | **Status:** open
+### F-8: Distinct error codes for process_killed — SHIPPED
+**Type:** feature | **Priority:** P0 | **Status:** shipped — commit `e58c3a8`, session `acabe588`
 **Location:** `internal/engine/loop.go`, `internal/types/types.go`
 **Decided:** `acabe588` (2026-03-29)
 
@@ -49,8 +49,8 @@ enable correct diagnosis without reading logs. Mechanical fix.
 
 ---
 
-### F-1: Per-command timeout / hanging bash detection
-**Type:** feature | **Priority:** P0 | **Status:** needs investigation
+### F-1: Per-command timeout / hanging bash detection — SHIPPED
+**Type:** feature | **Priority:** P0 | **Status:** shipped as "long command detection" — commit `2fd7fda`, session `acabe588`
 **Location:** `internal/engine/loop.go`
 **Decided:** `acabe588` (2026-03-29)
 
@@ -74,8 +74,18 @@ approach needed first.
 
 ## P1 — Soon
 
+### F-9: `--quiet` output mode — SUPERSEDED
+**Type:** feature | **Priority:** P1 | **Status:** superseded by Streaming Protocol v2 Tier 1
+**Decided:** `CURRENT_SESSION` (2026-03-29) — superseded in session that shipped 3.2.0
+
+Superseded by Streaming Protocol v2 (3.2.0): silent stderr is now the default.
+`--stream` opt-in restores full event streaming. The original `--quiet` proposal
+is no longer needed — the default behavior is what `--quiet` would have been.
+
+---
+
 ### S-2: ax-eval instrumentation
-**Type:** spec gap | **Priority:** P1 | **Status:** open
+**Type:** spec gap | **Priority:** P1 | **Status:** partial — framework shipped commit `1c543dd`, session `acabe588`; full suite pending
 **Reference:** `_archive/SPEC-V2.md` — ax-eval section
 **Decided:** `acabe588` (2026-03-29)
 
@@ -86,6 +96,9 @@ judge. Structured `ax_eval` behavioral events emitted during dispatch:
 - `scope_reduction` — agent narrowed scope mid-task.
 
 These events feed an evaluation pipeline for measuring dispatch quality.
+
+**Framework landed** in commit `1c543dd`. 3 of 12 cases smoke-tested:
+`bad-engine`, `bad-model`, `complete-simple`. Full suite validation pending.
 
 ---
 
@@ -115,6 +128,34 @@ branching, or fan-in in `PipelineStep`):
 - **Conditional branching** — skip or reroute based on previous step status
 - **Fan-in aggregation** — merge parallel fan-out results
 - **Pipeline-level timeout** — ceiling on total wall-clock time
+
+---
+
+### F-10: Pipeline verification gates
+**Type:** feature | **Priority:** P2 | **Status:** open (park alongside F-3)
+**Location:** `internal/pipeline/`
+**Decided:** `CURRENT_SESSION` (2026-03-29)
+
+Field analysis of GSD-Heavy usage reveals a structural gap in pipelines: they
+are useful for fire-and-forget known sequences but **cannot handle mid-flight
+judgment**. The `build` pipeline exists but GSD-Heavy — the most sophisticated
+user — does not use it. It manually orchestrates because pipelines lack
+verification gates between steps (e.g., `cargo build --release` must succeed
+before the next lifter wave launches). The highest actual pipeline value is
+`tenx` fan-out.
+
+**Root cause:** there is no mechanism to assert that a prior step's side effects
+are correct before proceeding. Adding another LLM auditor step is not the
+answer — it's slow, expensive, and introduces hallucination risk.
+
+**Proposed:** executable verification gates between pipeline steps — a shell
+command that must exit 0 for the step to be considered complete. If the gate
+fails, the pipeline halts with a descriptive error. This is deterministic,
+fast, and closes the gap that forces GSD-Heavy into manual orchestration.
+
+**Relation to F-3:** conditional branching (F-3) and verification gates (F-10)
+are complementary — gates catch failures, branching handles them. Both park at
+P2 until pipeline usage justifies the investment.
 
 ---
 
@@ -195,3 +236,16 @@ All items include session ID where the work was done.
 | Archive specs → `_archive/` | 3.1.0 | `acabe588` | Docs are ground truth |
 | BACKLOG.md consolidation | 3.1.0 | `acabe588` | Replaces FEATURES.md |
 | F-7: skill loading root cause (F-7) | 3.1.1 | `coordinator` | Root cause was absent search_paths (pre-fix session). search_paths fix covers GSD scenario. Ghost-dir bug in collectSkills fixed + test. |
+| F-6: stdin nudge before hard kill | 3.1.x | `acabe588` | Commit `2fd7fda`. Warn-threshold stdin write implemented for Codex. |
+| F-8: distinct error codes for process_killed | 3.1.x | `acabe588` | Commit `e58c3a8`. `frozen_killed`, `oom_killed`, `startup_failed`, `signal_killed` added. |
+| F-1: long command detection (per-command timeout) | 3.1.x | `acabe588` | Commit `2fd7fda`. Known-long commands extend silence threshold automatically. |
+| S-2: ax-eval framework (partial) | 3.1.x | `acabe588` | Commit `1c543dd`. Framework shipped, 3/12 cases smoke-tested. Full suite pending. |
+| Streaming Protocol v2 (silent stderr default) | 3.2.0 | current | `--stream` opt-in, silent default, bookend + failure events only |
+| Async dispatch (`--async`, `ax wait`, `ax result --no-wait`) | 3.2.0 | current | Background dispatch with polling and result collection |
+| Mid-flight steering (`ax steer`) | 3.2.0 | current | abort/nudge/redirect/extend/status via control.json + inbox |
+| `status.json` live observability | 3.2.0 | current | Real-time state, elapsed, tool count for running dispatches |
+| `control.json` watchdog overrides | 3.2.0 | current | Abort and extend-kill via file-based control plane |
+| ax-eval streaming test cases | 3.2.0 | current | silent-default, stream-flag, async-dispatch (3 new cases, 15 total) |
+| Fix: engine_opts per-dispatch precedence | 3.2.0 | current | Per-dispatch engine_opts no longer overwritten by config defaults |
+| Fix: intEngineOpt string type support | 3.2.0 | current | JSON stdin string values now parsed correctly for liveness thresholds |
+| Fix: 2 pre-existing liveness test failures | 3.2.0 | current | freeze-watchdog and freeze-stdin-nudge now pass with correct engine_opts flow |

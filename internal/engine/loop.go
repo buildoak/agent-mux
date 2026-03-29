@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1106,6 +1107,10 @@ func intEngineOpt(spec *types.DispatchSpec, key string, fallback int) int {
 	case float64:
 		if v > 0 {
 			return int(v)
+		}
+	case string:
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
 		}
 	}
 	return fallback

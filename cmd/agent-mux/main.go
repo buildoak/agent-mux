@@ -397,9 +397,17 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if spec.EngineOpts == nil {
 		spec.EngineOpts = map[string]any{}
 	}
-	spec.EngineOpts["heartbeat_interval_sec"] = cfg.Liveness.HeartbeatIntervalSec
-	spec.EngineOpts["silence_warn_seconds"] = cfg.Liveness.SilenceWarnSeconds
-	spec.EngineOpts["silence_kill_seconds"] = cfg.Liveness.SilenceKillSeconds
+	// Per-dispatch engine_opts take precedence over config defaults.
+	// Only apply config defaults when the dispatch spec doesn't set them.
+	if _, ok := spec.EngineOpts["heartbeat_interval_sec"]; !ok {
+		spec.EngineOpts["heartbeat_interval_sec"] = cfg.Liveness.HeartbeatIntervalSec
+	}
+	if _, ok := spec.EngineOpts["silence_warn_seconds"]; !ok {
+		spec.EngineOpts["silence_warn_seconds"] = cfg.Liveness.SilenceWarnSeconds
+	}
+	if _, ok := spec.EngineOpts["silence_kill_seconds"]; !ok {
+		spec.EngineOpts["silence_kill_seconds"] = cfg.Liveness.SilenceKillSeconds
+	}
 	// Apply default permission mode from config if not set by CLI.
 	if _, ok := spec.EngineOpts["permission-mode"]; !ok || spec.EngineOpts["permission-mode"] == "" {
 		if !flagsSet["permission-mode"] && cfg.Defaults.PermissionMode != "" {
