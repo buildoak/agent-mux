@@ -23,6 +23,7 @@ import (
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/engine"
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
+	"github.com/buildoak/agent-mux/internal/event"
 	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/pipeline"
@@ -71,7 +72,7 @@ type cliFlags struct {
 	permissionMode, sandbox, reasoning                                                              string
 	output, pipeline                                                                                string
 	timeout, maxDepth, responseMaxChars, maxTurns                                                   int
-	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes                            bool
+	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes, stream                    bool
 	skills, addDirs                                                                                 stringSlice
 }
 
@@ -495,7 +496,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	defer cancel()
 
 	if spec.Pipeline != "" {
-		result, err := runPipeline(ctx, pipelineCfg, spec, cfg, stderr, flags.verbose)
+		result, err := runPipeline(ctx, pipelineCfg, spec, cfg, stderr, flags.verbose, flags.stream)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
@@ -503,7 +504,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		return 0
 	}
 
-	result, err := dispatchSpec(ctx, spec, cfg, stderr, flags.verbose, hookEval)
+	result, err := dispatchSpec(ctx, spec, cfg, stderr, flags.verbose, flags.stream, hookEval)
 	if err != nil {
 		return emitFailureResult(stdout, spec, 1, "startup_failed", err.Error(), "")
 	}
@@ -1202,6 +1203,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	fs.Var(&flags.addDirs, "add-dir", "Additional writable directory")
 	bindStr(fs, &flags.output, "Output format (json, text)", "json", "output", "o")
 	bindBool(fs, &flags.verbose, "Verbose mode", false, "verbose", "v")
+	bindBool(fs, &flags.stream, "Stream all events to stderr (default: silent)", false, "stream", "S")
 
 	return fs, flags
 }
@@ -1410,7 +1412,7 @@ func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...stri
 	}
 }
 
-func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseSpec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool) (*pipeline.PipelineResult, error) {
+func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseSpec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool, stream bool) (*pipeline.PipelineResult, error) {
 	hookEval := hooks.NewEvaluator(cfg.Hooks)
 	for i, step := range pipelineCfg.Steps {
 		if step.Role == "" {
@@ -1466,7 +1468,7 @@ func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseS
 			return result
 		}
 
-		result, err := dispatchSpec(ctx, spec, cfg, stderr, verbose, hookEval)
+		result, err := dispatchSpec(ctx, spec, cfg, stderr, verbose, stream, hookEval)
 		if err != nil {
 			return dispatch.BuildFailedResult(
 				spec,
@@ -1486,7 +1488,7 @@ func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseS
 	return pipeline.ExecutePipeline(ctx, pipelineCfg, baseSpec, pipelineArtifactDir, dispatchFn)
 }
 
-func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
+func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
 	dispatch.EnsureTraceability(spec)
 	reg := adapter.NewRegistry(configuredModels(cfg))
 
@@ -1537,6 +1539,14 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 
 	eng := engine.NewLoopEngine(adp, stderr, hookEval)
 	eng.SetVerbose(verbose)
+	switch {
+	case verbose:
+		eng.SetStreamMode(event.StreamVerbose)
+	case stream:
+		eng.SetStreamMode(event.StreamNormal)
+	default:
+		eng.SetStreamMode(event.StreamSilent)
+	}
 	return eng.Dispatch(ctx, spec)
 }
 
@@ -1571,6 +1581,7 @@ func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {
 		"reasoning", "r",
 		"max-turns",
 		"add-dir",
+		"stream", "S",
 	} {
 		if flagsSet[name] {
 			return true

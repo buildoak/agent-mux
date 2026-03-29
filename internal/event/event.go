@@ -14,6 +14,16 @@ import (
 
 const SchemaVersion = 1
 
+// StreamMode controls which events are emitted to stderr (eventWriter).
+// All events are always written to the event log file regardless of mode.
+type StreamMode int
+
+const (
+	StreamSilent  StreamMode = iota // default: bookend + failure events only
+	StreamNormal                    // all events to stderr (current behavior)
+	StreamVerbose                   // raw harness lines + all events
+)
+
 type Event struct {
 	SchemaVersion  int      `json:"schema_version"`
 	Type           string   `json:"type"`
@@ -50,6 +60,7 @@ type Emitter struct {
 	traceToken  string
 	eventWriter io.Writer
 	eventLog    *os.File // append-only events.jsonl
+	streamMode  StreamMode
 }
 
 func NewEmitter(dispatchID, salt, traceToken string, eventWriter io.Writer, eventLogPath string) (*Emitter, error) {
@@ -76,6 +87,33 @@ func (e *Emitter) Close() error {
 	}
 	return nil
 }
+
+// SetStreamMode sets which events are emitted to stderr.
+// Must be called before any Emit calls (not thread-safe by design — set once at init).
+func (e *Emitter) SetStreamMode(m StreamMode) {
+	e.streamMode = m
+}
+
+// silentAllowedTypes lists event types emitted to stderr in StreamSilent mode.
+var silentAllowedTypes = map[string]bool{
+	"dispatch_start":        true,
+	"dispatch_end":          true,
+	"error":                 true,
+	"frozen_warning":        true,
+	"frozen_killed":         true,
+	"timeout_warning":       true,
+	"long_command_detected": true,
+	"response_truncated":    true,
+	"preview":               true,
+}
+
+func (e *Emitter) shouldEmitToStderr(eventType string) bool {
+	if e.streamMode != StreamSilent {
+		return true
+	}
+	return silentAllowedTypes[eventType]
+}
+
 func (e *Emitter) Emit(evt Event) error {
 	evt.SchemaVersion = SchemaVersion
 	evt.DispatchID = e.dispatchID
@@ -93,17 +131,20 @@ func (e *Emitter) Emit(evt Event) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if e.eventWriter != nil {
-		if _, err := e.eventWriter.Write(line); err != nil {
-			return fmt.Errorf("write event stream: %w", err)
-		}
-	}
-
+	// Always write to event log (full telemetry)
 	if e.eventLog != nil {
 		if _, err := e.eventLog.Write(line); err != nil {
 			return fmt.Errorf("write event log: %w", err)
 		}
 	}
+
+	// Gate stderr based on stream mode
+	if e.eventWriter != nil && e.shouldEmitToStderr(evt.Type) {
+		if _, err := e.eventWriter.Write(line); err != nil {
+			return fmt.Errorf("write event stream: %w", err)
+		}
+	}
+
 	return nil
 }
 func (e *Emitter) EmitDispatchStart(spec *types.DispatchSpec) error {

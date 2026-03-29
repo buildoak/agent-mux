@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/buildoak/agent-mux/internal/event"
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/store"
 	"github.com/buildoak/agent-mux/internal/types"
@@ -1054,6 +1055,7 @@ func TestStdinNudgeOnFrozenWarning(t *testing.T) {
 
 	var eventBuf strings.Builder
 	engine := NewLoopEngine(adapter, &eventBuf, nil)
+	engine.SetStreamMode(event.StreamNormal) // test reads from event stream — need all events
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

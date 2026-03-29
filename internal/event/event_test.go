@@ -206,3 +206,110 @@ func TestEmitResponseTruncated(t *testing.T) {
 		t.Fatalf("full_output_path = %q, want %q", evt.FullOutputPath, fullOutputPath)
 	}
 }
+
+func TestStreamModeSilent(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+	var stderrBuf bytes.Buffer
+
+	emitter, err := NewEmitter("01JTEST", "test-salt", "TRACE_01JTEST", &stderrBuf, logPath)
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	defer emitter.Close()
+	emitter.SetStreamMode(StreamSilent)
+
+	// Emit 10 different event types
+	_ = emitter.Emit(Event{Type: "heartbeat"})
+	_ = emitter.Emit(Event{Type: "tool_start"})
+	_ = emitter.Emit(Event{Type: "tool_end"})
+	_ = emitter.Emit(Event{Type: "file_write"})
+	_ = emitter.Emit(Event{Type: "command_run"})
+	_ = emitter.Emit(Event{Type: "dispatch_start"})
+	_ = emitter.Emit(Event{Type: "dispatch_end"})
+	_ = emitter.Emit(Event{Type: "error"})
+	_ = emitter.Emit(Event{Type: "frozen_warning"})
+	_ = emitter.Emit(Event{Type: "progress"})
+
+	// Check stderr: should only contain dispatch_start, dispatch_end, error, frozen_warning
+	stderrLines := strings.Split(strings.TrimSpace(stderrBuf.String()), "\n")
+	stderrTypes := make(map[string]bool)
+	for _, line := range stderrLines {
+		var evt Event
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			t.Fatalf("unmarshal stderr line: %v", err)
+		}
+		stderrTypes[evt.Type] = true
+	}
+
+	allowedInSilent := map[string]bool{
+		"dispatch_start": true,
+		"dispatch_end":   true,
+		"error":          true,
+		"frozen_warning": true,
+	}
+	for typ := range stderrTypes {
+		if !allowedInSilent[typ] {
+			t.Errorf("stderr contains %q which should be suppressed in silent mode", typ)
+		}
+	}
+	for typ := range allowedInSilent {
+		if !stderrTypes[typ] {
+			t.Errorf("stderr missing %q which should be present in silent mode", typ)
+		}
+	}
+	if len(stderrTypes) != 4 {
+		t.Errorf("expected 4 event types in stderr, got %d: %v", len(stderrTypes), stderrTypes)
+	}
+
+	// Check event log: should contain all 10
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	logLines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+	if len(logLines) != 10 {
+		t.Fatalf("expected 10 lines in event log, got %d", len(logLines))
+	}
+}
+
+func TestStreamModeNormal(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+	var stderrBuf bytes.Buffer
+
+	emitter, err := NewEmitter("01JTEST", "test-salt", "TRACE_01JTEST", &stderrBuf, logPath)
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	defer emitter.Close()
+	emitter.SetStreamMode(StreamNormal)
+
+	// Emit the same 10 event types
+	_ = emitter.Emit(Event{Type: "heartbeat"})
+	_ = emitter.Emit(Event{Type: "tool_start"})
+	_ = emitter.Emit(Event{Type: "tool_end"})
+	_ = emitter.Emit(Event{Type: "file_write"})
+	_ = emitter.Emit(Event{Type: "command_run"})
+	_ = emitter.Emit(Event{Type: "dispatch_start"})
+	_ = emitter.Emit(Event{Type: "dispatch_end"})
+	_ = emitter.Emit(Event{Type: "error"})
+	_ = emitter.Emit(Event{Type: "frozen_warning"})
+	_ = emitter.Emit(Event{Type: "progress"})
+
+	// In Normal mode: all 10 should appear in stderr
+	stderrLines := strings.Split(strings.TrimSpace(stderrBuf.String()), "\n")
+	if len(stderrLines) != 10 {
+		t.Fatalf("expected 10 lines in stderr (normal mode), got %d", len(stderrLines))
+	}
+
+	// Event log should also have all 10
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	logLines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+	if len(logLines) != 10 {
+		t.Fatalf("expected 10 lines in event log, got %d", len(logLines))
+	}
+}

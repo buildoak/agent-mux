@@ -27,6 +27,7 @@ type LoopEngine struct {
 	adapter     types.HarnessAdapter
 	eventWriter io.Writer
 	verbose     bool
+	streamMode  event.StreamMode
 	hookEval    *hooks.Evaluator
 }
 
@@ -108,6 +109,10 @@ func (e *LoopEngine) SetVerbose(v bool) {
 	e.verbose = v
 }
 
+func (e *LoopEngine) SetStreamMode(m event.StreamMode) {
+	e.streamMode = m
+}
+
 func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*types.DispatchResult, error) {
 	startTime := time.Now()
 	dispatch.EnsureTraceability(spec)
@@ -138,6 +143,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create event log %q: %v", eventLogPath, err), "Ensure the artifact directory is writable."), nil
 	}
 	defer emitter.Close()
+	emitter.SetStreamMode(e.streamMode)
 	if inboxCreateErr != nil {
 		_ = emitter.Emit(event.Event{
 			Type:      "warning",
