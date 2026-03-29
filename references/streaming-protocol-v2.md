@@ -129,6 +129,21 @@ Steering overrides:
 
 The invariant: manual steering always takes precedence over automatic watchdog actions. If a human or coordinator says "keep going," the watchdog respects it.
 
+### Tool-Boundary-Aware Steering (Implemented)
+
+When a `nudge` or `redirect` inbox message triggers the resume cycle, the engine now checks whether a tool call is currently in-flight (`activeCommand != ""`). If a tool is active and the process hasn't exited:
+
+1. **Defer the restart** -- the resume cycle returns early, emitting a `steer_deferred` event to `events.jsonl`. The event loop retries `restartRun()` on every subsequent event and inbox tick. When `EventToolEnd` (or `EventTurnComplete`/`EventResponse`, which also imply tool completion) clears `activeCommand`, the next retry proceeds normally.
+
+2. **Safety valve** -- if the tool runs longer than `max_steer_wait_seconds` (default 120s, configurable via `engine_opts`), the guard is bypassed and the resume cycle proceeds with the kill+restart. This prevents indefinite waiting on stuck tools. A `steer_forced` event is emitted when this happens.
+
+Events emitted (to `events.jsonl` only, not stderr):
+- `steer_deferred` -- tool is active, restart deferred. Includes `command` field with the active command.
+- `steer_forced` -- max steer wait exceeded, proceeding with restart despite active tool.
+
+Configuration:
+- `max_steer_wait_seconds` (engine_opts, default 120) -- maximum seconds to wait for an active tool to complete before force-proceeding with the steering resume cycle.
+
 ## What to Build, In Order
 
 **Phase 1 (Tier 1 -- days):**

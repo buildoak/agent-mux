@@ -224,11 +224,13 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	silenceWarn := intEngineOpt(spec, "silence_warn_seconds", 90)
 	silenceKill := intEngineOpt(spec, "silence_kill_seconds", 180)
 	longCommandSilence := intEngineOpt(spec, "long_command_silence_seconds", 540)
+	maxSteerWait := intEngineOpt(spec, "max_steer_wait_seconds", 120)
 	longCommandExtraPrefixes := parseLongCommandPrefixes(spec)
 	var (
 		activeCommand       string
 		commandStartTime    time.Time
 		longCommandExtended bool
+		steerPendingSince   time.Time // when pendingMessages first became non-empty
 	)
 	_ = commandStartTime // used for future diagnostics
 	stopHeartbeat, updateActivity := emitter.HeartbeatTicker(intEngineOpt(spec, "heartbeat_interval_sec", 15))
@@ -305,6 +307,10 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		case types.EventResponse:
 			lastResponse = evt.Text
 			sawResponse = true
+			// A response implies any in-flight tool has completed.
+			activeCommand = ""
+			commandStartTime = time.Time{}
+			longCommandExtended = false
 			if evt.Tokens != nil {
 				totalTokens = evt.Tokens
 			}
@@ -318,6 +324,10 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		case types.EventTurnComplete:
 			turnCount++
+			// A turn completing implies any in-flight tool has also finished.
+			activeCommand = ""
+			commandStartTime = time.Time{}
+			longCommandExtended = false
 			if evt.Tokens != nil {
 				totalTokens = evt.Tokens
 			}
@@ -402,6 +412,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		}
 		for _, msg := range messages {
 			_ = emitter.Emit(event.Event{Type: "coordinator_inject", Message: msg.Message})
+			if len(pendingMessages) == 0 {
+				steerPendingSince = time.Now()
+			}
 			pendingMessages = append(pendingMessages, msg.Message)
 		}
 	}
@@ -454,6 +467,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		case loopSignalInbox:
 			_ = emitter.Emit(event.Event{Type: "coordinator_inject", Message: sig.message})
+			if len(pendingMessages) == 0 {
+				steerPendingSince = time.Now()
+			}
 			pendingMessages = append(pendingMessages, sig.message)
 
 		case loopSignalParseError:
@@ -498,6 +514,31 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			return false
 		}
 
+		// If a tool is currently executing and the process hasn't exited,
+		// defer the restart until the tool completes (next EventToolEnd clears activeCommand).
+		// The event loop retries restartRun() on every event and inbox tick,
+		// so when EventToolEnd fires, the next iteration will proceed.
+		mu.Lock()
+		cmd := activeCommand
+		mu.Unlock()
+		if cmd != "" && !alreadyExited {
+			exceeded := !steerPendingSince.IsZero() && time.Since(steerPendingSince).Seconds() >= float64(maxSteerWait)
+			if exceeded {
+				_ = emitter.Emit(event.Event{
+					Type:    "steer_forced",
+					Message: fmt.Sprintf("max_steer_wait_exceeded: waited %ds, force-proceeding with restart", int(time.Since(steerPendingSince).Seconds())),
+					Command: cmd,
+				})
+			} else {
+				_ = emitter.Emit(event.Event{
+					Type:    "steer_deferred",
+					Message: fmt.Sprintf("tool_active: deferring restart while %q is running", cmd),
+					Command: cmd,
+				})
+				return false
+			}
+		}
+
 		mu.Lock()
 		sid := sessionID
 		mu.Unlock()
@@ -511,6 +552,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		message := pendingMessages[0]
 		pendingMessages = pendingMessages[1:]
+		if len(pendingMessages) == 0 {
+			steerPendingSince = time.Time{}
+		}
 		restarting = true
 		runReadyForRestart = false
 		_ = emitter.EmitProgress("Coordinator injection received; restarting harness session.")
