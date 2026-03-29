@@ -49,6 +49,7 @@ const (
 	commandInspect  cliCommand = "inspect"
 	commandGC       cliCommand = "gc"
 	commandWait     cliCommand = "wait"
+	commandSteer    cliCommand = "steer"
 	commandConfig   cliCommand = "config"
 )
 
@@ -163,6 +164,8 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		return runGCCommand(args, stdout)
 	case commandWait:
 		return runWaitCommand(args, stdout, stderr)
+	case commandSteer:
+		return runSteerCommand(args, stdout)
 	case commandConfig:
 		return runConfigCommand(args, stdout)
 	}
@@ -1030,6 +1033,8 @@ func splitCommand(args []string) (cliCommand, []string, bool) {
 		return commandGC, args[1:], true
 	case string(commandWait):
 		return commandWait, args[1:], true
+	case string(commandSteer):
+		return commandSteer, args[1:], true
 	case string(commandConfig):
 		return commandConfig, args[1:], true
 	default:

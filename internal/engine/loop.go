@@ -3,6 +3,7 @@ package engine
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -619,6 +620,22 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			if forceBuildResult {
 				goto buildResult
 			}
+			// Read control.json for mid-flight steering signals.
+			if cf := readControlFile(spec.ArtifactDir); cf != nil {
+				if cf.Abort && setTerminal("failed") {
+					_ = emitter.EmitError("abort_requested", "Abort requested via control file.")
+					dispatchErr = dispatch.NewDispatchError("interrupted", "Abort requested via ax steer abort.", "")
+					_ = currentRun.proc.GracefulStop(5)
+					<-currentRun.streamDone
+					goto buildResult
+				}
+				if cf.ExtendKillSeconds > 0 && time.Since(cf.UpdatedAt).Seconds() < 120 {
+					if cf.ExtendKillSeconds > silenceKill {
+						silenceKill = cf.ExtendKillSeconds
+					}
+				}
+			}
+
 			mu.Lock()
 			silence := int(time.Since(lastActivity).Seconds())
 			effectiveKill := silenceKill
@@ -1055,6 +1072,26 @@ func parseLongCommandPrefixes(spec *types.DispatchSpec) []string {
 		}
 	}
 	return out
+}
+
+// controlFile is the steering control structure read from control.json.
+type controlFile struct {
+	Abort             bool      `json:"abort,omitempty"`
+	ExtendKillSeconds int       `json:"extend_kill_seconds,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// readControlFile reads control.json from artifact dir. Returns nil on miss (no alloc).
+func readControlFile(artifactDir string) *controlFile {
+	data, err := os.ReadFile(filepath.Join(artifactDir, "control.json"))
+	if err != nil {
+		return nil
+	}
+	var cf controlFile
+	if err := json.Unmarshal(data, &cf); err != nil {
+		return nil
+	}
+	return &cf
 }
 
 func intEngineOpt(spec *types.DispatchSpec, key string, fallback int) int {
