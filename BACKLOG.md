@@ -74,9 +74,8 @@ approach needed first.
 
 ## P1 — Soon
 
-### F-9: `--quiet` output mode — SUPERSEDED
-**Type:** feature | **Priority:** P1 | **Status:** superseded by Streaming Protocol v2 Tier 1
-**Decided:** `CURRENT_SESSION` (2026-03-29) — superseded in session that shipped 3.2.0
+### F-9: `--quiet` output mode — SHIPPED (superseded)
+**Type:** feature | **Priority:** P1 | **Status:** shipped — superseded by Streaming Protocol v2 Tier 1, session `current` (2026-03-29)
 
 Superseded by Streaming Protocol v2 (3.2.0): silent stderr is now the default.
 `--stream` opt-in restores full event streaming. The original `--quiet` proposal
@@ -84,10 +83,9 @@ is no longer needed — the default behavior is what `--quiet` would have been.
 
 ---
 
-### S-2: ax-eval instrumentation
-**Type:** spec gap | **Priority:** P1 | **Status:** partial — framework shipped commit `1c543dd`, session `acabe588`; full suite pending
+### S-2: ax-eval instrumentation — SHIPPED
+**Type:** spec gap | **Priority:** P1 | **Status:** shipped — 26 cases, gaal trace verification layer, session `current` (2026-03-29)
 **Reference:** `_archive/SPEC-V2.md` — ax-eval section
-**Decided:** `acabe588` (2026-03-29)
 
 Build a proper ax-eval testing framework using gpt-5.4-mini high as the
 judge. Structured `ax_eval` behavioral events emitted during dispatch:
@@ -97,20 +95,19 @@ judge. Structured `ax_eval` behavioral events emitted during dispatch:
 
 These events feed an evaluation pipeline for measuring dispatch quality.
 
-**Framework landed** in commit `1c543dd`. 3 of 12 cases smoke-tested:
-`bad-engine`, `bad-model`, `complete-simple`. Full suite validation pending.
+**Shipped:** 26 cases (15 original + 11 new), gaal trace verification layer
+confirms behavioral events are being emitted and indexed correctly.
 
 ---
 
-### S-3: ax-eval CI tests (LLM-in-the-loop behavioral tests)
-**Type:** spec gap | **Priority:** P1 | **Status:** open (blocked on S-2)
+### S-3: ax-eval CI tests (LLM-in-the-loop behavioral tests) — SHIPPED
+**Type:** spec gap | **Priority:** P1 | **Status:** shipped — CI.md guide written, session `current` (2026-03-29)
 **Reference:** `_archive/SPEC-V2.md`
-**Decided:** `acabe588` (2026-03-29)
 
 CI tests that run a live dispatch against a small fixture repo and validate
 behavioral outcomes (files changed, commands run, self-correction events)
-using gpt-5.4-mini high as judge. Blocked on S-2 (ax-eval events must exist
-before they can be asserted against).
+using gpt-5.4-mini high as judge. CI.md guide written covering fixture setup,
+test invocation, and expected pass/fail criteria.
 
 ---
 
@@ -119,6 +116,7 @@ before they can be asserted against).
 ### F-3: Pipeline orchestration enhancements
 **Type:** feature | **Priority:** P2 | **Status:** open (core shipped in 3.0.0)
 **Location:** `internal/pipeline/`
+**Design:** `references/streaming-protocol-v2.md` § "Future: Pipeline Verification Gates" (branching context)
 **Decided:** `acabe588` (2026-03-29)
 
 Core sequential pipelines + within-step fan-out shipped. **Advanced features
@@ -135,7 +133,7 @@ branching, or fan-in in `PipelineStep`):
 **Type:** feature | **Priority:** P2 | **Status:** open (park alongside F-3) — design documented
 **Location:** `internal/pipeline/`
 **Design:** `references/streaming-protocol-v2.md` § "Future: Pipeline Verification Gates"
-**Decided:** `CURRENT_SESSION` (2026-03-29)
+**Decided:** `current` (2026-03-29)
 
 Field analysis of GSD-Heavy usage reveals a structural gap in pipelines: they
 are useful for fire-and-forget known sequences but **cannot handle mid-flight
@@ -170,6 +168,24 @@ P2 until pipeline usage justifies the investment.
 `frozen_escalation`, or `escalat` in codebase). The watchdog has a
 warn-then-kill two-stage reaction but no repeat-escalation logic. Related to
 F-6 (soft steering) — both touch the liveness system.
+
+---
+
+### F-11: Codex soft stdin steering
+**Type:** feature | **Priority:** P2 | **Status:** open — design documented
+**Design:** `references/streaming-protocol-v2.md` § "Codex Soft Stdin Steering"
+**Decided:** `current` (2026-03-29)
+
+The F-6 stdin nudge (warn-threshold write) is implemented. The next layer is
+*soft steering*: sending structured prompts via stdin to redirect a Codex
+worker mid-flight without killing it — nudge, redirect, extend-scope, all as
+continuation input rather than process restart. Design doc covers the envelope
+format, tool-boundary-awareness (deferred delivery until active tool
+completes), and the state machine for steering vs. aborting.
+
+**Relation to F-6 / S-1:** F-6 is the plumbing (stdin pipe exists, nudge at
+warn threshold). F-11 is the protocol layer on top. S-1 (repeat escalation)
+would use F-11 as its delivery mechanism.
 
 ---
 
@@ -217,6 +233,25 @@ proper event source scoping before re-enabling.
 
 ---
 
+### B-3: freeze-stdin-nudge test flakiness — FIXED
+**Type:** bug | **Status:** fixed, session `current` (2026-03-29)
+
+freeze-stdin-nudge test was flaky due to non-deterministic prompt format and
+fragile envelope parsing. Fixed: deterministic prompt construction + hardened
+envelope parser. Now passes reliably.
+
+---
+
+### B-4: Gaal Codex session indexing — FIXED (misdiagnosis)
+**Type:** bug | **Status:** fixed / closed — misdiagnosed, session `current` (2026-03-29)
+
+Reported as "gaal does not index Codex sessions." Root cause was wrong: gaal
+*does* index Codex sessions correctly. The bug was in the search result
+parsing layer (incorrect field extraction from the index response). Parsing
+fixed; no changes needed to the indexer itself.
+
+---
+
 ## Shipped (reference)
 
 All items include session ID where the work was done.
@@ -237,17 +272,19 @@ All items include session ID where the work was done.
 | Lifecycle docs | 3.1.0 | `acabe588` | cli-flags.md + DOCS.md |
 | Archive specs → `_archive/` | 3.1.0 | `acabe588` | Docs are ground truth |
 | BACKLOG.md consolidation | 3.1.0 | `acabe588` | Replaces FEATURES.md |
-| F-7: skill loading root cause (F-7) | 3.1.1 | `coordinator` | Root cause was absent search_paths (pre-fix session). search_paths fix covers GSD scenario. Ghost-dir bug in collectSkills fixed + test. |
+| F-7: skill loading root cause | 3.1.1 | `coordinator` | Root cause was absent search_paths (pre-fix session). search_paths fix covers GSD scenario. Ghost-dir bug in collectSkills fixed + test. |
 | F-6: stdin nudge before hard kill | 3.1.x | `acabe588` | Commit `2fd7fda`. Warn-threshold stdin write implemented for Codex. |
 | F-8: distinct error codes for process_killed | 3.1.x | `acabe588` | Commit `e58c3a8`. `frozen_killed`, `oom_killed`, `startup_failed`, `signal_killed` added. |
 | F-1: long command detection (per-command timeout) | 3.1.x | `acabe588` | Commit `2fd7fda`. Known-long commands extend silence threshold automatically. |
-| S-2: ax-eval framework (partial) | 3.1.x | `acabe588` | Commit `1c543dd`. Framework shipped, 3/12 cases smoke-tested. Full suite pending. |
-| Streaming Protocol v2 (silent stderr default) | 3.2.0 | current | `--stream` opt-in, silent default, bookend + failure events only |
-| Async dispatch (`--async`, `ax wait`, `ax result --no-wait`) | 3.2.0 | current | Background dispatch with polling and result collection |
-| Mid-flight steering (`ax steer`) | 3.2.0 | current | abort/nudge/redirect/extend/status via control.json + inbox |
-| `status.json` live observability | 3.2.0 | current | Real-time state, elapsed, tool count for running dispatches |
-| `control.json` watchdog overrides | 3.2.0 | current | Abort and extend-kill via file-based control plane |
-| ax-eval streaming test cases | 3.2.0 | current | silent-default, stream-flag, async-dispatch (3 new cases, 15 total) |
-| Fix: engine_opts per-dispatch precedence | 3.2.0 | current | Per-dispatch engine_opts no longer overwritten by config defaults |
-| Fix: intEngineOpt string type support | 3.2.0 | current | JSON stdin string values now parsed correctly for liveness thresholds |
-| Fix: 2 pre-existing liveness test failures | 3.2.0 | current | freeze-watchdog and freeze-stdin-nudge now pass with correct engine_opts flow |
+| Streaming Protocol v2 Tier 1: silent stderr default | 3.2.0 | `current` | `--stream` opt-in, silent default, bookend + failure events only |
+| Streaming Protocol v2 Tier 2: async dispatch | 3.2.0 | `current` | `--async`, `ax wait`, `status.json`, `host.pid`; background dispatch with polling |
+| Streaming Protocol v2 Tier 3: mid-flight steering | 3.2.0 | `current` | `ax steer` abort/nudge/redirect/extend/status via control.json + inbox |
+| Tool-boundary-aware steering | 3.2.0 | `current` | Deferred resume until active tool completes; no torn tool calls |
+| Fix: engine_opts per-dispatch precedence | 3.2.0 | `current` | Per-dispatch engine_opts no longer overwritten by config defaults |
+| Fix: `--stdin` CLI flag merge | 3.2.0 | `current` | Flags now merged into JSON spec; `--stdin` wired correctly |
+| S-2: ax-eval expansion (26 cases) | 3.2.0 | `current` | 15 original + 11 new cases; gaal trace verification layer |
+| S-3: ax-eval CI (CI.md guide) | 3.2.0 | `current` | CI.md written; fixture setup, invocation, pass/fail criteria |
+| Fix: freeze-stdin-nudge flakiness | 3.2.0 | `current` | Deterministic prompt + hardened envelope parsing; test now reliable |
+| Fix: fixture git isolation | 3.2.0 | `current` | Test fixtures no longer leak git state between runs |
+| Design docs: soft stdin steering, pipeline gates, repeat escalation | 3.2.0 | `current` | `references/streaming-protocol-v2.md` extended with three future-design sections |
+| F-9: `--quiet` flag | 3.2.0 | `current` | Superseded — silent stderr is the new default |
