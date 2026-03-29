@@ -218,23 +218,17 @@ func searchGaalSession(traceToken string) string {
 		return ""
 	}
 
-	// Parse JSON output — gaal search returns NDJSON.
-	scanner := bufio.NewScanner(&stdout)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var result map[string]any
-		if err := json.Unmarshal(line, &result); err != nil {
-			continue
-		}
-		if id, ok := result["session_id"].(string); ok && id != "" {
-			return id
-		}
-		if id, ok := result["id"].(string); ok && id != "" {
-			return id
-		}
+	// gaal search returns a single JSON envelope: {"results": [...]}, not NDJSON.
+	var envelope struct {
+		Results []struct {
+			SessionID string `json:"session_id"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		return ""
+	}
+	if len(envelope.Results) > 0 {
+		return envelope.Results[0].SessionID
 	}
 	return ""
 }

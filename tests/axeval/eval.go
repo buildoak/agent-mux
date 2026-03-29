@@ -19,6 +19,18 @@ func statusIs(expected string) func(Result) Verdict {
 	}
 }
 
+// statusIsOneOf checks that Result.Status matches any of the expected values.
+func statusIsOneOf(expected ...string) func(Result) Verdict {
+	return func(r Result) Verdict {
+		for _, e := range expected {
+			if r.Status == e {
+				return Verdict{Pass: true, Score: 1.0, Reason: fmt.Sprintf("status=%s (accepted)", r.Status)}
+			}
+		}
+		return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("status=%q, want one of %v", r.Status, expected)}
+	}
+}
+
 // responseContains checks that Result.Response contains substr (case-insensitive).
 func responseContains(substr string) func(Result) Verdict {
 	return func(r Result) Verdict {
