@@ -1,45 +1,30 @@
 ---
 name: agent-mux
 description: |
-  Dispatch workers across Codex, Claude, and Gemini through one CLI and one
-  JSON contract. Tool, not orchestrator — the LLM decides; agent-mux dispatches.
-  Use for: async dispatch, result collection, mid-flight steering, spawning
-  workers, running pipelines, recovering timed-out dispatches, parsing output
-  contracts, and multi-model coordination.
-  Keywords: async, dispatch, collect, steer, worker, codex, claude, gemini,
-  pipeline, role, variant, recover, signal, agent-mux, spawn agent, engine.
+  Cross-engine dispatch layer for AI coding agents. Use when you need to:
+  spawn a worker on Codex/Claude/Gemini, run a multi-step pipeline, recover
+  a timed-out dispatch, steer a running worker mid-flight, or coordinate
+  multi-model work. Trigger on: agent-mux, dispatch, spawn worker, codex
+  worker, pipeline, role dispatch, async dispatch, steer agent, recover
+  timeout, multi-engine.
 ---
 
 # agent-mux
 
-Dispatch substrate. One CLI, one JSON contract, three engines. TOML-driven
-roles encode engine + model + effort + timeout + skills into one flag. The
-calling LLM decides what to do — agent-mux handles the how.
-
-## Design Principles
-
-These are load-bearing. They explain why things work the way they do.
-
-**Tool, not orchestrator.** agent-mux resolves inputs and dispatches. It does
-not decide strategy. Multi-step behavior lives in TOML-defined pipelines.
-
-**Job done is holy.** Artifact directories and dispatch metadata exist before
-the harness starts. Partial work is preserved across timeout, crash, or cancel.
-
-**Errors are steering signals.** Every failure carries a code, message,
-suggestion, and retryability flag. Parse them programmatically, not as text.
-
-**Single-shot with curated context.** The default path is one spec into one
-engine. Fan-out only happens through pipelines. Front-load context; don't
-make the worker discover its own scope.
+Dispatch substrate. One CLI, one JSON contract, three engines. agent-mux
+resolves inputs and dispatches — it does not decide strategy. TOML-driven
+roles encode engine + model + effort + timeout + skills into one flag.
+Artifact directories exist before the harness starts; partial work is
+preserved across timeout, crash, or cancel.
 
 ## Quickstart
 
-### Discovery
+### Discovery (mandatory first step)
 ```bash
 agent-mux config roles        # role catalog: engines, models, timeouts, variants
 agent-mux config pipelines    # named multi-step workflows
 ```
+Always run before dispatching. Roles change per project config.
 
 ### Dispatch -> Check -> Collect
 
@@ -53,6 +38,7 @@ agent-mux -R=scout --async -C=/repo "Find all deprecated API usages" 2>/dev/null
 # CHECK — while the worker is running
 agent-mux inspect <id> 2>/dev/null           # metadata: role, engine, duration
 agent-mux steer <id> status 2>/dev/null      # liveness: running / orphaned / done
+# For deeper activity: tail <artifact_dir>/events.jsonl  (NDJSON event stream)
 
 # COLLECT — blocks until done, single clean JSON
 agent-mux result <id> --json 2>/dev/null

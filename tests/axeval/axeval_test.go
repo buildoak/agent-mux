@@ -11,6 +11,12 @@ import (
 var binaryPath string
 
 func TestMain(m *testing.M) {
+	// Set up fixture temp dir (copies testdata/fixture/ to /tmp).
+	SetupFixtureDir()
+
+	// Initialize test cases now that fixture dir is ready.
+	InitCases()
+
 	// Build agent-mux binary to a temp location.
 	tmpBin, err := os.CreateTemp("", "agent-mux-test-*")
 	if err != nil {
@@ -34,6 +40,7 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Remove(binaryPath)
+	CleanupFixtureDir()
 	os.Exit(code)
 }
 

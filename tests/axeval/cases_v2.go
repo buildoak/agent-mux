@@ -5,7 +5,6 @@ package axeval
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -13,12 +12,8 @@ import (
 
 var dispatchSaltPattern = regexp.MustCompile(`^[a-z]+-[a-z]+-[a-z]+$`)
 
-var AllCasesV2 = func() []TestCase {
-	cwd := fixtureDir()
-	if abs, err := filepath.Abs(cwd); err == nil {
-		cwd = abs
-	}
-
+// buildCasesV2 returns the v2 ax-eval test cases using the given fixture cwd.
+func buildCasesV2(cwd string) []TestCase {
 	return []TestCase{
 		{
 			Name:         "output-contract-schema",
@@ -284,8 +279,4 @@ var AllCasesV2 = func() []TestCase {
 			),
 		},
 	}
-}()
-
-func init() {
-	AllCases = append(AllCases, AllCasesV2...)
 }

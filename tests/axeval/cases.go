@@ -5,6 +5,7 @@ package axeval
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,19 +13,72 @@ import (
 	"time"
 )
 
-// fixtureDir returns the absolute path to the fixture directory.
-func fixtureDir() string {
+// testdataDir returns the absolute path to the embedded testdata/fixture/ seed files.
+func testdataDir() string {
 	_, thisFile, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(thisFile), "fixture")
+	return filepath.Join(filepath.Dir(thisFile), "testdata", "fixture")
 }
 
-// AllCases defines the 12 ax-eval test cases.
-var AllCases = func() []TestCase {
-	cwd := fixtureDir()
-	// Ensure CWD is absolute.
-	if abs, err := filepath.Abs(cwd); err == nil {
-		cwd = abs
+// fixtureWorkDir holds the temp directory path, set by SetupFixtureDir().
+var fixtureWorkDir string
+
+// SetupFixtureDir copies testdata/fixture/ to a temp dir under /tmp and returns
+// the path. Call CleanupFixtureDir() to remove it.
+func SetupFixtureDir() string {
+	src := testdataDir()
+	tmp, err := os.MkdirTemp("/tmp", "axeval-fixture-")
+	if err != nil {
+		panic("create fixture temp dir: " + err.Error())
 	}
+
+	err = fs.WalkDir(os.DirFS(src), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(tmp, path)
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0o755)
+		}
+		data, err := os.ReadFile(filepath.Join(src, path))
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dest, data, info.Mode())
+	})
+	if err != nil {
+		os.RemoveAll(tmp)
+		panic("copy fixture to temp dir: " + err.Error())
+	}
+
+	fixtureWorkDir = tmp
+	return tmp
+}
+
+// CleanupFixtureDir removes the temp fixture directory.
+func CleanupFixtureDir() {
+	if fixtureWorkDir != "" {
+		os.RemoveAll(fixtureWorkDir)
+		fixtureWorkDir = ""
+	}
+}
+
+// fixtureDir returns the temp fixture work directory (must be set up first via SetupFixtureDir).
+func fixtureDir() string {
+	if fixtureWorkDir == "" {
+		panic("fixtureDir called before SetupFixtureDir — call SetupFixtureDir() in TestMain")
+	}
+	return fixtureWorkDir
+}
+
+// AllCases holds all ax-eval test cases. Populated by InitCases() after SetupFixtureDir().
+var AllCases []TestCase
+
+// buildCasesV1 returns the v1 ax-eval test cases using the given fixture cwd.
+func buildCasesV1(cwd string) []TestCase {
 
 	return []TestCase{
 		// ── Completion ──────────────────────────────────────────────
@@ -721,4 +775,11 @@ var AllCases = func() []TestCase {
 			),
 		},
 	}
-}()
+}
+
+// InitCases populates AllCases. Must be called after SetupFixtureDir().
+func InitCases() {
+	cwd := fixtureDir()
+	AllCases = buildCasesV1(cwd)
+	AllCases = append(AllCases, buildCasesV2(cwd)...)
+}
