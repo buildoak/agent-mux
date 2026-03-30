@@ -513,7 +513,7 @@ func buildCasesV1(cwd string) []TestCase {
 			ExtraFlags:   []string{"--async"},
 			IsAsync:      true,
 			SteerSpec: &SteerSpec{
-				DelayBeforeSteer: 3 * time.Second,
+				DelayBeforeSteer: 10 * time.Second,
 				Action:           "redirect",
 				Message:          "Stop the current task and create a file named fifo_redirect_marker.txt containing exactly FIFO_REDIRECT.",
 			},
@@ -623,7 +623,7 @@ func buildCasesV1(cwd string) []TestCase {
 			ExtraFlags:   []string{"--async"},
 			IsAsync:      true,
 			SteerSpec: &SteerSpec{
-				DelayBeforeSteer: 3 * time.Second,
+				DelayBeforeSteer: 10 * time.Second,
 				Action:           "redirect",
 				Message:          "Actually, instead of counting lines, write 'REDIRECTED' to a file called redirect_proof.txt",
 			},
