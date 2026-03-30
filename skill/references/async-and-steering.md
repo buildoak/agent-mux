@@ -87,8 +87,9 @@ agent-mux steer 01JQXYZ abort
 
 ### steer nudge
 
-Send a wrap-up message via inbox. Default: "Please wrap up your current work
-and provide a final summary."
+Send a wrap-up message. Live Codex workers on Unix may receive this through the
+dispatch-local `stdin.pipe` FIFO; other cases fall back to inbox delivery.
+Default: "Please wrap up your current work and provide a final summary."
 
 ```bash
 agent-mux steer 01JQXYZ nudge
@@ -102,6 +103,9 @@ Redirect the worker with new instructions. Argument is required.
 ```bash
 agent-mux steer 01JQXYZ redirect "Focus on the tests, skip the refactor"
 ```
+
+The steer ack JSON includes a `mechanism` field. For Codex soft steering this
+is `stdin_fifo`; inbox fallback reports `inbox`.
 
 ### steer extend
 
