@@ -187,38 +187,14 @@ func TestAsyncHostPidStatusJson(t *testing.T) {
 		_ = cmd.Wait()
 		t.Fatalf("parse result stdout: %v\nstdout=%s", err, string(result.RawStdout))
 	}
-	if status, _ := jsonStringField(resultRaw, "status"); status == "" {
-		response, _ := jsonStringField(resultRaw, "response")
-		if !strings.Contains(response, "4") {
-			_ = cmd.Wait()
-			t.Fatalf("result response missing 4\nstdout=%s", string(result.RawStdout))
-		}
-
-		statusResult := dispatchWithFlags(t, binaryPath, []string{"status", dispatchID, "--json"}, 30*time.Second)
-		if statusResult.ExitCode != 0 {
-			_ = cmd.Wait()
-			t.Fatalf("status exit=%d\nstdout=%s\nstderr=%s", statusResult.ExitCode, string(statusResult.RawStdout), string(statusResult.RawStderr))
-		}
-		statusJSON, parseErr := parseJSONObject(statusResult.RawStdout, "status stdout")
-		if parseErr != nil {
-			_ = cmd.Wait()
-			t.Fatalf("parse status stdout: %v\nstdout=%s", parseErr, string(statusResult.RawStdout))
-		}
-		finalStatus, _ := jsonStringField(statusJSON, "status")
-		if finalStatus == "" {
-			finalStatus, _ = jsonStringField(statusJSON, "state")
-		}
-		if finalStatus != "completed" {
-			_ = cmd.Wait()
-			t.Fatalf("final status=%q, want completed\nstdout=%s", finalStatus, string(statusResult.RawStdout))
-		}
-
+	resultStatus, _ := jsonStringField(resultRaw, "status")
+	if resultStatus == "" {
 		_ = cmd.Wait()
-		t.Skip("TODO: agent-mux result --json does not currently include terminal status; extend the lifecycle result JSON if this contract is required")
+		t.Fatalf("result --json missing status field\nstdout=%s", string(result.RawStdout))
 	}
-	if status, _ := jsonStringField(resultRaw, "status"); status != "completed" {
+	if resultStatus != "completed" {
 		_ = cmd.Wait()
-		t.Fatalf("result status=%q, want completed\nstdout=%s", status, string(result.RawStdout))
+		t.Fatalf("result status=%q, want completed\nstdout=%s", resultStatus, string(result.RawStdout))
 	}
 
 	if err := cmd.Wait(); err != nil {

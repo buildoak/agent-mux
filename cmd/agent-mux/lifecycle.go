@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -268,10 +270,12 @@ func runResultCommand(args []string, stdout io.Writer) int {
 	}
 
 	if jsonOutput {
-		writeCompactJSON(stdout, map[string]any{
+		result := map[string]any{
 			"dispatch_id": dispatchID,
 			"response":    response,
-		})
+		}
+		enrichResultStatus(result, record, dispatchID)
+		writeCompactJSON(stdout, result)
 		return 0
 	}
 
@@ -753,10 +757,12 @@ func showResult(dispatchID string, record *store.DispatchRecord, jsonOutput, sho
 	}
 
 	if jsonOutput {
-		writeCompactJSON(stdout, map[string]any{
+		result := map[string]any{
 			"dispatch_id": dispatchID,
 			"response":    response,
-		})
+		}
+		enrichResultStatus(result, record, dispatchID)
+		writeCompactJSON(stdout, result)
 		return 0
 	}
 
@@ -841,5 +847,96 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return 1
+}
+
+// enrichResultStatus adds "status" and optionally "kill_reason" fields to a
+// result --json map. Status is derived from the store record, the dispatch
+// meta, or the events log (in that order of priority). This closes B-7:
+// machine consumers can distinguish completed/failed/killed/timeout without
+// parsing free-form logs.
+func enrichResultStatus(result map[string]any, record *store.DispatchRecord, dispatchID string) {
+	// 1. Store record is the most authoritative source.
+	if record != nil && strings.TrimSpace(record.Status) != "" {
+		result["status"] = record.Status
+		// Check for kill reason from artifact events.
+		if record.Status == "failed" {
+			if reason := extractKillReason(record.ArtifactDir); reason != "" {
+				result["kill_reason"] = reason
+			}
+		}
+		return
+	}
+
+	// 2. Dispatch meta from artifact dir.
+	artifactDir := ""
+	if record != nil {
+		artifactDir = record.ArtifactDir
+	}
+	if strings.TrimSpace(artifactDir) == "" {
+		if resolved, err := recovery.ResolveArtifactDir(dispatchID); err == nil {
+			artifactDir = resolved
+		}
+	}
+	if strings.TrimSpace(artifactDir) != "" {
+		if meta, err := dispatch.ReadDispatchMeta(artifactDir); err == nil && meta.Status != "" {
+			result["status"] = meta.Status
+			if meta.Status == "failed" {
+				if reason := extractKillReason(artifactDir); reason != "" {
+					result["kill_reason"] = reason
+				}
+			}
+			return
+		}
+		// 3. Fall back to status.json state.
+		if live, err := dispatch.ReadStatusJSON(artifactDir); err == nil && live.State != "" {
+			result["status"] = live.State
+			return
+		}
+	}
+}
+
+// extractKillReason scans events.jsonl for kill-related error codes
+// (frozen_killed, signal_killed, startup_failed) and returns the first found.
+func extractKillReason(artifactDir string) string {
+	if strings.TrimSpace(artifactDir) == "" {
+		return ""
+	}
+	eventsPath := filepath.Join(artifactDir, "events.jsonl")
+	f, err := os.Open(eventsPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	killCodes := map[string]bool{
+		"frozen_killed":  true,
+		"signal_killed":  true,
+		"startup_failed": true,
+		"oom_killed":     true,
+	}
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 512*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var evt struct {
+			Type      string `json:"type"`
+			ErrorCode string `json:"error_code"`
+		}
+		if json.Unmarshal(line, &evt) != nil {
+			continue
+		}
+		if evt.Type == "error" && killCodes[evt.ErrorCode] {
+			return evt.ErrorCode
+		}
+		// Also check event type directly (e.g. frozen_killed is emitted as a type).
+		if killCodes[evt.Type] {
+			return evt.Type
+		}
+	}
+	return ""
 }
 
