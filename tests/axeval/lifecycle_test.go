@@ -8,6 +8,9 @@ import (
 )
 
 func TestLifecycleListStatusInspect(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	tc := TestCase{
 		Engine:       "codex",
 		Model:        "gpt-5.4-mini",

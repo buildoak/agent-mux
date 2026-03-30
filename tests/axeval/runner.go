@@ -476,6 +476,15 @@ func dispatchWithFlags(t *testing.T, binary string, args []string, wallClock tim
 	return result
 }
 
+// buildCommand creates an exec.Cmd with the given context, args, and optional stdin.
+func buildCommand(ctx context.Context, binary string, args []string, stdin []byte) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, binary, args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
+	return cmd
+}
+
 // parseEvents reads events.jsonl from the artifact dir and returns parsed events.
 func parseEvents(artifactDir string) []Event {
 	eventsPath := filepath.Join(artifactDir, "events.jsonl")

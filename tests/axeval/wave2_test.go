@@ -17,6 +17,9 @@ import (
 )
 
 func TestStdinJsonDispatch(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	cwd := fixtureDir()
 	if abs, err := filepath.Abs(cwd); err == nil {
 		cwd = abs
@@ -64,6 +67,9 @@ func TestStdinJsonDispatch(t *testing.T) {
 }
 
 func TestAsyncHostPidStatusJson(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	cwd := fixtureDir()
 	if abs, err := filepath.Abs(cwd); err == nil {
 		cwd = abs
@@ -203,6 +209,9 @@ func TestAsyncHostPidStatusJson(t *testing.T) {
 }
 
 func TestPipeline2StepHandoff(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	cwd := fixtureDir()
 	if abs, err := filepath.Abs(cwd); err == nil {
 		cwd = abs

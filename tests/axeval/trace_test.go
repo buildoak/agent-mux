@@ -16,6 +16,9 @@ import (
 // It dispatches the same test cases, then analyzes the agent's behavior trace
 // via a Codex trace analyzer.
 func TestTraceVerification(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	// Select a representative subset of cases for trace analysis.
 	// These cover: simple completion, correctness, quality, error handling, multi-step.
 	traceCases := selectTraceCases()

@@ -13,6 +13,9 @@ import (
 )
 
 func TestPreviewDryRun(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	result := dispatchWithFlags(t, binaryPath, []string{
 		"preview",
 		"--engine", "codex",
@@ -45,6 +48,9 @@ func TestPreviewDryRun(t *testing.T) {
 }
 
 func TestGcDryRun(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	cwd := absFixtureDir(t)
 	seed := dispatch(t, binaryPath, TestCase{
 		Engine:       "codex",
@@ -118,6 +124,9 @@ func TestGcDryRun(t *testing.T) {
 }
 
 func TestConfigIntrospection(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	cwd := absFixtureDir(t)
 
 	configResult := dispatchWithFlags(t, binaryPath, []string{"config", "--cwd", cwd}, 2*time.Minute)
@@ -186,6 +195,9 @@ func TestConfigIntrospection(t *testing.T) {
 }
 
 func TestSkillScriptsOnPath(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	cwd := absFixtureDir(t)
 	skillDir := filepath.Join(cwd, ".claude", "skills", "scripts-test")
 	scriptDir := filepath.Join(skillDir, "scripts")
@@ -226,6 +238,9 @@ func TestSkillScriptsOnPath(t *testing.T) {
 }
 
 func TestPipelineRefsOnly(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	cwd := absFixtureDir(t)
 	configJSON := resolvedConfigJSON(t, cwd)
 	pipelines, err := jsonObjectField(configJSON, "pipelines")
@@ -285,6 +300,9 @@ func TestPipelineRefsOnly(t *testing.T) {
 }
 
 func TestPipelineFanout(t *testing.T) {
+	if !isHardMode() {
+		t.Skip("L4 test — requires AX_EVAL_HARD=1")
+	}
 	cwd := absFixtureDir(t)
 	configJSON := resolvedConfigJSON(t, cwd)
 	pipelines, err := jsonObjectField(configJSON, "pipelines")
