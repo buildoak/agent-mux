@@ -72,7 +72,7 @@ type cliFlags struct {
 	contextFile, artifactDir, salt, config, promptFile, recover                                     string
 	signal                                                                                          string
 	permissionMode, sandbox, reasoning                                                              string
-	output, pipeline                                                                                string
+	pipeline                                                                                        string
 	timeout, maxDepth, responseMaxChars, maxTurns                                                   int
 	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes, stream, async             bool
 	skills, addDirs                                                                                 stringSlice
@@ -717,29 +717,6 @@ func writeCompactJSON(w io.Writer, v any) {
 	_, _ = w.Write(buf.Bytes())
 }
 
-func writeTextResult(w io.Writer, result *types.DispatchResult) {
-	fmt.Fprintf(w, "Status: %s\n", result.Status)
-	if result.Metadata != nil {
-		fmt.Fprintf(w, "Engine: %s\n", result.Metadata.Engine)
-		if result.Metadata.Model != "" {
-			fmt.Fprintf(w, "Model: %s\n", result.Metadata.Model)
-		}
-		if result.Metadata.Tokens != nil {
-			fmt.Fprintf(w, "Tokens: input=%d output=%d\n", result.Metadata.Tokens.Input, result.Metadata.Tokens.Output)
-		}
-	}
-	fmt.Fprintf(w, "Duration: %dms\n", result.DurationMS)
-	if result.Response != "" {
-		fmt.Fprintf(w, "\n--- Response ---\n%s\n", result.Response)
-	}
-	if result.Error != nil {
-		fmt.Fprintf(w, "\n--- Error ---\n%s: %s\n", result.Error.Code, result.Error.Message)
-		if result.Error.Suggestion != "" {
-			fmt.Fprintf(w, "Suggestion: %s\n", result.Error.Suggestion)
-		}
-	}
-}
-
 func buildSignalAck(dispatchID, artifactDir string) SignalAck {
 	return SignalAck{
 		Status:      "ok",
@@ -1182,7 +1159,6 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 		effort:           "",
 		full:             true,
 		maxDepth:         2,
-		output:           "json",
 		responseMaxChars: unsetResponseMaxChars,
 		sandbox:          "danger-full-access",
 		reasoning:        "medium",
@@ -1226,7 +1202,6 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	bindStr(fs, &flags.reasoning, "Reasoning effort", flags.reasoning, "reasoning", "r")
 	fs.IntVar(&flags.maxTurns, "max-turns", 0, "Maximum turns")
 	fs.Var(&flags.addDirs, "add-dir", "Additional writable directory")
-	bindStr(fs, &flags.output, "Output format (json, text)", "json", "output", "o")
 	bindBool(fs, &flags.verbose, "Verbose mode", false, "verbose", "v")
 	bindBool(fs, &flags.stream, "Stream all events to stderr (default: silent)", false, "stream", "S")
 	fs.BoolVar(&flags.async, "async", false, "Return immediately with dispatch ID, run worker in background")
@@ -1418,7 +1393,6 @@ func flagTakesValue(name string) bool {
 		"--add-dir",
 		"--limit",
 		"--status",
-		"--output", "-o",
 		"--older-than":
 		return true
 	default:

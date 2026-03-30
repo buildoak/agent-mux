@@ -1861,30 +1861,6 @@ role = "missing-role"
 	}
 }
 
-func TestOutputFlagDefault(t *testing.T) {
-	fs, parsed := newFlagSet(nil)
-	if err := fs.Parse([]string{"--engine", "codex", "hello"}); err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-	flags := *parsed
-
-	if flags.output != "json" {
-		t.Errorf("output default = %q, want %q", flags.output, "json")
-	}
-}
-
-func TestOutputFlagText(t *testing.T) {
-	fs, parsed := newFlagSet(nil)
-	if err := fs.Parse([]string{"--output", "text", "--engine", "codex", "hello"}); err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-	flags := *parsed
-
-	if flags.output != "text" {
-		t.Errorf("output = %q, want %q", flags.output, "text")
-	}
-}
-
 func TestVerboseFlagDefault(t *testing.T) {
 	fs, parsed := newFlagSet(nil)
 	if err := fs.Parse([]string{"--engine", "codex", "hello"}); err != nil {
@@ -1909,53 +1885,6 @@ func TestVerboseFlagSet(t *testing.T) {
 	}
 }
 
-func TestWriteTextResult(t *testing.T) {
-	var buf bytes.Buffer
-	result := &types.DispatchResult{
-		Status:     "completed",
-		Response:   "Done building the parser.",
-		DurationMS: 1234,
-		Metadata: &types.DispatchMetadata{
-			Engine: "codex",
-			Model:  "gpt-5.4",
-			Tokens: &types.TokenUsage{Input: 1000, Output: 200},
-		},
-	}
-	writeTextResult(&buf, result)
-	out := buf.String()
-
-	if !strings.Contains(out, "Status: completed") {
-		t.Errorf("missing status in output: %q", out)
-	}
-	if !strings.Contains(out, "Done building the parser.") {
-		t.Errorf("missing response in output: %q", out)
-	}
-	if !strings.Contains(out, "codex") {
-		t.Errorf("missing engine in output: %q", out)
-	}
-}
-
-func TestWriteTextResultError(t *testing.T) {
-	var buf bytes.Buffer
-	result := &types.DispatchResult{
-		Status: "failed",
-		Error: &types.DispatchError{
-			Code:       "model_not_found",
-			Message:    "Model 'gpt-99' not available",
-			Suggestion: "Use gpt-5.4 instead",
-		},
-		DurationMS: 100,
-	}
-	writeTextResult(&buf, result)
-	out := buf.String()
-
-	if !strings.Contains(out, "model_not_found") {
-		t.Errorf("missing error code: %q", out)
-	}
-	if !strings.Contains(out, "gpt-5.4") {
-		t.Errorf("missing suggestion: %q", out)
-	}
-}
 
 func TestRunPrependsContextFilePreamble(t *testing.T) {
 	isolateHome(t)
