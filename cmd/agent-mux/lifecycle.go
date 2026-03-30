@@ -15,6 +15,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
@@ -771,15 +772,21 @@ func showResult(dispatchID string, record *store.DispatchRecord, jsonOutput, sho
 }
 
 // runWaitCommand blocks until a dispatch completes, emitting periodic status lines.
+//
+// Poll interval precedence: CLI --poll flag > config.toml [async].poll_interval > 60s default.
 func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 	var flagOutput bytes.Buffer
 	fs := flag.NewFlagSet("agent-mux wait", flag.ContinueOnError)
 	fs.SetOutput(&flagOutput)
 
 	jsonOutput := false
-	pollInterval := "5s"
+	pollInterval := ""
+	configPath := ""
+	cwd := ""
 	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON result when done")
-	fs.StringVar(&pollInterval, "poll", pollInterval, "Status line interval (e.g., 5s, 10s)")
+	fs.StringVar(&pollInterval, "poll", "", "Status poll interval (e.g., 60s, 5m). Default: 60s or [async].poll_interval from config")
+	fs.StringVar(&configPath, "config", "", "Override config path")
+	fs.StringVar(&cwd, "cwd", "", "Working directory for project config discovery")
 
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
 		return handleLifecycleParseError(stdout, &flagOutput, err)
@@ -793,9 +800,18 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", idPrefix, err), "")
 	}
 
-	interval, err := time.ParseDuration(pollInterval)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid poll interval %q: %v", pollInterval, err), "Use Go duration format: 5s, 10s, 1m.")
+	// Resolve poll interval: CLI flag > config > hardcoded default.
+	interval := config.DefaultAsyncPollInterval
+	if strings.TrimSpace(pollInterval) == "" {
+		// No CLI flag — try config.
+		cfg, _ := config.LoadConfig(configPath, cwd)
+		interval = config.AsyncPollInterval(cfg)
+	} else {
+		var err error
+		interval, err = time.ParseDuration(pollInterval)
+		if err != nil {
+			return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid poll interval %q: %v", pollInterval, err), "Use Go duration format: 5s, 10s, 1m.")
+		}
 	}
 	if interval < 1*time.Second {
 		interval = 1 * time.Second

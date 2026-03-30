@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -828,5 +829,64 @@ func TestTimeoutForEffort(t *testing.T) {
 	}
 	if got := TimeoutForEffort(cfg, "unknown"); got != 30 {
 		t.Fatalf("TimeoutForEffort(unknown) = %d, want fallback %d", got, 30)
+	}
+}
+
+func TestAsyncPollIntervalDefaults(t *testing.T) {
+	// nil config returns hardcoded default.
+	if got := AsyncPollInterval(nil); got != DefaultAsyncPollInterval {
+		t.Fatalf("AsyncPollInterval(nil) = %v, want %v", got, DefaultAsyncPollInterval)
+	}
+	// Empty config returns hardcoded default.
+	cfg := DefaultConfig()
+	if got := AsyncPollInterval(cfg); got != DefaultAsyncPollInterval {
+		t.Fatalf("AsyncPollInterval(empty) = %v, want %v", got, DefaultAsyncPollInterval)
+	}
+}
+
+func TestAsyncPollIntervalFromConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Async.PollInterval = "10s"
+	got := AsyncPollInterval(cfg)
+	if got != 10*time.Second {
+		t.Fatalf("AsyncPollInterval(10s) = %v, want 10s", got)
+	}
+}
+
+func TestAsyncPollIntervalInvalidFallback(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Async.PollInterval = "not-a-duration"
+	got := AsyncPollInterval(cfg)
+	if got != DefaultAsyncPollInterval {
+		t.Fatalf("AsyncPollInterval(invalid) = %v, want default %v", got, DefaultAsyncPollInterval)
+	}
+}
+
+func TestAsyncPollIntervalMinimum(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Async.PollInterval = "100ms"
+	got := AsyncPollInterval(cfg)
+	// Sub-second values should fall back to default.
+	if got != DefaultAsyncPollInterval {
+		t.Fatalf("AsyncPollInterval(100ms) = %v, want default %v (sub-second rejected)", got, DefaultAsyncPollInterval)
+	}
+}
+
+func TestAsyncPollIntervalMerge(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[async]\npoll_interval = \"30s\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(cfgPath, "")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Async.PollInterval != "30s" {
+		t.Fatalf("Async.PollInterval = %q, want %q", cfg.Async.PollInterval, "30s")
+	}
+	got := AsyncPollInterval(cfg)
+	if got != 30*time.Second {
+		t.Fatalf("AsyncPollInterval = %v, want 30s", got)
 	}
 }

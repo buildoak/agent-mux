@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/buildoak/agent-mux/internal/pipeline"
@@ -21,6 +22,7 @@ type Config struct {
 	Liveness  LivenessConfig                     `toml:"liveness"`
 	Timeout   TimeoutConfig                      `toml:"timeout"`
 	Hooks     HooksConfig                        `toml:"hooks"`
+	Async     AsyncConfig                        `toml:"async"`
 
 	meta *toml.MetaData
 }
@@ -78,6 +80,10 @@ type HooksConfig struct {
 	Deny            []string `toml:"deny"`
 	Warn            []string `toml:"warn"`
 	EventDenyAction string   `toml:"event_deny_action"`
+}
+
+type AsyncConfig struct {
+	PollInterval string `toml:"poll_interval"`
 }
 
 type ValidationError struct {
@@ -248,6 +254,8 @@ func mergeConfig(base, overlay *Config) {
 		base.Hooks.Warn = deduplicateStrings(append(base.Hooks.Warn, overlay.Hooks.Warn...))
 	}
 	merge(&base.Hooks.EventDenyAction, overlay.Hooks.EventDenyAction, overlay.defined("hooks", "event_deny_action"))
+
+	merge(&base.Async.PollInterval, overlay.Async.PollInterval, overlay.defined("async", "poll_interval"))
 }
 
 func ResolveRole(cfg *Config, roleName string) (*RoleConfig, error) {
@@ -287,6 +295,27 @@ func TimeoutForEffort(cfg *Config, effort string) int {
 	default:
 		return cfg.Timeout.High
 	}
+}
+
+// DefaultAsyncPollInterval is the hardcoded default when neither CLI flag
+// nor config.toml provides a value.
+const DefaultAsyncPollInterval = 60 * time.Second
+
+// AsyncPollInterval returns the poll interval from [async].poll_interval in
+// config.toml, falling back to DefaultAsyncPollInterval if unset or invalid.
+func AsyncPollInterval(cfg *Config) time.Duration {
+	if cfg == nil {
+		return DefaultAsyncPollInterval
+	}
+	raw := strings.TrimSpace(cfg.Async.PollInterval)
+	if raw == "" {
+		return DefaultAsyncPollInterval
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 1*time.Second {
+		return DefaultAsyncPollInterval
+	}
+	return d
 }
 
 func configPaths(configPath string, cwd string) ([]string, error) {

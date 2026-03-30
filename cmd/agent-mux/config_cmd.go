@@ -423,6 +423,10 @@ func configToJSONMap(cfg *config.Config) (map[string]any, error) {
 		"event_deny_action": cfg.Hooks.EventDenyAction,
 	}
 
+	async := map[string]any{
+		"poll_interval": cfg.Async.PollInterval,
+	}
+
 	m := map[string]any{
 		"defaults":  defaults,
 		"models":    cfg.Models,
@@ -431,6 +435,7 @@ func configToJSONMap(cfg *config.Config) (map[string]any, error) {
 		"timeout":   timeout,
 		"liveness":  liveness,
 		"hooks":     hooks,
+		"async":     async,
 	}
 	return m, nil
 }
