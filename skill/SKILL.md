@@ -73,9 +73,12 @@ EOF
 agent-mux --stdin --async < /tmp/spec.json 2>/dev/null
 ```
 
-**Codex workers:** Omit `-sandbox` — the default (`danger-full-access`) gives
-full file access. Avoid `workspace-write` for multi-file output (known
-persistence issues). Use `-C=` to scope the working directory instead.
+**Codex workers:** Omit `--sandbox` — the default (`danger-full-access`) maps
+to `--dangerously-bypass-approvals-and-sandbox`, giving full filesystem access.
+Network is separate: pass `--network`/`-n` when the worker needs internet
+(e.g., `go get`, `npm install`, API calls) — Codex runs offline by default.
+Avoid `workspace-write` for multi-file output (known persistence issues).
+Use `-C=` to scope the working directory instead.
 
 ### Steer mid-flight
 ```bash
@@ -100,9 +103,10 @@ Roles: `architect`, `researcher`. Watch for: skipping validation, over-abstracti
 **Codex** executes precision. Implementation, debugging, focused audits. Needs
 surgical scope — one goal, specific files, explicit gate. Roles: `lifter`,
 `auditor`, `scout`. Watch for: paralysis on underspecified prompts.
-**Sandbox note:** Omit `-sandbox` to use the default (`danger-full-access`).
-Avoid `workspace-write` for multi-file output — it has known persistence
-issues. Restrict scope with `-C=` instead.
+**Sandbox:** Omit `--sandbox` — default is `danger-full-access` (full filesystem).
+Pass `--network`/`-n` when the worker needs internet access (e.g., `go get`,
+`npm install`, API calls). Avoid `workspace-write` for multi-file output —
+known persistence issues. Restrict scope with `-C=` instead.
 
 **Gemini** provides contrast. Different training, different blind spots. Use as
 second opinion or challenge probe. All variants are reasoning-only on this
@@ -200,9 +204,18 @@ Codex output quality is a direct function of prompt specificity. Rules:
 3. **One deliverable.** "Write X to Y" or "modify Z in W". Not "audit and fix."
 4. **Word budget.** "3-sentence summary" or "file path + verdict only."
 5. **State the verification gate.** How the worker proves it's done.
-6. **Use `-context-file=<path>` for bulk.** Always use `=` for string flags
-   to avoid Go flag parser ambiguity. Don't inline giant specs into the prompt.
-7. **Pass `--network`/`-n` for web access.** Codex sandbox is offline by default.
+6. **Use `=` for all string-value flags.** `-context-file=/path`, `-C=/repo`,
+   `--sandbox=read-only`. Space-separated form (`-context-file /path`) can
+   cause Go's flag parser to consume the next flag as the value. Always `=`.
+7. **Flags before positional args.** `agent-mux wait --poll 30s <id>`, not
+   `agent-mux wait <id> --poll 30s`. Go's flag parser stops at the first
+   positional argument — trailing flags are silently ignored.
+8. **Pass `--network`/`-n` for web access.** Codex sandbox is offline by default.
+9. **Escape `$AGENT_MUX_ARTIFACT_DIR` in prompts.** This env var is set in
+   the *worker's* environment, not the coordinator's. If your prompt is in
+   double quotes, the coordinator's shell expands it to empty before the
+   worker ever sees it. Fix: use `\$AGENT_MUX_ARTIFACT_DIR` or single-quote
+   the prompt block.
 
 BAD: `"Read all files in src/auth/ and identify issues"`
 GOOD: `"In src/auth/middleware.go:45-80, validateToken() doesn't handle expired
@@ -226,11 +239,19 @@ Roles set their own timeouts. Check with `agent-mux config roles`.
 - **Raw engine/model/effort when a role fits.** Roles exist. Use them.
 - **Exploration prompts to Codex.** Use Claude for open-ended work.
 - **Codex with `workspace-write` sandbox for multi-file output.** Omit
-  `-sandbox` (default is full-access) and use `-C=` for scope control.
+  `--sandbox` (default is `danger-full-access`) and use `-C=` for scope control.
+- **`--sandbox none`.** Not a valid value. Valid: `danger-full-access`,
+  `workspace-write`, `read-only`. Omit the flag entirely for full access.
 - **Wrapper timeout == worker timeout.** Add 60s slack.
 - **Ignoring `status` field.** `timed_out` is not `completed`.
 - **Synchronous dispatch from Claude Code coordinators.** Use `--async`.
 - **Polling `steer status` in a loop for completion.** Use `wait`.
+- **Space-separated string flags.** `-context-file /path` can eat adjacent
+  flags. Always use `=`: `-context-file=/path`.
+- **Flags after positional args.** `wait <id> --poll 30s` silently ignores
+  `--poll`. Put flags first: `wait --poll 30s <id>`.
+- **Unescaped `$AGENT_MUX_ARTIFACT_DIR` in double-quoted prompts.** Expands
+  to empty in the coordinator's shell. Use `\$` or single quotes.
 
 ## Reference Index
 
