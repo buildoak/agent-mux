@@ -1281,6 +1281,88 @@ done:
 	}
 }
 
+func TestFM7ProcessExitRaceFinalResponseCaptured(t *testing.T) {
+	// FM-7: When the harness process exits immediately after emitting the final
+	// RESPONSE line, the scanner goroutine may not have pushed the signal to the
+	// channel before drainCurrentSignals runs on the procDone path. The fix adds
+	// a second drain after <-streamDone.  This test verifies the response is
+	// captured even when it races with process exit.
+	//
+	// Strategy: the script sleeps briefly so procDone fires before the scanner
+	// goroutine finishes pushing the RESPONSE signal.  We repeat the test several
+	// times to increase the chance of hitting the race window.
+	for i := 0; i < 5; i++ {
+		t.Run(fmt.Sprintf("iteration_%d", i), func(t *testing.T) {
+			artifactDir := t.TempDir()
+			adp := newScriptedAdapter(strings.Join([]string{
+				"echo 'SESSION:fm7-race'",
+				"echo 'PROGRESS:working'",
+				// Emit the RESPONSE and immediately exit — this creates
+				// the race between procDone and the scanner goroutine
+				// pushing the EventResponse signal.
+				"echo 'RESPONSE:final-answer-fm7'",
+			}, "\n"))
+			adp.supportsResume = false
+
+			spec := testDispatchSpec(artifactDir)
+			engine := NewLoopEngine(adp, io.Discard, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			result, err := engine.Dispatch(ctx, spec)
+			if err != nil {
+				t.Fatalf("Dispatch: %v", err)
+			}
+			if result.Status != types.StatusCompleted {
+				t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+			}
+			if result.Response != "final-answer-fm7" {
+				t.Fatalf("response = %q, want final-answer-fm7 (FM-7 race lost)", result.Response)
+			}
+		})
+	}
+}
+
+func TestFM9FailedDispatchPreservesPartialResponse(t *testing.T) {
+	// FM-9: When a dispatch fails after accumulating a partial response,
+	// the DispatchResult should include that response instead of empty string.
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	adp := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:fm9-partial'",
+		"echo 'RESPONSE:partial work done'",
+		"echo 'ERROR:test_error:simulated failure'",
+		"exit 1",
+	}, "\n"))
+	adp.supportsResume = false
+
+	spec := testDispatchSpec(artifactDir)
+	engine := NewLoopEngine(adp, io.Discard, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Response != "partial work done" {
+		t.Fatalf("response = %q, want 'partial work done' (FM-9: partial response should be preserved)", result.Response)
+	}
+
+	// Also verify the response was persisted to the store.
+	storedResponse, readErr := store.ReadResult("", spec.DispatchID)
+	if readErr != nil {
+		t.Fatalf("ReadResult: %v", readErr)
+	}
+	if storedResponse != "partial work done" {
+		t.Fatalf("stored response = %q, want 'partial work done'", storedResponse)
+	}
+}
+
 func writeSoftSteerFIFO(t *testing.T, artifactDir, action, message string) {
 	t.Helper()
 

@@ -741,6 +741,7 @@ func buildFailedResult(spec *types.DispatchSpec, code, msg, suggestion string) *
 	}
 	return dispatch.BuildFailedResult(
 		spec,
+		"",
 		dispatch.NewDispatchError(code, msg, suggestion),
 		&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 		&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
@@ -1116,6 +1117,7 @@ func previewExcerpt(text string, maxRunes int) (string, bool) {
 func buildCancelledResult(spec *types.DispatchSpec) *types.DispatchResult {
 	return dispatch.BuildFailedResult(
 		spec,
+		"",
 		dispatch.NewDispatchError("cancelled", "Dispatch cancelled at confirmation prompt before launch.", "Re-run with --yes to skip preview and confirmation."),
 		&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 		&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
@@ -1472,6 +1474,7 @@ func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseS
 		if err != nil {
 			return dispatch.BuildFailedResult(
 				spec,
+				"",
 				dispatch.NewDispatchError("startup_failed", err.Error(), ""),
 				&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 				&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}, PipelineID: spec.PipelineID, ParentDispatchID: spec.ParentDispatchID},
@@ -1496,6 +1499,7 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 	if err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
+			"",
 			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]"),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
@@ -1511,6 +1515,7 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 		}
 		return dispatch.BuildFailedResult(
 			spec,
+			"",
 			dispatch.NewDispatchError("model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
@@ -1521,6 +1526,7 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
+			"",
 			dispatch.NewDispatchError("artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
@@ -1530,6 +1536,7 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 	if err := recovery.RegisterDispatchSpec(spec); err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
+			"",
 			dispatch.NewDispatchError("config_error", fmt.Sprintf("Register control path for dispatch %q: %v", spec.DispatchID, err), "Ensure the control path is writable."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},

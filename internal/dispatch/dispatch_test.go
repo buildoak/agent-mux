@@ -378,7 +378,7 @@ func TestBuildFailedResult(t *testing.T) {
 	}
 	dispatchErr := NewDispatchError("model_not_found", "Model not found.", "Try gpt-5.4")
 
-	result := BuildFailedResult(spec, dispatchErr, activity, metadata, 430)
+	result := BuildFailedResult(spec, "", dispatchErr, activity, metadata, 430)
 
 	if result.Status != types.StatusFailed {
 		t.Errorf("status = %q, want failed", result.Status)
