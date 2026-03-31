@@ -93,33 +93,42 @@ func WriteResult(storePath string, dispatchID string, response string) error {
 	}
 
 	// FM-8: Atomic write via tmp+fsync+rename so a mid-write kill cannot
-	// corrupt the result file.
+	// corrupt the result file. Use os.CreateTemp for a unique temp name so
+	// concurrent or retried writes never collide on the same .tmp path.
 	resultPath := filepath.Join(resultsDir, dispatchID+".md")
-	tmpPath := resultPath + ".tmp"
 
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, storeFilePerm)
+	f, err := os.CreateTemp(resultsDir, dispatchID+".md.tmp.*")
 	if err != nil {
 		return fmt.Errorf("open result temp: %w", err)
 	}
+	tmpPath := f.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
 	if _, err := f.Write([]byte(response)); err != nil {
 		_ = f.Close()
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write result temp: %w", err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("sync result temp: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("close result temp: %w", err)
+	}
+	// Match target permissions before rename.
+	if err := os.Chmod(tmpPath, storeFilePerm); err != nil {
+		return fmt.Errorf("chmod result temp: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, resultPath); err != nil {
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename result temp: %w", err)
 	}
+	renamed = true
 	return nil
 }
 

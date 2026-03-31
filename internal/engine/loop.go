@@ -942,7 +942,7 @@ func buildFailureResult(spec *types.DispatchSpec, metadata *types.DispatchMetada
 		_ = emitter.EmitDispatchEnd("failed", durationMS)
 	}
 	result := dispatch.BuildFailedResult(spec, "", dispatch.NewDispatchError(code, message, suggestion), emptyActivity(), metadata, durationMS)
-	persistDispatchRecord(spec, result, "")
+	persistDispatchRecord(spec, result, "", emitter)
 	return result
 }
 
@@ -950,14 +950,16 @@ func emptyActivity() *types.DispatchActivity {
 	return &types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}}
 }
 
-func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, attemptedState string, err error, priorErr *types.DispatchError) *types.DispatchResult {
+func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, attemptedState string, err error, priorErr *types.DispatchError, response string) *types.DispatchResult {
 	message := fmt.Sprintf("Persist %s dispatch metadata in %q: %v", attemptedState, spec.ArtifactDir, err)
 	if priorErr != nil && strings.TrimSpace(priorErr.Message) != "" {
 		message += fmt.Sprintf(" Original dispatch error: %s", priorErr.Message)
 	}
 	dispatchErr := dispatch.NewDispatchError("artifact_dir_unwritable", message, "Ensure the artifact directory is writable.")
 	dispatchErr.PartialArtifacts = dispatch.ScanArtifacts(spec.ArtifactDir)
-	return dispatch.BuildFailedResult(spec, "", dispatchErr, activity, metadata, durationMS)
+	// FM-9: Preserve accumulated partial response so callers can see what
+	// the worker accomplished even when the meta write fails.
+	return dispatch.BuildFailedResult(spec, response, dispatchErr, activity, metadata, durationMS)
 }
 
 func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
@@ -966,9 +968,9 @@ func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, respons
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
 		}
-		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "completed", err, nil)
+		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "completed", err, nil, response)
 		// FM-15: Write status.json AFTER persistDispatchRecord.
-		persistDispatchRecord(spec, failureResult, response)
+		persistDispatchRecord(spec, failureResult, response, emitter)
 		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 			State:          "failed",
 			ElapsedS:       int(durationMS / 1000),
@@ -982,7 +984,7 @@ func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, respons
 	}
 	// FM-15: Write status.json AFTER persistDispatchRecord so pollers
 	// never see "completed" before the store record exists.
-	persistDispatchRecord(spec, result, response)
+	persistDispatchRecord(spec, result, response, emitter)
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 		State:          "completed",
 		ElapsedS:       int(durationMS / 1000),
@@ -1007,9 +1009,9 @@ func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
 		}
-		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "timed_out", err, nil)
+		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "timed_out", err, nil, response)
 		// FM-15: Write status.json AFTER persistDispatchRecord.
-		persistDispatchRecord(spec, failureResult, response)
+		persistDispatchRecord(spec, failureResult, response, emitter)
 		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 			State:          "failed",
 			ElapsedS:       int(durationMS / 1000),
@@ -1022,7 +1024,7 @@ func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response
 		return failureResult
 	}
 	// FM-15: Write status.json AFTER persistDispatchRecord.
-	persistDispatchRecord(spec, result, response)
+	persistDispatchRecord(spec, result, response, emitter)
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 		State:          "timed_out",
 		ElapsedS:       int(durationMS / 1000),
@@ -1045,9 +1047,9 @@ func finalizeFailed(spec *types.DispatchSpec, emitter *event.Emitter, response s
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
 		}
-		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "failed", err, dispErr)
+		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "failed", err, dispErr, response)
 		// FM-15: Write status.json AFTER persistDispatchRecord.
-		persistDispatchRecord(spec, failureResult, response)
+		persistDispatchRecord(spec, failureResult, response, emitter)
 		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 			State:          "failed",
 			ElapsedS:       int(durationMS / 1000),
@@ -1061,7 +1063,7 @@ func finalizeFailed(spec *types.DispatchSpec, emitter *event.Emitter, response s
 	}
 	dispErr.PartialArtifacts = result.Artifacts
 	// FM-15: Write status.json AFTER persistDispatchRecord.
-	persistDispatchRecord(spec, result, response)
+	persistDispatchRecord(spec, result, response, emitter)
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 		State:          "failed",
 		ElapsedS:       int(durationMS / 1000),
@@ -1077,7 +1079,7 @@ func finalizeFailed(spec *types.DispatchSpec, emitter *event.Emitter, response s
 	return result
 }
 
-func persistDispatchRecord(spec *types.DispatchSpec, result *types.DispatchResult, responseText string) {
+func persistDispatchRecord(spec *types.DispatchSpec, result *types.DispatchResult, responseText string, emitter *event.Emitter) {
 	if spec == nil || result == nil {
 		return
 	}
@@ -1101,8 +1103,30 @@ func persistDispatchRecord(spec *types.DispatchSpec, result *types.DispatchResul
 		ArtifactDir:   spec.ArtifactDir,
 	}
 
-	_ = store.AppendRecord("", record)
-	_ = store.WriteResult("", record.ID, responseText)
+	// FM-15: Log store errors as warnings rather than silently discarding.
+	if err := store.AppendRecord("", record); err != nil {
+		if emitter != nil {
+			_ = emitter.Emit(event.Event{
+				Type:      "warning",
+				ErrorCode: "store_append_failed",
+				Message:   fmt.Sprintf("Persist dispatch record: %v", err),
+			})
+		}
+	}
+	if err := store.WriteResult("", record.ID, responseText); err != nil {
+		if emitter != nil {
+			_ = emitter.Emit(event.Event{
+				Type:      "warning",
+				ErrorCode: "store_write_result_failed",
+				Message:   fmt.Sprintf("Persist dispatch result: %v", err),
+			})
+		}
+		// Fallback: write response to full_output.md in the artifact dir so
+		// it remains recoverable even when the store result file fails.
+		if responseText != "" && spec.ArtifactDir != "" {
+			_, _ = dispatch.WriteFullOutput(spec.ArtifactDir, responseText)
+		}
+	}
 }
 
 func dispatchWindow(artifactDir string, durationMS int64) (string, string) {
