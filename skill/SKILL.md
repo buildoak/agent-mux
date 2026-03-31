@@ -74,11 +74,9 @@ agent-mux --stdin --async < /tmp/spec.json 2>/dev/null
 ```
 
 **Codex workers:** Omit `--sandbox` — the default (`danger-full-access`) maps
-to `--dangerously-bypass-approvals-and-sandbox`, giving full filesystem access.
-Network is separate: pass `--network`/`-n` when the worker needs internet
-(e.g., `go get`, `npm install`, API calls) — Codex runs offline by default.
-Avoid `workspace-write` for multi-file output (known persistence issues).
-Use `-C=` to scope the working directory instead.
+to `--dangerously-bypass-approvals-and-sandbox`, giving full filesystem and
+network access. Avoid `workspace-write` for multi-file output (known
+persistence issues). Use `-C=` to scope the working directory instead.
 
 ### Steer mid-flight
 ```bash
@@ -103,10 +101,9 @@ Roles: `architect`, `researcher`. Watch for: skipping validation, over-abstracti
 **Codex** executes precision. Implementation, debugging, focused audits. Needs
 surgical scope — one goal, specific files, explicit gate. Roles: `lifter`,
 `auditor`, `scout`. Watch for: paralysis on underspecified prompts.
-**Sandbox:** Omit `--sandbox` — default is `danger-full-access` (full filesystem).
-Pass `--network`/`-n` when the worker needs internet access (e.g., `go get`,
-`npm install`, API calls). Avoid `workspace-write` for multi-file output —
-known persistence issues. Restrict scope with `-C=` instead.
+**Sandbox:** Omit `--sandbox` — default is `danger-full-access` (full filesystem
+and network access). Avoid `workspace-write` for multi-file output — known
+persistence issues. Restrict scope with `-C=` instead.
 
 **Gemini** provides contrast. Different training, different blind spots. Use as
 second opinion or challenge probe. All variants are reasoning-only on this
@@ -184,7 +181,7 @@ status?
  timed_out + heartbeat_count == 0
    -> Worker never started. Config error. Check and retry once.
  failed + error.retryable
-   -> Fix cause (wrong flag, missing --network). Retry ONCE.
+   -> Fix cause (wrong flag, missing arg). Retry ONCE.
  failed + not retryable
    -> Structural. Escalate.
  Second failure on same step
@@ -210,8 +207,7 @@ Codex output quality is a direct function of prompt specificity. Rules:
 7. **Flags before positional args.** `agent-mux wait --poll 30s <id>`, not
    `agent-mux wait <id> --poll 30s`. Go's flag parser stops at the first
    positional argument — trailing flags are silently ignored.
-8. **Pass `--network`/`-n` for web access.** Codex sandbox is offline by default.
-9. **Escape `$AGENT_MUX_ARTIFACT_DIR` in prompts.** This env var is set in
+8. **Escape `$AGENT_MUX_ARTIFACT_DIR` in prompts.** This env var is set in
    the *worker's* environment, not the coordinator's. If your prompt is in
    double quotes, the coordinator's shell expands it to empty before the
    worker ever sees it. Fix: use `\$AGENT_MUX_ARTIFACT_DIR` or single-quote
