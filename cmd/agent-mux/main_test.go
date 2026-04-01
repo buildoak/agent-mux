@@ -357,8 +357,8 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	if preview.Control.ArtifactDir != artifactDir {
 		t.Fatalf("control.artifact_dir = %q, want %q", preview.Control.ArtifactDir, artifactDir)
 	}
-	if preview.DispatchSpec.ResponseMaxChars != 0 {
-		t.Fatalf("dispatch_spec.response_max_chars = %d, want 0", preview.DispatchSpec.ResponseMaxChars)
+	if preview.DispatchSpec.ResponseMaxChars != 128000 {
+		t.Fatalf("dispatch_spec.response_max_chars = %d, want 128000", preview.DispatchSpec.ResponseMaxChars)
 	}
 	if len(preview.PromptPreamble) != 3 {
 		t.Fatalf("prompt_preamble len = %d, want 3 (%v)", len(preview.PromptPreamble), preview.PromptPreamble)

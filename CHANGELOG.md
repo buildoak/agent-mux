@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Dispatch-layer response budget restored** — terminal results now enforce a uniform `128000` character cap from `spec.ResponseMaxChars` across completed, timed-out, and failed dispatches. Oversized bodies spill to `full_output.md`, keep `full_output=null`, set `response_truncated=true`, and preserve `handoff_summary` from the full response.
+- **Pipeline artifact preservation on truncated dispatches** — pipeline workers now materialize `output.md` from spilled full output when present, so handoff stays short while on-disk worker output remains complete.
+- **Scout oversized-output guardrail** — scout prompt now routes broad findings to `$AGENT_MUX_ARTIFACT_DIR/scout-findings.md` before the dispatch-layer spill fallback engages.
+
+### Changed
+
+- **Default response budget** — `[defaults].response_max_chars` now defaults to `128000`. Explicit CLI or stdin `response_max_chars=0` still disables capping.
+
 ## [3.2.2] - 2026-03-31
 
 ### Fixed

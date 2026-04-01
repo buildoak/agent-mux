@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/buildoak/agent-mux/internal/types"
 )
@@ -275,7 +276,7 @@ func TestBuildCompletedResult(t *testing.T) {
 		Tokens: &types.TokenUsage{Input: 100, Output: 50},
 	}
 
-	result := BuildCompletedResult(spec, "Done.", activity, metadata, 5000, 0)
+	result := BuildCompletedResult(spec, "Done.", activity, metadata, 5000)
 
 	if result.Status != types.StatusCompleted {
 		t.Errorf("status = %q, want completed", result.Status)
@@ -294,13 +295,14 @@ func TestBuildCompletedResult(t *testing.T) {
 	}
 }
 
-func TestBuildCompletedResultNeverTruncates(t *testing.T) {
+func TestBuildCompletedResultSpillsOversizedResponse(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
-		DispatchID:  "01JQXYZ",
-		Salt:        "coral-fox-nine",
-		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
-		ArtifactDir: dir,
+		DispatchID:       "01JQXYZ",
+		Salt:             "coral-fox-nine",
+		TraceToken:       "AGENT_MUX_GO_01JQXYZ",
+		ArtifactDir:      dir,
+		ResponseMaxChars: 20,
 	}
 	activity := &types.DispatchActivity{
 		FilesChanged: []string{},
@@ -315,14 +317,26 @@ func TestBuildCompletedResultNeverTruncates(t *testing.T) {
 	}
 	response := "First sentence. Second sentence. Third sentence."
 
-	// Even with a small responseMaxChars, truncation no longer happens
-	result := BuildCompletedResult(spec, response, activity, metadata, 5000, 20)
+	result := BuildCompletedResult(spec, response, activity, metadata, 5000)
 
-	if result.ResponseTruncated {
-		t.Fatal("response_truncated = true, want false (truncation removed)")
+	if !result.ResponseTruncated {
+		t.Fatal("response_truncated = false, want true")
 	}
-	if result.Response != response {
-		t.Fatalf("response = %q, want full response %q", result.Response, response)
+	if result.FullOutputPath == nil {
+		t.Fatal("full_output_path = nil, want path")
+	}
+	if result.Response == response {
+		t.Fatalf("response = %q, want truncated response", result.Response)
+	}
+	if utf8.RuneCountInString(result.Response) > spec.ResponseMaxChars {
+		t.Fatalf("response rune count = %d, want <= %d", utf8.RuneCountInString(result.Response), spec.ResponseMaxChars)
+	}
+	data, err := os.ReadFile(*result.FullOutputPath)
+	if err != nil {
+		t.Fatalf("ReadFile(full_output_path): %v", err)
+	}
+	if string(data) != response {
+		t.Fatalf("full_output.md = %q, want %q", string(data), response)
 	}
 }
 
@@ -388,6 +402,66 @@ func TestBuildFailedResult(t *testing.T) {
 	}
 	if result.Error.Code != "model_not_found" {
 		t.Errorf("error.code = %q, want model_not_found", result.Error.Code)
+	}
+}
+
+func TestBuildTimedOutResultSpillsOversizedResponse(t *testing.T) {
+	dir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID:       "01JQXYZ",
+		Salt:             "coral-fox-nine",
+		TraceToken:       "AGENT_MUX_GO_01JQXYZ",
+		ArtifactDir:      dir,
+		ResponseMaxChars: 10,
+	}
+	activity := &types.DispatchActivity{}
+	metadata := &types.DispatchMetadata{Engine: "codex", Tokens: &types.TokenUsage{}}
+
+	result := BuildTimedOutResult(spec, "1234567890\nabcdefghij", "Soft timeout at 600s.", activity, metadata, 660000)
+
+	if !result.ResponseTruncated {
+		t.Fatal("response_truncated = false, want true")
+	}
+	if result.FullOutputPath == nil {
+		t.Fatal("full_output_path = nil, want path")
+	}
+}
+
+func TestBuildFailedResultSpillsOversizedResponseAndKeepsFullSummary(t *testing.T) {
+	dir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID:       "01JQXYZ",
+		Salt:             "coral-fox-nine",
+		TraceToken:       "AGENT_MUX_GO_01JQXYZ",
+		ArtifactDir:      dir,
+		ResponseMaxChars: 12,
+	}
+	activity := &types.DispatchActivity{}
+	metadata := &types.DispatchMetadata{Engine: "codex", Tokens: &types.TokenUsage{}}
+	dispatchErr := NewDispatchError("internal_error", "", "")
+	response := "## Summary\nunicode canary: 你好 alpha beta gamma.\n## Details\nmore"
+
+	result := BuildFailedResult(spec, response, dispatchErr, activity, metadata, 430)
+
+	if !result.ResponseTruncated {
+		t.Fatal("response_truncated = false, want true")
+	}
+	if !strings.Contains(result.HandoffSummary, "unicode canary: 你好") {
+		t.Fatalf("handoff_summary = %q, want summary from full response", result.HandoffSummary)
+	}
+	if !utf8.ValidString(result.Response) {
+		t.Fatalf("response = %q, want valid UTF-8", result.Response)
+	}
+}
+
+func TestTruncateAtBoundaryIsRuneSafe(t *testing.T) {
+	input := "你好世界。\nSecond line."
+	got := truncateAtBoundary(input, 3)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateAtBoundary returned invalid UTF-8: %q", got)
+	}
+	if utf8.RuneCountInString(got) > 3 {
+		t.Fatalf("rune count = %d, want <= 3", utf8.RuneCountInString(got))
 	}
 }
 

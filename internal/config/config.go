@@ -113,7 +113,7 @@ func DefaultConfig() *Config {
 			Effort:           "high",
 			Sandbox:          "danger-full-access",
 			PermissionMode:   "",
-			ResponseMaxChars: 0,
+			ResponseMaxChars: 128000,
 			MaxDepth:         2,
 			AllowSubdispatch: true,
 		},

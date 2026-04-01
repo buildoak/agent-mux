@@ -245,7 +245,13 @@ func resultToWorkerResult(r *types.DispatchResult, idx int, spec *types.Dispatch
 
 	if wr.Status != WorkerFailed && r.Response != "" {
 		outputFile := filepath.Join(spec.ArtifactDir, "output.md")
-		if err := os.WriteFile(outputFile, []byte(r.Response), 0o644); err == nil {
+		outputBody := []byte(r.Response)
+		if r.ResponseTruncated && r.FullOutputPath != nil {
+			if fullOutput, err := os.ReadFile(*r.FullOutputPath); err == nil {
+				outputBody = fullOutput
+			}
+		}
+		if err := os.WriteFile(outputFile, outputBody, 0o644); err == nil {
 			wr.OutputFile = outputFile
 		}
 	}

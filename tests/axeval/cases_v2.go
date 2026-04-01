@@ -174,7 +174,6 @@ func buildCasesV2(cwd string) []TestCase {
 			TimeoutSec:   120,
 			MaxWallClock: 3 * time.Minute,
 			SkipSkills:   true,
-			SkipReason:   "TODO: response truncation is currently disabled in dispatch result assembly; re-enable response_max_chars/full_output_path before asserting this contract.",
 			ExtraFlags:   []string{"--response-max-chars=200"},
 			Evaluate: compose(
 				statusIs("completed"),
@@ -205,6 +204,37 @@ func buildCasesV2(cwd string) []TestCase {
 						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("full output len=%d, want > 200", len(data))}
 					}
 					return Verdict{Pass: true, Score: 1.0, Reason: "full output file exists and exceeds 200 chars"}
+				},
+			),
+		},
+		{
+			Name:         "scout-oversized-output-guardrail",
+			Category:     CatCorrectness,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "Find every markdown file under the current directory and report the results.",
+			CWD:          cwd,
+			TimeoutSec:   120,
+			MaxWallClock: 3 * time.Minute,
+			SkipSkills:   true,
+			ExtraFlags:   []string{"-R=scout", "--response-max-chars=200"},
+			Evaluate: compose(
+				statusIs("completed"),
+				func(r Result) Verdict {
+					raw, err := stdoutJSONObject(r)
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
+					}
+					response, _ := jsonStringField(raw, "response")
+					if len(response) <= 200 {
+						return Verdict{Pass: true, Score: 1.0, Reason: "scout response stayed within cap"}
+					}
+					fullOutputPath, pathErr := fullOutputPathFromJSONObject(raw)
+					if pathErr == nil && fullOutputPath != "" {
+						return Verdict{Pass: true, Score: 1.0, Reason: "oversized scout response spilled to full_output.md"}
+					}
+					return Verdict{Pass: false, Score: 0.0, Reason: "scout response exceeded cap without spill path"}
 				},
 			),
 		},

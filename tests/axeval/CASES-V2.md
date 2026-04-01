@@ -12,7 +12,7 @@
 | Role resolution | partial | role-dispatch (verifies completion, not system prompt delivery) | System prompt silently dropped |
 | Variant resolution | **no** | — | Variant override silently ignored |
 | Profile resolution | **no** | — | Profile engine/model/timeout overrides broken |
-| response_max_chars truncation | **no** | — | Truncation broken, full_output.md not written |
+| response_max_chars truncation | yes | response-truncation | — |
 | --stdin JSON dispatch | **no** | — | Entire programmatic dispatch path broken |
 | --preview dry-run | **no** | — | Coordinators can't preview before dispatch |
 | **Worker Interaction** | | | |
@@ -25,7 +25,7 @@
 | **Output Handling** | | | |
 | Response capture | yes | all completion cases | — |
 | Artifact dir creation + _dispatch_meta.json | **no** | — | Metadata silently missing |
-| full_output.md fallback (via result cmd) | **no** | — | Large responses lost |
+| full_output.md fallback (via result cmd) | yes | response-truncation | — |
 | handoff_summary extraction | **no** | — | Pipeline handoffs get garbage |
 | Output contract schema fields | **no** | — | Callers get wrong JSON shape |
 | **Event System** | | | |

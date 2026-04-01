@@ -45,7 +45,7 @@ model = "gpt-5.4"
 effort = "high"
 sandbox = "danger-full-access"
 permission_mode = ""
-response_max_chars = 16000
+response_max_chars = 128000
 max_depth = 2
 allow_subdispatch = true
 
@@ -101,7 +101,7 @@ role = "lifter"
 | `effort` | string | `high` | Default effort level |
 | `sandbox` | string | `danger-full-access` | Codex sandbox mode |
 | `permission_mode` | string | - | Claude permission mode |
-| `response_max_chars` | int | 16000 | Truncation threshold |
+| `response_max_chars` | int | 128000 | Uniform dispatch response cap; `0` disables capping |
 | `max_depth` | int | 2 | Recursive dispatch limit |
 | `allow_subdispatch` | bool | true | Allow recursive dispatches |
 

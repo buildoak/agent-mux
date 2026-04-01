@@ -101,6 +101,46 @@ func TestExecutePipeline_FanOut(t *testing.T) {
 	}
 }
 
+func TestResultToWorkerResultUsesFullOutputWhenDispatchWasTruncated(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	spec := testBaseSpec(tmp)
+	spec.ArtifactDir = filepath.Join(tmp, "worker")
+	if err := os.MkdirAll(spec.ArtifactDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	fullOutputPath := filepath.Join(spec.ArtifactDir, "full_output.md")
+	if err := os.WriteFile(fullOutputPath, []byte("full worker output"), 0o644); err != nil {
+		t.Fatalf("WriteFile(full_output.md): %v", err)
+	}
+
+	wr := resultToWorkerResult(&types.DispatchResult{
+		Status:            types.StatusCompleted,
+		DispatchID:        "worker-dispatch",
+		Response:          "truncated",
+		ResponseTruncated: true,
+		FullOutputPath:    &fullOutputPath,
+		HandoffSummary:    "short summary",
+		DurationMS:        5,
+	}, 0, spec)
+
+	if wr.OutputFile == "" {
+		t.Fatal("output_file = empty, want path")
+	}
+	data, err := os.ReadFile(wr.OutputFile)
+	if err != nil {
+		t.Fatalf("ReadFile(output.md): %v", err)
+	}
+	if string(data) != "full worker output" {
+		t.Fatalf("output.md = %q, want full worker output", string(data))
+	}
+	if wr.Summary != "short summary" {
+		t.Fatalf("summary = %q, want %q", wr.Summary, "short summary")
+	}
+}
+
 func TestBuildWorkerSpecResetsPerDispatchTraceability(t *testing.T) {
 	tmp := t.TempDir()
 	baseSpec := testBaseSpec(tmp)

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/buildoak/agent-mux/internal/types"
 )
@@ -148,6 +149,14 @@ func WriteFullOutput(artifactDir, response string) (string, error) {
 	}
 	return absPath, nil
 }
+
+type terminalResponseShape struct {
+	Response          string
+	HandoffSummary    string
+	ResponseTruncated bool
+	FullOutputPath    *string
+}
+
 func ExtractHandoffSummary(response string, maxChars int) string {
 	if maxChars <= 0 {
 		maxChars = 2000
@@ -161,13 +170,13 @@ func ExtractHandoffSummary(response string, maxChars int) string {
 				section = section[:nextHeader]
 			}
 			section = strings.TrimSpace(section)
-			if len(section) > maxChars {
-				section = section[:maxChars]
+			if utf8.RuneCountInString(section) > maxChars {
+				section = truncateAtBoundary(section, maxChars)
 			}
 			return section
 		}
 	}
-	if len(response) <= maxChars {
+	if utf8.RuneCountInString(response) <= maxChars {
 		return response
 	}
 
@@ -438,14 +447,14 @@ func levenshtein(a, b string) int {
 
 	return prev[lb]
 }
-func BuildCompletedResult(spec *types.DispatchSpec, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, responseMaxChars int) *types.DispatchResult {
-	result := baseResult(spec, types.StatusCompleted, response, activity, metadata, durationMS)
+func BuildCompletedResult(spec *types.DispatchSpec, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := baseResult(spec, types.StatusCompleted, shapeTerminalResponse(spec, response), activity, metadata, durationMS)
 
 	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
 	return result
 }
 func BuildTimedOutResult(spec *types.DispatchSpec, response, reason string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := baseResult(spec, types.StatusTimedOut, response, activity, metadata, durationMS)
+	result := baseResult(spec, types.StatusTimedOut, shapeTerminalResponse(spec, response), activity, metadata, durationMS)
 	result.Partial = true
 	result.Recoverable = true
 	result.Reason = reason
@@ -455,7 +464,7 @@ func BuildTimedOutResult(spec *types.DispatchSpec, response, reason string, acti
 func BuildFailedResult(spec *types.DispatchSpec, response string, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	// FM-9: Include accumulated partial response so callers can see what the
 	// worker accomplished before failure.
-	result := baseResult(spec, types.StatusFailed, response, activity, metadata, durationMS)
+	result := baseResult(spec, types.StatusFailed, shapeTerminalResponse(spec, response), activity, metadata, durationMS)
 	if response == "" {
 		result.HandoffSummary = dispatchErr.Message
 	}
@@ -510,7 +519,14 @@ func writeMetaFile(path string, meta *DispatchMeta) error {
 }
 
 func truncateAtBoundary(s string, maxChars int) string {
-	truncated := s[:maxChars]
+	if maxChars <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= maxChars {
+		return s
+	}
+	truncated := string(runes[:maxChars])
 	lastBoundary := strings.LastIndexAny(truncated, ".!?\n")
 	if lastBoundary > maxChars/2 {
 		return truncated[:lastBoundary+1]
@@ -518,18 +534,44 @@ func truncateAtBoundary(s string, maxChars int) string {
 	return truncated
 }
 
-func baseResult(spec *types.DispatchSpec, status types.DispatchStatus, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	EnsureTraceability(spec)
-	return &types.DispatchResult{
-		SchemaVersion:  1,
-		Status:         status,
-		DispatchID:     spec.DispatchID,
-		DispatchSalt:   spec.Salt,
-		TraceToken:     spec.TraceToken,
+func shapeTerminalResponse(spec *types.DispatchSpec, response string) terminalResponseShape {
+	shape := terminalResponseShape{
 		Response:       response,
 		HandoffSummary: ExtractHandoffSummary(response, 2000),
-		Activity:       activity,
-		Metadata:       metadata,
-		DurationMS:     durationMS,
+	}
+
+	if spec == nil || spec.ResponseMaxChars <= 0 {
+		return shape
+	}
+	if utf8.RuneCountInString(response) <= spec.ResponseMaxChars {
+		return shape
+	}
+
+	fullOutputPath, err := WriteFullOutput(spec.ArtifactDir, response)
+	if err != nil {
+		return shape
+	}
+
+	shape.Response = truncateAtBoundary(response, spec.ResponseMaxChars)
+	shape.ResponseTruncated = true
+	shape.FullOutputPath = &fullOutputPath
+	return shape
+}
+
+func baseResult(spec *types.DispatchSpec, status types.DispatchStatus, shaped terminalResponseShape, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	EnsureTraceability(spec)
+	return &types.DispatchResult{
+		SchemaVersion:     1,
+		Status:            status,
+		DispatchID:        spec.DispatchID,
+		DispatchSalt:      spec.Salt,
+		TraceToken:        spec.TraceToken,
+		Response:          shaped.Response,
+		ResponseTruncated: shaped.ResponseTruncated,
+		FullOutputPath:    shaped.FullOutputPath,
+		HandoffSummary:    shaped.HandoffSummary,
+		Activity:          activity,
+		Metadata:          metadata,
+		DurationMS:        durationMS,
 	}
 }

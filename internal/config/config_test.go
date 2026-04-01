@@ -24,8 +24,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Defaults.PermissionMode != "" {
 		t.Fatalf("Defaults.PermissionMode = %q, want %q", cfg.Defaults.PermissionMode, "")
 	}
-	if cfg.Defaults.ResponseMaxChars != 0 {
-		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 0)
+	if cfg.Defaults.ResponseMaxChars != 128000 {
+		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 128000)
 	}
 	if cfg.Defaults.MaxDepth != 2 {
 		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 2)
@@ -236,6 +236,21 @@ silence_warn_seconds = 45
 	}
 	if cfg.Timeout.High != 1800 {
 		t.Fatalf("Timeout.High = %d, want default %d", cfg.Timeout.High, 1800)
+	}
+}
+
+func TestLoadConfigWithoutOverridesKeepsDefaultResponseMaxChars(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+
+	cfg, err := LoadConfig("", cwd)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if cfg.Defaults.ResponseMaxChars != 128000 {
+		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 128000)
 	}
 }
 

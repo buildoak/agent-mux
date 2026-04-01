@@ -79,10 +79,10 @@ Normal dispatch writes one JSON object to `stdout`:
 | `dispatch_id` | string | ULID for this run |
 | `dispatch_salt` | string | Human-greppable `adjective-noun-digit` salt |
 | `trace_token` | string | `AGENT_MUX_GO_<dispatch_id>` |
-| `response` | string | Final response text (may be truncated) |
-| `response_truncated` | bool | True when shortened to `response_max_chars` |
-| `full_output` | string/null | Full response content when truncated (or null) |
-| `full_output_path` | string/null | Path to `full_output.md` file when response was truncated (omitted when null) |
+| `response` | string | Final response text, capped to `response_max_chars` when configured |
+| `response_truncated` | bool | True when `response` was shortened and the full body was spilled to disk |
+| `full_output` | string/null | Always `null`; not a recovery channel |
+| `full_output_path` | string/null | Path to `full_output.md` when `response_truncated=true` (omitted when null) |
 | `handoff_summary` | string | Extracted from `## Summary`/`## Handoff` or shortened response |
 | `artifacts` | string[] | Files under artifact dir (excludes internal files) |
 | `partial` | bool | Present on timed-out runs |
@@ -218,7 +218,7 @@ Present only when `status` is `failed`:
 | `status` | string | `completed`, `timed_out`, `failed` |
 | `summary` | string | Handoff summary (max 2000 chars) |
 | `artifact_dir` | string | Worker artifact directory |
-| `output_file` | string | Path to `output.md` (empty on failure) |
+| `output_file` | string | Path to `output.md` (empty on failure). Pipeline always points here even when dispatch spill also created `full_output.md`. |
 | `error_code` | string | Error code on failure |
 | `error_msg` | string | Error message on failure |
 | `duration_ms` | int | Worker duration |
@@ -349,7 +349,7 @@ With `--dry-run`:
 
 ```json
 {
-  "defaults": {"engine":"codex","model":"","effort":"high","sandbox":"danger-full-access","permission_mode":"","response_max_chars":16000,"max_depth":2,"allow_subdispatch":true},
+  "defaults": {"engine":"codex","model":"","effort":"high","sandbox":"danger-full-access","permission_mode":"","response_max_chars":128000,"max_depth":2,"allow_subdispatch":true},
   "models": {"claude":["claude-opus-4-6","claude-sonnet-4-6"],"codex":["gpt-5.4","gpt-5.4-mini"]},
   "roles": {"lifter":{"engine":"codex","model":"gpt-5.4","effort":"high","timeout":1800,"skills":[],"variants":{"claude":{...}}}},
   "pipelines": {"build":{"max_parallel":8,"steps":[{"name":"plan","role":"architect"},{"name":"execute","role":"lifter"},{"name":"review","role":"auditor"}]}},

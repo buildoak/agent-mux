@@ -163,7 +163,7 @@ When using `--stdin`, pipe a JSON object with these fields.
 | Max depth | `max_depth` | int | 2 | Recursive dispatch limit |
 | Allow subdispatch | `allow_subdispatch` | bool | true | Recursive dispatch toggle |
 | Full access | `full_access` | bool | true | Full filesystem access |
-| Response max chars | `response_max_chars` | int | 16000 | Truncation threshold |
+| Response max chars | `response_max_chars` | int | 128000 | Uniform dispatch response cap; `0` disables capping |
 | Salt | `salt` | string | auto | Human-readable identifier |
 | Dispatch ID | `dispatch_id` | string | auto ULID | Unique dispatch identifier |
 | Artifact dir | `artifact_dir` | string | auto | Override artifact directory |

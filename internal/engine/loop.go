@@ -333,7 +333,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		case types.EventProgress:
 			if evt.Text != "" {
-				lastProgressText = evt.Text
+				lastProgressText += evt.Text
 			}
 			_ = emitter.EmitProgress(truncate(evt.Text, 200))
 
@@ -963,7 +963,7 @@ func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, activity *typ
 }
 
 func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS, spec.ResponseMaxChars)
+	result := dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", result.Artifacts); err != nil {
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
@@ -994,9 +994,7 @@ func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, respons
 		StdinPipeReady: false,
 		DispatchID:     spec.DispatchID,
 	})
-	if emitter != nil && result.ResponseTruncated && result.FullOutputPath != nil {
-		_ = emitter.EmitResponseTruncated(*result.FullOutputPath)
-	}
+	emitResponseTruncated(emitter, result)
 	if emitter != nil {
 		_ = emitter.EmitDispatchEnd("completed", durationMS)
 	}
@@ -1034,6 +1032,7 @@ func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response
 		StdinPipeReady: false,
 		DispatchID:     spec.DispatchID,
 	})
+	emitResponseTruncated(emitter, result)
 	if emitter != nil {
 		_ = emitter.EmitDispatchEnd("timed_out", durationMS)
 	}
@@ -1073,10 +1072,18 @@ func finalizeFailed(spec *types.DispatchSpec, emitter *event.Emitter, response s
 		StdinPipeReady: false,
 		DispatchID:     spec.DispatchID,
 	})
+	emitResponseTruncated(emitter, result)
 	if emitter != nil {
 		_ = emitter.EmitDispatchEnd("failed", durationMS)
 	}
 	return result
+}
+
+func emitResponseTruncated(emitter *event.Emitter, result *types.DispatchResult) {
+	if emitter == nil || result == nil || !result.ResponseTruncated || result.FullOutputPath == nil {
+		return
+	}
+	_ = emitter.EmitResponseTruncated(*result.FullOutputPath)
 }
 
 func persistDispatchRecord(spec *types.DispatchSpec, result *types.DispatchResult, responseText string, emitter *event.Emitter) {

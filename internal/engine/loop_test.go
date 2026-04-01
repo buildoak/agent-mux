@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
 	"github.com/buildoak/agent-mux/internal/event"
 	"github.com/buildoak/agent-mux/internal/fifo"
@@ -846,6 +847,27 @@ func testDispatchSpec(artifactDir string) *types.DispatchSpec {
 	}
 }
 
+func testMetadata() *types.DispatchMetadata {
+	return &types.DispatchMetadata{
+		Engine: "codex",
+		Model:  "gpt-5.4",
+		Tokens: &types.TokenUsage{},
+	}
+}
+
+func newTestEmitter(t *testing.T, spec *types.DispatchSpec, stream *strings.Builder) *event.Emitter {
+	t.Helper()
+	if err := dispatch.WriteDispatchMeta(spec.ArtifactDir, spec); err != nil {
+		t.Fatalf("WriteDispatchMeta: %v", err)
+	}
+	emitter, err := event.NewEmitter(spec.DispatchID, spec.Salt, spec.TraceToken, stream, filepath.Join(spec.ArtifactDir, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	emitter.SetStreamMode(event.StreamSilent)
+	return emitter
+}
+
 func waitForPath(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -920,6 +942,107 @@ func TestLongCommandExtendsSilenceThreshold(t *testing.T) {
 	events := eventBuf.String()
 	if !strings.Contains(events, "long_command_detected") {
 		t.Fatalf("event stream missing long_command_detected; got:\n%s", events)
+	}
+}
+
+func TestFinalizeCompletedEmitsResponseTruncatedAndStoresFullResponse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	spec := testDispatchSpec(artifactDir)
+	spec.ResponseMaxChars = 10
+	response := strings.Repeat("A", 50000)
+
+	var stream strings.Builder
+	emitter := newTestEmitter(t, spec, &stream)
+	defer func() { _ = emitter.Close() }()
+
+	result := finalizeCompleted(spec, emitter, response, emptyActivity(), testMetadata(), 25)
+
+	if !result.ResponseTruncated || result.FullOutputPath == nil {
+		t.Fatalf("result = %+v, want truncated response with full_output_path", result)
+	}
+	if !strings.Contains(stream.String(), "\"type\":\"response_truncated\"") {
+		t.Fatalf("stderr stream missing response_truncated event:\n%s", stream.String())
+	}
+	eventsData, err := os.ReadFile(filepath.Join(artifactDir, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile(events.jsonl): %v", err)
+	}
+	if !strings.Contains(string(eventsData), "\"type\":\"response_truncated\"") {
+		t.Fatalf("events.jsonl missing response_truncated event:\n%s", string(eventsData))
+	}
+	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	if storedResponse != response {
+		t.Fatalf("stored response len = %d, want %d", len(storedResponse), len(response))
+	}
+}
+
+func TestFinalizeTimedOutEmitsResponseTruncatedAndStoresFullResponse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	spec := testDispatchSpec(artifactDir)
+	spec.ResponseMaxChars = 10
+	spec.TimeoutSec = 1
+	response := strings.Repeat("B", 50000)
+
+	var stream strings.Builder
+	emitter := newTestEmitter(t, spec, &stream)
+	defer func() { _ = emitter.Close() }()
+
+	result := finalizeTimedOut(spec, emitter, response, emptyActivity(), testMetadata(), 25)
+
+	if result.Status != types.StatusTimedOut {
+		t.Fatalf("status = %q, want timed_out", result.Status)
+	}
+	if !result.ResponseTruncated || result.FullOutputPath == nil {
+		t.Fatalf("result = %+v, want truncated response with full_output_path", result)
+	}
+	if !strings.Contains(stream.String(), "\"type\":\"response_truncated\"") {
+		t.Fatalf("stderr stream missing response_truncated event:\n%s", stream.String())
+	}
+	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	if storedResponse != response {
+		t.Fatalf("stored response len = %d, want %d", len(storedResponse), len(response))
+	}
+}
+
+func TestFinalizeFailedEmitsResponseTruncatedAndStoresFullResponse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	spec := testDispatchSpec(artifactDir)
+	spec.ResponseMaxChars = 10
+	response := "你好" + strings.Repeat("C", 50000)
+
+	var stream strings.Builder
+	emitter := newTestEmitter(t, spec, &stream)
+	defer func() { _ = emitter.Close() }()
+
+	result := finalizeFailed(spec, emitter, response, emptyActivity(), testMetadata(), 25, dispatch.NewDispatchError("internal_error", "", ""))
+
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if !result.ResponseTruncated || result.FullOutputPath == nil {
+		t.Fatalf("result = %+v, want truncated response with full_output_path", result)
+	}
+	if !strings.Contains(stream.String(), "\"type\":\"response_truncated\"") {
+		t.Fatalf("stderr stream missing response_truncated event:\n%s", stream.String())
+	}
+	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	if storedResponse != response {
+		t.Fatalf("stored response len = %d, want %d", len(storedResponse), len(response))
 	}
 }
 
