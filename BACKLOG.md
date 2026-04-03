@@ -273,6 +273,39 @@ deprecated alias returns the same payload during the transition window.
 
 ---
 
+### B-10: `-cwd` long flag eats `-stdin` as its string value
+**Type:** bug | **Priority:** P1 | **Status:** open
+**Decided:** `coordinator` (2026-04-03)
+
+Go's `flag` package treats any unrecognized token after a string flag as its
+value. When flags are ordered `-cwd /path -stdin`, the parser correctly assigns
+`/path` to `-cwd` — but if the path is omitted or the user writes
+`-cwd /path -stdin` and the space-separated value resolution rolls over, the
+flag package greedily consumes `-stdin` as the string value for `-cwd`. Result:
+`cwd` is set to `"-stdin"`, the boolean `-stdin` is never set, and the dispatch
+spec is silently corrupted. The single-character shorthand `-C /path` is
+unaffected because `flag` handles single-char flags differently.
+
+**Reproduction:**
+```
+echo '{"prompt":"test"}' | agent-mux -E codex -cwd /some/path -stdin
+# preview shows "cwd":"-stdin" and prompt becomes the path
+```
+
+**Impact:** Any programmatic caller using `-cwd` before `-stdin` silently
+receives a wrong cwd and an empty/wrong prompt. The dispatch proceeds — there
+is no error — so callers have no signal that anything went wrong. Breaking for
+all coordinator-driven Codex dispatches that use `-cwd` with `-stdin`.
+
+**Fix direction:** Switch the long-form cwd flag to `--cwd` (double-dash) via
+a POSIX-compliant flag library (e.g. `pflag`), or enforce flag ordering
+convention so `-stdin` always precedes positional/path flags, or document and
+enforce `--` separator usage. The cleanest fix is `pflag` with `--cwd` long
+form and `-C` short form, matching the existing shorthand and eliminating the
+ambiguity entirely.
+
+---
+
 ## P2 — Planned
 
 ### B-8: Pipeline result assembly returns empty response
