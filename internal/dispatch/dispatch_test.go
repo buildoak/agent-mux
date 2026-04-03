@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/buildoak/agent-mux/internal/types"
@@ -47,35 +48,46 @@ func TestPromptPreamble(t *testing.T) {
 	}
 }
 
-func TestWriteAndUpdateDispatchMeta(t *testing.T) {
+func TestReadDispatchMetaRoundTripsThroughPersistentStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
-		DispatchID: "01JQXYZ",
-		Engine:     "codex",
-		Model:      "gpt-5.4",
-		Prompt:     "Build the parser",
-		Cwd:        "/path/to/project",
+		DispatchID:  "01JQXYZ",
+		Engine:      "codex",
+		Model:       "gpt-5.4",
+		Prompt:      "Build the parser",
+		Cwd:         "/path/to/project",
+		ArtifactDir: dir,
+	}
+	annotations := types.DispatchAnnotations{Role: "worker"}
+
+	if err := WritePersistentMeta(spec, annotations); err != nil {
+		t.Fatalf("WritePersistentMeta: %v", err)
+	}
+	if err := WriteDispatchRef(dir, spec.DispatchID); err != nil {
+		t.Fatalf("WriteDispatchRef: %v", err)
+	}
+	result := &types.DispatchResult{
+		SchemaVersion: 1,
+		Status:        types.StatusCompleted,
+		DispatchID:    spec.DispatchID,
+		Artifacts:     []string{"/tmp/parser.go"},
+		Metadata: &types.DispatchMetadata{
+			Engine: spec.Engine,
+			Model:  spec.Model,
+			Role:   annotations.Role,
+			Tokens: &types.TokenUsage{},
+		},
+	}
+	if err := WritePersistentResult(spec, annotations, result, "Done.", "2026-04-03T10:00:00Z", "2026-04-03T10:05:00Z"); err != nil {
+		t.Fatalf("WritePersistentResult: %v", err)
 	}
 
-	if err := WriteDispatchMeta(dir, spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
-		t.Fatalf("WriteDispatchMeta: %v", err)
-	}
-
-	path := filepath.Join(dir, "_dispatch_meta.json")
-	tmpPath := path + ".tmp"
-	data, err := os.ReadFile(path)
+	meta, err := ReadDispatchMeta(dir)
 	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
+		t.Fatalf("ReadDispatchMeta: %v", err)
 	}
-	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
-		t.Fatalf("meta temp file stat error = %v, want not exists", err)
-	}
-
-	var meta DispatchMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-
 	if meta.DispatchID != "01JQXYZ" {
 		t.Errorf("dispatch_id = %q, want 01JQXYZ", meta.DispatchID)
 	}
@@ -85,55 +97,105 @@ func TestWriteAndUpdateDispatchMeta(t *testing.T) {
 	if !strings.HasPrefix(meta.PromptHash, "sha256:") {
 		t.Errorf("prompt_hash should start with sha256:, got %q", meta.PromptHash)
 	}
-
-	// Update
-	if err := UpdateDispatchMeta(dir, "completed", []string{"/tmp/parser.go"}); err != nil {
-		t.Fatalf("UpdateDispatchMeta: %v", err)
-	}
-
-	data, err = os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile after update: %v", err)
-	}
-	if err := json.Unmarshal(data, &meta); err != nil {
-		t.Fatalf("Unmarshal after update: %v", err)
-	}
-	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
-		t.Fatalf("meta temp file stat error after update = %v, want not exists", err)
-	}
 	if meta.Status != "completed" {
 		t.Errorf("status = %q, want completed", meta.Status)
 	}
-	if meta.EndedAt == "" {
-		t.Error("ended_at should be set")
+	if meta.EndedAt != "2026-04-03T10:05:00Z" {
+		t.Errorf("ended_at = %q, want 2026-04-03T10:05:00Z", meta.EndedAt)
+	}
+	if len(meta.Artifacts) != 1 || meta.Artifacts[0] != "/tmp/parser.go" {
+		t.Errorf("artifacts = %#v, want [/tmp/parser.go]", meta.Artifacts)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "_dispatch_meta.json")); !os.IsNotExist(err) {
+		t.Fatalf("dispatch meta file stat error = %v, want not exists", err)
 	}
 }
 
-func TestUpdateDispatchMetaPropagatesWriteErrors(t *testing.T) {
+func TestReadDispatchMetaFallsBackToLegacyFile(t *testing.T) {
 	dir := t.TempDir()
-	spec := &types.DispatchSpec{
-		DispatchID: "01JQXYZ",
+	legacy := DispatchMeta{
+		DispatchID: "legacy-dispatch",
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
 		Engine:     "codex",
 		Model:      "gpt-5.4",
-		Prompt:     "Build the parser",
+		Role:       "worker",
+		PromptHash: "sha256:deadbeef",
 		Cwd:        "/path/to/project",
+		Status:     "failed",
+		Artifacts:  []string{"/tmp/legacy.txt"},
 	}
-	if err := WriteDispatchMeta(dir, spec, types.DispatchAnnotations{}); err != nil {
-		t.Fatalf("WriteDispatchMeta: %v", err)
+	data, err := json.MarshalIndent(legacy, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "_dispatch_meta.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatalf("Chmod(%q): %v", dir, err)
-	}
-	defer func() {
-		if err := os.Chmod(dir, 0o755); err != nil {
-			t.Fatalf("restore dir mode: %v", err)
-		}
-	}()
-
-	err := UpdateDispatchMeta(dir, "failed", nil)
+	meta, err := ReadDispatchMeta(dir)
 	if err == nil {
-		t.Fatal("UpdateDispatchMeta error = nil, want write error")
+		if meta.DispatchID != legacy.DispatchID {
+			t.Fatalf("dispatch_id = %q, want %q", meta.DispatchID, legacy.DispatchID)
+		}
+		if meta.PromptHash != legacy.PromptHash {
+			t.Fatalf("prompt_hash = %q, want %q", meta.PromptHash, legacy.PromptHash)
+		}
+		if meta.Status != legacy.Status {
+			t.Fatalf("status = %q, want %q", meta.Status, legacy.Status)
+		}
+		return
+	}
+	t.Fatalf("ReadDispatchMeta: %v", err)
+}
+
+func TestReadDispatchMetaPrefersDispatchRefOverLegacyFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID:  "preferred-dispatch",
+		Engine:      "codex",
+		Model:       "gpt-5.4",
+		Prompt:      "new path",
+		Cwd:         "/new/path",
+		ArtifactDir: dir,
+	}
+	if err := WritePersistentMeta(spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
+		t.Fatalf("WritePersistentMeta: %v", err)
+	}
+	if err := WriteDispatchRef(dir, spec.DispatchID); err != nil {
+		t.Fatalf("WriteDispatchRef: %v", err)
+	}
+
+	legacy := DispatchMeta{
+		DispatchID: "legacy-dispatch",
+		StartedAt:  "2026-01-01T00:00:00Z",
+		Engine:     "claude",
+		Model:      "legacy-model",
+		Role:       "legacy",
+		PromptHash: "sha256:legacy",
+		Cwd:        "/legacy/path",
+	}
+	data, err := json.MarshalIndent(legacy, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "_dispatch_meta.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	meta, err := ReadDispatchMeta(dir)
+	if err != nil {
+		t.Fatalf("ReadDispatchMeta: %v", err)
+	}
+	if meta.DispatchID != spec.DispatchID {
+		t.Fatalf("dispatch_id = %q, want %q", meta.DispatchID, spec.DispatchID)
+	}
+	if meta.Cwd != spec.Cwd {
+		t.Fatalf("cwd = %q, want %q", meta.Cwd, spec.Cwd)
+	}
+	if meta.PromptHash == legacy.PromptHash {
+		t.Fatalf("prompt_hash = %q, should come from persistent meta", meta.PromptHash)
 	}
 }
 

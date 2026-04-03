@@ -150,11 +150,11 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
 		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."), nil
 	}
-	if err := dispatch.WriteDispatchMeta(spec.ArtifactDir, spec, e.annotations); err != nil {
-		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write dispatch metadata in %q: %v", spec.ArtifactDir, err), "Ensure the artifact directory is writable."), nil
-	}
 	if err := dispatch.WritePersistentMeta(spec, e.annotations); err != nil {
 		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write persistent dispatch metadata for %q: %v", spec.DispatchID, err), "Ensure ~/.agent-mux/dispatches is writable."), nil
+	}
+	if err := dispatch.WriteDispatchRef(spec.ArtifactDir, spec.DispatchID); err != nil {
+		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write dispatch reference in %q: %v", spec.ArtifactDir, err), "Ensure the artifact directory is writable."), nil
 	}
 	inboxCreateErr := steer.CreateInbox(spec.ArtifactDir)
 	if inboxCreateErr != nil {
@@ -964,38 +964,8 @@ func emptyActivity() *types.DispatchActivity {
 	return &types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}}
 }
 
-func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, annotations types.DispatchAnnotations, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, attemptedState string, err error, priorErr *types.DispatchError, response string) *types.DispatchResult {
-	message := fmt.Sprintf("Persist %s dispatch metadata in %q: %v", attemptedState, spec.ArtifactDir, err)
-	if priorErr != nil && strings.TrimSpace(priorErr.Message) != "" {
-		message += fmt.Sprintf(" Original dispatch error: %s", priorErr.Message)
-	}
-	dispatchErr := dispatch.NewDispatchError("artifact_dir_unwritable", message, "Ensure the artifact directory is writable.")
-	dispatchErr.PartialArtifacts = dispatch.ScanArtifacts(spec.ArtifactDir)
-	// FM-9: Preserve accumulated partial response so callers can see what
-	// the worker accomplished even when the meta write fails.
-	return dispatch.BuildFailedResult(spec, response, dispatchErr, activity, metadata, durationMS)
-}
-
 func finalizeCompleted(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	result := dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS)
-	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", result.Artifacts); err != nil {
-		if emitter != nil {
-			_ = emitter.EmitDispatchEnd("failed", durationMS)
-		}
-		failureResult := buildTerminalMetaWriteFailureResult(spec, annotations, activity, metadata, durationMS, "completed", err, nil, response)
-		// FM-15: Write status.json AFTER persistDispatchRecord.
-		persistDispatchRecord(spec, annotations, failureResult, response, emitter)
-		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
-			State:          "failed",
-			ElapsedS:       int(durationMS / 1000),
-			LastActivity:   "failed",
-			ToolsUsed:      len(activity.ToolCalls),
-			FilesChanged:   len(activity.FilesChanged),
-			StdinPipeReady: false,
-			DispatchID:     spec.DispatchID,
-		})
-		return failureResult
-	}
 	// FM-15: Write status.json AFTER persistDispatchRecord so pollers
 	// never see "completed" before the store record exists.
 	persistDispatchRecord(spec, annotations, result, response, emitter)
@@ -1017,24 +987,6 @@ func finalizeCompleted(spec *types.DispatchSpec, annotations types.DispatchAnnot
 
 func finalizeTimedOut(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	result := dispatch.BuildTimedOutResult(spec, response, fmt.Sprintf("Soft timeout at %ds, hard kill after %ds grace.", spec.TimeoutSec, spec.GraceSec), activity, metadata, durationMS)
-	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "timed_out", result.Artifacts); err != nil {
-		if emitter != nil {
-			_ = emitter.EmitDispatchEnd("failed", durationMS)
-		}
-		failureResult := buildTerminalMetaWriteFailureResult(spec, annotations, activity, metadata, durationMS, "timed_out", err, nil, response)
-		// FM-15: Write status.json AFTER persistDispatchRecord.
-		persistDispatchRecord(spec, annotations, failureResult, response, emitter)
-		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
-			State:          "failed",
-			ElapsedS:       int(durationMS / 1000),
-			LastActivity:   "failed",
-			ToolsUsed:      len(activity.ToolCalls),
-			FilesChanged:   len(activity.FilesChanged),
-			StdinPipeReady: false,
-			DispatchID:     spec.DispatchID,
-		})
-		return failureResult
-	}
 	// FM-15: Write status.json AFTER persistDispatchRecord.
 	persistDispatchRecord(spec, annotations, result, response, emitter)
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
@@ -1056,24 +1008,6 @@ func finalizeTimedOut(spec *types.DispatchSpec, annotations types.DispatchAnnota
 func finalizeFailed(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, dispErr *types.DispatchError) *types.DispatchResult {
 	// FM-9: Pass accumulated response to BuildFailedResult so partial work is preserved.
 	result := dispatch.BuildFailedResult(spec, response, dispErr, activity, metadata, durationMS)
-	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "failed", result.Artifacts); err != nil {
-		if emitter != nil {
-			_ = emitter.EmitDispatchEnd("failed", durationMS)
-		}
-		failureResult := buildTerminalMetaWriteFailureResult(spec, annotations, activity, metadata, durationMS, "failed", err, dispErr, response)
-		// FM-15: Write status.json AFTER persistDispatchRecord.
-		persistDispatchRecord(spec, annotations, failureResult, response, emitter)
-		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
-			State:          "failed",
-			ElapsedS:       int(durationMS / 1000),
-			LastActivity:   "failed",
-			ToolsUsed:      len(activity.ToolCalls),
-			FilesChanged:   len(activity.FilesChanged),
-			StdinPipeReady: false,
-			DispatchID:     spec.DispatchID,
-		})
-		return failureResult
-	}
 	dispErr.PartialArtifacts = result.Artifacts
 	// FM-15: Write status.json AFTER persistDispatchRecord.
 	persistDispatchRecord(spec, annotations, result, response, emitter)

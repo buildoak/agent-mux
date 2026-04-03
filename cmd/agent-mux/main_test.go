@@ -1375,8 +1375,8 @@ func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 	if result.DispatchID != dispatchID {
 		t.Fatalf("dispatch_id = %q, want %q", result.DispatchID, dispatchID)
 	}
-	if _, err := os.Stat(filepath.Join(absoluteArtifactDir, "_dispatch_meta.json")); err != nil {
-		t.Fatalf("stat dispatch meta: %v", err)
+	if _, err := os.Stat(filepath.Join(absoluteArtifactDir, "_dispatch_ref.json")); err != nil {
+		t.Fatalf("stat dispatch ref: %v", err)
 	}
 
 	if err := os.Chdir(otherDir); err != nil {
@@ -1764,11 +1764,11 @@ func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response str
 		t.Fatalf("MkdirAll(artifactDir): %v", err)
 	}
 	annotations := types.DispatchAnnotations{Role: record.Role, Profile: record.Profile}
-	if err := dispatch.WriteDispatchMeta(record.ArtifactDir, spec, annotations); err != nil {
-		t.Fatalf("WriteDispatchMeta: %v", err)
-	}
 	if err := dispatch.WritePersistentMeta(spec, annotations); err != nil {
 		t.Fatalf("WritePersistentMeta: %v", err)
+	}
+	if err := dispatch.WriteDispatchRef(record.ArtifactDir, spec.DispatchID); err != nil {
+		t.Fatalf("WriteDispatchRef: %v", err)
 	}
 	if record.SessionID != "" {
 		if err := dispatch.UpdateDispatchSessionID(record.ArtifactDir, record.SessionID); err != nil {
@@ -1898,8 +1898,11 @@ func prepareSteerDispatchFixture(t *testing.T, stdinPipeReady bool) (string, str
 	if err := dispatch.EnsureArtifactDir(artifactDir); err != nil {
 		t.Fatalf("EnsureArtifactDir: %v", err)
 	}
-	if err := dispatch.WriteDispatchMeta(artifactDir, spec, types.DispatchAnnotations{}); err != nil {
-		t.Fatalf("WriteDispatchMeta: %v", err)
+	if err := dispatch.WritePersistentMeta(spec, types.DispatchAnnotations{}); err != nil {
+		t.Fatalf("WritePersistentMeta: %v", err)
+	}
+	if err := dispatch.WriteDispatchRef(artifactDir, spec.DispatchID); err != nil {
+		t.Fatalf("WriteDispatchRef: %v", err)
 	}
 	if err := dispatch.WriteStatusJSON(artifactDir, dispatch.LiveStatus{
 		State:          "running",
@@ -1914,9 +1917,6 @@ func prepareSteerDispatchFixture(t *testing.T, stdinPipeReady bool) (string, str
 	}
 	if err := os.WriteFile(filepath.Join(artifactDir, "host.pid"), []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		t.Fatalf("write host.pid: %v", err)
-	}
-	if err := dispatch.RegisterDispatch(dispatchID, artifactDir); err != nil {
-		t.Fatalf("RegisterDispatch: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = os.Remove(dispatch.ControlRecordPath(dispatchID))
@@ -1966,16 +1966,14 @@ func stringSliceFromJSONValue(t *testing.T, value any) []string {
 func readDispatchMeta(t *testing.T, artifactDir string) dispatchMetaForTest {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join(artifactDir, "_dispatch_meta.json"))
+	meta, err := dispatch.ReadDispatchMeta(artifactDir)
 	if err != nil {
 		t.Fatalf("read dispatch meta: %v", err)
 	}
-
-	var meta dispatchMetaForTest
-	if err := json.Unmarshal(data, &meta); err != nil {
-		t.Fatalf("unmarshal dispatch meta: %v", err)
+	return dispatchMetaForTest{
+		PromptHash: meta.PromptHash,
+		Cwd:        meta.Cwd,
 	}
-	return meta
 }
 
 func promptHash(prompt string) string {

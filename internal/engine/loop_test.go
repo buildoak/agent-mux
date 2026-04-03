@@ -850,8 +850,11 @@ func testMetadata() *types.DispatchMetadata {
 
 func newTestEmitter(t *testing.T, spec *types.DispatchSpec, stream *strings.Builder) *event.Emitter {
 	t.Helper()
-	if err := dispatch.WriteDispatchMeta(spec.ArtifactDir, spec, types.DispatchAnnotations{}); err != nil {
-		t.Fatalf("WriteDispatchMeta: %v", err)
+	if err := dispatch.WritePersistentMeta(spec, types.DispatchAnnotations{}); err != nil {
+		t.Fatalf("WritePersistentMeta: %v", err)
+	}
+	if err := dispatch.WriteDispatchRef(spec.ArtifactDir, spec.DispatchID); err != nil {
+		t.Fatalf("WriteDispatchRef: %v", err)
 	}
 	emitter, err := event.NewEmitter(spec.DispatchID, stream, filepath.Join(spec.ArtifactDir, "events.jsonl"))
 	if err != nil {

@@ -35,12 +35,13 @@ func TestRecoverDispatch_ValidDir(t *testing.T) {
 		ArtifactDir: artifactDir,
 		Prompt:      "recover test",
 	}
+	annotations := types.DispatchAnnotations{Role: "worker"}
 
-	if err := WriteDispatchMeta(artifactDir, spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
-		t.Fatalf("WriteDispatchMeta: %v", err)
-	}
-	if err := WritePersistentMeta(spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
+	if err := WritePersistentMeta(spec, annotations); err != nil {
 		t.Fatalf("WritePersistentMeta: %v", err)
+	}
+	if err := WriteDispatchRef(artifactDir, spec.DispatchID); err != nil {
+		t.Fatalf("WriteDispatchRef: %v", err)
 	}
 	artifactPath := filepath.Join(artifactDir, "notes.txt")
 	if err := os.WriteFile(artifactPath, []byte("artifact"), 0o644); err != nil {
