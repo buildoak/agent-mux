@@ -170,7 +170,17 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 
 	var flagOutput bytes.Buffer
-	fs, parsed := newFlagSet(&flagOutput)
+	stdinMode := hasEnabledStdinFlag(args)
+	var (
+		fs     *flag.FlagSet
+		parsed *cliFlags
+	)
+	if stdinMode {
+		fs, parsed = newStdinFlagSet("agent-mux")
+	} else {
+		fs, parsed = newCLIFlagSet("agent-mux")
+	}
+	fs.SetOutput(&flagOutput)
 	err := fs.Parse(normalizeArgs(args))
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -188,12 +198,12 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 	flags := *parsed
 	positional := fs.Args()
-	flagsSet := make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) {
-		flagsSet[f.Name] = true
-	})
+	var flagsSet map[string]bool
+	if !stdinMode {
+		flagsSet = explicitFlags(fs)
+	}
 	flags.signal = strings.TrimSpace(flags.signal)
-	if flags.stdin && !flagsSet["yes"] {
+	if flags.stdin && !flagWasSet(fs, "yes", "y") {
 		flags.yes = true
 	}
 
@@ -254,10 +264,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 	}
 	spec := req.DispatchSpec
-
-	if flags.stdin {
-		mergeStdinCLIFlags(req, flags, flagsSet)
-	}
 
 	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
 	if err != nil {
@@ -1070,17 +1076,33 @@ func isTerminalStream(stream any) bool {
 	return term.IsTerminal(int(fdStream.Fd()))
 }
 
-func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
-	flags := &cliFlags{
+func newCLIFlags() *cliFlags {
+	return &cliFlags{
 		effort:    "",
 		full:      true,
 		maxDepth:  2,
 		sandbox:   "danger-full-access",
 		reasoning: "medium",
 	}
+}
 
-	fs := flag.NewFlagSet("agent-mux", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+func newStdinFlagSet(name string) (*flag.FlagSet, *cliFlags) {
+	flags := newCLIFlags()
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+
+	fs.BoolVar(&flags.stdin, "stdin", false, "Read DispatchSpec JSON from stdin")
+	bindBool(fs, &flags.yes, "Skip interactive confirmation for TTY dispatches", false, "yes", "y")
+	bindBool(fs, &flags.verbose, "Verbose mode", false, "verbose", "v")
+	fs.BoolVar(&flags.stream, "stream", false, "Stream all events to stderr (default: silent)")
+	fs.BoolVar(&flags.async, "async", false, "Return immediately with dispatch ID, run worker in background")
+	fs.StringVar(&flags.config, "config", "", "Config path")
+
+	return fs, flags
+}
+
+func newCLIFlagSet(name string) (*flag.FlagSet, *cliFlags) {
+	flags := newCLIFlags()
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 
 	bindStr(fs, &flags.engine, "Engine name", "", "engine", "E")
 	bindStr(fs, &flags.role, "Role", "", "role", "R")
@@ -1115,6 +1137,12 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	bindBool(fs, &flags.stream, "Stream all events to stderr (default: silent)", false, "stream", "S")
 	fs.BoolVar(&flags.async, "async", false, "Return immediately with dispatch ID, run worker in background")
 
+	return fs, flags
+}
+
+func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
+	fs, flags := newCLIFlagSet("agent-mux")
+	fs.SetOutput(stderr)
 	return fs, flags
 }
 
@@ -1277,6 +1305,51 @@ func flagTakesValue(name string) bool {
 	}
 }
 
+func hasEnabledStdinFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		switch {
+		case arg == "--stdin", arg == "-stdin":
+			return true
+		case strings.HasPrefix(arg, "--stdin="):
+			enabled, err := strconv.ParseBool(strings.TrimSpace(strings.TrimPrefix(arg, "--stdin=")))
+			return err == nil && enabled
+		case strings.HasPrefix(arg, "-stdin="):
+			enabled, err := strconv.ParseBool(strings.TrimSpace(strings.TrimPrefix(arg, "-stdin=")))
+			return err == nil && enabled
+		}
+	}
+	return false
+}
+
+func explicitFlags(fs *flag.FlagSet) map[string]bool {
+	flagsSet := make(map[string]bool)
+	if fs == nil {
+		return flagsSet
+	}
+	fs.Visit(func(f *flag.Flag) {
+		flagsSet[f.Name] = true
+	})
+	return flagsSet
+}
+
+func flagWasSet(fs *flag.FlagSet, names ...string) bool {
+	if fs == nil {
+		return false
+	}
+
+	var seen bool
+	fs.Visit(func(f *flag.Flag) {
+		if seen {
+			return
+		}
+		seen = slices.Contains(names, f.Name)
+	})
+	return seen
+}
+
 func bindStr(fs *flag.FlagSet, dst *string, usage, def string, names ...string) {
 	for _, name := range names {
 		fs.StringVar(dst, name, def, usage)
@@ -1353,142 +1426,6 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 		eng.SetStreamMode(event.StreamSilent)
 	}
 	return eng.Dispatch(ctx, spec)
-}
-
-// mergeStdinCLIFlags merges explicitly-set CLI flags into a DispatchSpec that
-// was decoded from --stdin JSON. CLI flags take precedence over JSON fields,
-// allowing callers to override specific spec fields without rewriting the JSON.
-func mergeStdinCLIFlags(req *dispatchRequest, flags cliFlags, flagsSet map[string]bool) {
-	spec := req.DispatchSpec
-	if flagsSet["skill"] {
-		req.DispatchAnnotations.Skills = append(append([]string(nil), flags.skills...), req.DispatchAnnotations.Skills...)
-	}
-	if flagsSet["skip-skills"] {
-		req.SkipSkills = flags.skipSkills
-	}
-	if flagsSet["context-file"] {
-		spec.ContextFile = flags.contextFile
-	}
-	if flagsSet["recover"] {
-		req.RecoverDispatchID = flags.recover
-	}
-	if flagsSet["engine"] || flagsSet["E"] {
-		spec.Engine = flags.engine
-	}
-	if flagsSet["model"] || flagsSet["m"] {
-		spec.Model = flags.model
-	}
-	if flagsSet["effort"] || flagsSet["e"] {
-		spec.Effort = flags.effort
-	}
-	if flagsSet["role"] || flagsSet["R"] {
-		req.DispatchAnnotations.Role = flags.role
-	}
-	if flagsSet["profile"] {
-		req.DispatchAnnotations.Profile = flags.profile
-	}
-	if flagsSet["cwd"] || flagsSet["C"] {
-		spec.Cwd = flags.cwd
-	}
-	if flagsSet["timeout"] || flagsSet["t"] {
-		spec.TimeoutSec = flags.timeout
-	}
-	if flagsSet["system-prompt"] || flagsSet["s"] {
-		if spec.SystemPrompt == "" {
-			spec.SystemPrompt = flags.systemPrompt
-		} else {
-			spec.SystemPrompt = spec.SystemPrompt + "\n\n" + flags.systemPrompt
-		}
-	}
-	if flagsSet["system-prompt-file"] {
-		data, err := os.ReadFile(flags.systemPromptFile)
-		if err == nil {
-			if spec.SystemPrompt == "" {
-				spec.SystemPrompt = string(data)
-			} else {
-				spec.SystemPrompt = string(data) + "\n\n" + spec.SystemPrompt
-			}
-		}
-	}
-	if flagsSet["max-depth"] {
-		spec.MaxDepth = flags.maxDepth
-	}
-	if flagsSet["full"] || flagsSet["f"] {
-		spec.FullAccess = flags.full
-	}
-	if flagsSet["no-full"] && flags.noFull {
-		spec.FullAccess = false
-	}
-	if flagsSet["artifact-dir"] {
-		spec.ArtifactDir = flags.artifactDir
-	}
-	// Engine opts that live in the map.
-	if flagsSet["sandbox"] {
-		if spec.EngineOpts == nil {
-			spec.EngineOpts = make(map[string]any)
-		}
-		spec.EngineOpts["sandbox"] = flags.sandbox
-	}
-	if flagsSet["reasoning"] || flagsSet["r"] {
-		if spec.EngineOpts == nil {
-			spec.EngineOpts = make(map[string]any)
-		}
-		spec.EngineOpts["reasoning"] = flags.reasoning
-	}
-	if flagsSet["max-turns"] {
-		if spec.EngineOpts == nil {
-			spec.EngineOpts = make(map[string]any)
-		}
-		spec.EngineOpts["max-turns"] = flags.maxTurns
-	}
-	if flagsSet["permission-mode"] {
-		if spec.EngineOpts == nil {
-			spec.EngineOpts = make(map[string]any)
-		}
-		spec.EngineOpts["permission-mode"] = flags.permissionMode
-	}
-	if flagsSet["add-dir"] {
-		if spec.EngineOpts == nil {
-			spec.EngineOpts = make(map[string]any)
-		}
-		existing := anySliceOrEmpty(spec.EngineOpts["add-dir"])
-		spec.EngineOpts["add-dir"] = append([]string(flags.addDirs), existing...)
-	}
-}
-
-func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {
-	for _, name := range []string{
-		"engine", "E",
-		"role", "R",
-		"profile",
-		"cwd", "C",
-		"model", "m",
-		"effort", "e",
-		"timeout", "t",
-		"system-prompt", "s",
-		"system-prompt-file",
-		"skill",
-		"context-file",
-		"artifact-dir",
-		"recover",
-		"config",
-		"full", "f",
-		"no-full",
-		"prompt-file",
-		"max-depth",
-		"permission-mode",
-		"sandbox",
-		"reasoning", "r",
-		"max-turns",
-		"add-dir",
-		"stream", "S",
-		"async",
-	} {
-		if flagsSet[name] {
-			return true
-		}
-	}
-	return false
 }
 
 func configuredModels(cfg *config.Config) map[string][]string {
