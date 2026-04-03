@@ -22,6 +22,7 @@ type LiveStatus struct {
 	StdinPipeReady bool   `json:"stdin_pipe_ready,omitempty"`
 	Timestamp      string `json:"ts"`
 	DispatchID     string `json:"dispatch_id,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
 }
 
 const statusFileName = "status.json"

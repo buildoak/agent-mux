@@ -22,7 +22,7 @@ type RecoveryContext struct {
 	ArtifactDir  string
 }
 
-type controlRecord struct {
+type ControlRecord struct {
 	DispatchID   string `json:"dispatch_id"`
 	ArtifactDir  string `json:"artifact_dir"`
 	DispatchSalt string `json:"dispatch_salt,omitempty"`
@@ -34,7 +34,7 @@ func DefaultArtifactDir(dispatchID string) (string, error) {
 }
 
 func RegisterDispatch(dispatchID, artifactDir string) error {
-	return writeControlRecord(controlRecord{
+	return writeControlRecord(ControlRecord{
 		DispatchID:  dispatchID,
 		ArtifactDir: artifactDir,
 	})
@@ -45,7 +45,7 @@ func RegisterDispatchSpec(spec *types.DispatchSpec) error {
 		return fmt.Errorf("missing dispatch spec for control-path registration")
 	}
 	dispatch.EnsureTraceability(spec)
-	return writeControlRecord(controlRecord{
+	return writeControlRecord(ControlRecord{
 		DispatchID:   spec.DispatchID,
 		ArtifactDir:  spec.ArtifactDir,
 		DispatchSalt: spec.Salt,
@@ -53,7 +53,7 @@ func RegisterDispatchSpec(spec *types.DispatchSpec) error {
 	})
 }
 
-func writeControlRecord(record controlRecord) error {
+func writeControlRecord(record ControlRecord) error {
 	dispatchID, err := validateDispatchID(record.DispatchID)
 	if err != nil {
 		return err
@@ -153,6 +153,40 @@ func ResolveArtifactDir(dispatchID string) (string, error) {
 	)
 }
 
+func ResolveControlRecord(ref string) (*ControlRecord, error) {
+	ref, err := validateDispatchID(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	if record, found, err := resolveControlRecordByDispatchID(currentControlRoot(), ref); err != nil {
+		return nil, err
+	} else if found {
+		return record, nil
+	}
+	if record, found, err := resolveControlRecordByDispatchID(legacyControlRoot(), ref); err != nil {
+		return nil, err
+	} else if found {
+		return record, nil
+	}
+
+	var match *ControlRecord
+	for _, root := range []string{currentControlRoot(), legacyControlRoot()} {
+		record, err := resolveControlRecordByScan(root, ref)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil {
+			continue
+		}
+		if match != nil && match.DispatchID != record.DispatchID {
+			return nil, fmt.Errorf("multiple dispatches match reference %q", ref)
+		}
+		match = record
+	}
+	return match, nil
+}
+
 func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
 	dir, err := ResolveArtifactDir(dispatchID)
 	if err != nil {
@@ -238,7 +272,7 @@ func artifactDirPath(root, dispatchID string) (string, error) {
 func resolveArtifactDirFromControlRecord(recordPath string) (string, bool, error) {
 	data, err := os.ReadFile(recordPath)
 	if err == nil {
-		var record controlRecord
+		var record ControlRecord
 		if err := json.Unmarshal(data, &record); err != nil {
 			return "", true, fmt.Errorf("parse control record %q: %w", recordPath, err)
 		}
@@ -251,6 +285,70 @@ func resolveArtifactDirFromControlRecord(recordPath string) (string, bool, error
 		return "", false, nil
 	}
 	return "", false, fmt.Errorf("read control record %q: %w", recordPath, err)
+}
+
+func resolveControlRecordByDispatchID(root, dispatchID string) (*ControlRecord, bool, error) {
+	recordPath, err := controlRecordPathE(root, dispatchID)
+	if err != nil {
+		return nil, false, err
+	}
+	record, found, err := readControlRecord(recordPath)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	return record, true, nil
+}
+
+func resolveControlRecordByScan(root, ref string) (*ControlRecord, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read control root %q: %w", root, err)
+	}
+
+	var match *ControlRecord
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		record, found, err := readControlRecord(filepath.Join(root, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		if !found || !matchesControlRecordRef(record, ref) {
+			continue
+		}
+		if match != nil && match.DispatchID != record.DispatchID {
+			return nil, fmt.Errorf("multiple dispatches match reference %q", ref)
+		}
+		match = record
+	}
+	return match, nil
+}
+
+func readControlRecord(path string) (*ControlRecord, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("read control record %q: %w", path, err)
+	}
+
+	var record ControlRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, false, fmt.Errorf("parse control record %q: %w", path, err)
+	}
+	return &record, true, nil
+}
+
+func matchesControlRecordRef(record *ControlRecord, ref string) bool {
+	if record == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(record.DispatchID), ref) || strings.TrimSpace(record.TraceToken) == ref
 }
 
 func validateDispatchID(dispatchID string) (string, error) {

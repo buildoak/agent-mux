@@ -173,6 +173,50 @@ func TestFindRecordByPrefix(t *testing.T) {
 	}
 }
 
+func TestFindRecordByRefMatchesTraceToken(t *testing.T) {
+	storePath := t.TempDir()
+
+	first := testRecord("01KMT4E7BBNN1KQEC8MYJRW5H5")
+	second := testRecord("01KMT4E7CDDD1KQEC8MYJRW9Z9")
+
+	if err := AppendRecord(storePath, first); err != nil {
+		t.Fatalf("AppendRecord(first): %v", err)
+	}
+	if err := AppendRecord(storePath, second); err != nil {
+		t.Fatalf("AppendRecord(second): %v", err)
+	}
+
+	match, err := FindRecordByRef(storePath, second.TraceToken)
+	if err != nil {
+		t.Fatalf("FindRecordByRef(trace_token): %v", err)
+	}
+	if match == nil {
+		t.Fatal("FindRecordByRef(trace_token) = nil, want match")
+	}
+	if match.ID != second.ID {
+		t.Fatalf("FindRecordByRef(trace_token).ID = %q, want %q", match.ID, second.ID)
+	}
+}
+
+func TestListRecordsBackCompatMissingSessionID(t *testing.T) {
+	storePath := t.TempDir()
+	data := []byte(`{"id":"01KMT4E7BBNN1KQEC8MYJRW5H5","salt":"quick-newt-zero","trace_token":"AGENT_MUX_GO_01KMT4E7BBNN1KQEC8MYJRW5H5","status":"completed","engine":"codex","model":"gpt-5.4","started":"2026-03-28T13:45:00Z","cwd":"/repo","truncated":false}` + "\n")
+	if err := os.WriteFile(filepath.Join(storePath, "dispatches.jsonl"), data, 0o600); err != nil {
+		t.Fatalf("WriteFile(dispatches.jsonl): %v", err)
+	}
+
+	records, err := ListRecords(storePath, 0)
+	if err != nil {
+		t.Fatalf("ListRecords: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].SessionID != "" {
+		t.Fatalf("session_id = %q, want empty", records[0].SessionID)
+	}
+}
+
 func TestMissingFiles(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "store")
 
@@ -210,6 +254,7 @@ func testRecord(id string) DispatchRecord {
 		ID:            id,
 		Salt:          "quick-newt-zero",
 		TraceToken:    "AGENT_MUX_GO_" + id,
+		SessionID:     "session-" + id,
 		Status:        "completed",
 		Engine:        "codex",
 		Model:         "gpt-5.4",

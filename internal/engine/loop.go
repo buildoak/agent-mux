@@ -279,6 +279,10 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	stdinPipeReady := false
 
 	handleHarnessEvent := func(evt *types.HarnessEvent) {
+		var observedSessionID string
+		statusLastActivity := ""
+		statusToolsUsed := 0
+		statusFilesChanged := 0
 		mu.Lock()
 		lastActivity = time.Now()
 		frozenWarned = false
@@ -286,7 +290,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		switch evt.Kind {
 		case types.EventSessionStart:
 			sessionID = evt.SessionID
+			observedSessionID = evt.SessionID
 			updateActivity("session started")
+			statusLastActivity = "session started"
 
 		case types.EventToolStart:
 			if evt.Tool != "" {
@@ -352,8 +358,10 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			}
 			if evt.SessionID != "" {
 				sessionID = evt.SessionID
+				observedSessionID = evt.SessionID
 			}
 			updateActivity("received response")
+			statusLastActivity = "received response"
 
 		case types.EventTurnComplete:
 			turnCount++
@@ -365,19 +373,27 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 				totalTokens = evt.Tokens
 			}
 			updateActivity("turn completed")
+			statusLastActivity = "turn completed"
 
 		case types.EventTurnFailed:
 			lastError = evt
 			updateActivity("turn failed")
+			statusLastActivity = "turn failed"
 
 		case types.EventError:
 			lastError = evt
 			_ = emitter.EmitError(evt.ErrorCode, evt.Text)
 			updateActivity(fmt.Sprintf("error: %s", evt.ErrorCode))
+			statusLastActivity = fmt.Sprintf("error: %s", evt.ErrorCode)
 
 		case types.EventRawPassthrough:
 		}
+		statusToolsUsed = toolsUsedCount
+		statusFilesChanged = filesChangedCount
 		mu.Unlock()
+		if observedSessionID != "" {
+			persistObservedSession(spec.ArtifactDir, spec.DispatchID, startTime, observedSessionID, statusLastActivity, statusToolsUsed, statusFilesChanged, stdinPipeReady)
+		}
 	}
 
 	emitHarnessEvent := func(evt *types.HarnessEvent) {
@@ -830,7 +846,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			statusFilesChanged := filesChangedCount
 			mu.Unlock()
 			// Atomic status.json write for pull-based status.
-			_ = writeRunningStatus(spec.ArtifactDir, spec.DispatchID, startTime, statusActivity, statusToolsUsed, statusFilesChanged, stdinPipeReady)
+			_ = writeRunningStatus(spec.ArtifactDir, spec.DispatchID, sessionID, startTime, statusActivity, statusToolsUsed, statusFilesChanged, stdinPipeReady)
 			if silence >= effectiveKill && setTerminal("failed") {
 				_ = emitter.EmitError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence))
 				dispatchErr = dispatch.NewDispatchError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence), "")
@@ -1096,6 +1112,7 @@ func persistDispatchRecord(spec *types.DispatchSpec, result *types.DispatchResul
 		ID:            firstNonEmpty(result.DispatchID, spec.DispatchID),
 		Salt:          firstNonEmpty(result.DispatchSalt, spec.Salt),
 		TraceToken:    firstNonEmpty(result.TraceToken, spec.TraceToken),
+		SessionID:     metadataSessionID(result),
 		Status:        string(result.Status),
 		Engine:        firstNonEmpty(metadataEngine(result), spec.Engine),
 		Model:         firstNonEmpty(metadataModel(result), spec.Model),
@@ -1171,6 +1188,13 @@ func metadataEngine(result *types.DispatchResult) string {
 		return ""
 	}
 	return result.Metadata.Engine
+}
+
+func metadataSessionID(result *types.DispatchResult) string {
+	if result == nil || result.Metadata == nil {
+		return ""
+	}
+	return result.Metadata.SessionID
 }
 
 func metadataModel(result *types.DispatchResult) string {
@@ -1459,7 +1483,7 @@ func deliverSoftSteer(run *runHandle, req adapter.CodexSoftSteerEnvelope) error 
 	return err
 }
 
-func writeRunningStatus(artifactDir, dispatchID string, startTime time.Time, lastActivity string, toolsUsed, filesChanged int, stdinPipeReady bool) error {
+func writeRunningStatus(artifactDir, dispatchID, sessionID string, startTime time.Time, lastActivity string, toolsUsed, filesChanged int, stdinPipeReady bool) error {
 	return dispatch.WriteStatusJSON(artifactDir, dispatch.LiveStatus{
 		State:          "running",
 		ElapsedS:       int(time.Since(startTime).Seconds()),
@@ -1468,7 +1492,16 @@ func writeRunningStatus(artifactDir, dispatchID string, startTime time.Time, las
 		FilesChanged:   filesChanged,
 		StdinPipeReady: stdinPipeReady,
 		DispatchID:     dispatchID,
+		SessionID:      sessionID,
 	})
+}
+
+func persistObservedSession(artifactDir, dispatchID string, startTime time.Time, sessionID, lastActivity string, toolsUsed, filesChanged int, stdinPipeReady bool) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	_ = dispatch.UpdateDispatchSessionID(artifactDir, sessionID)
+	_ = writeRunningStatus(artifactDir, dispatchID, sessionID, startTime, lastActivity, toolsUsed, filesChanged, stdinPipeReady)
 }
 
 func bytesTrimSpace(line []byte) []byte {

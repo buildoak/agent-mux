@@ -200,25 +200,25 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		return 0
 	}
 	if flags.signal != "" {
-		if err := sanitize.ValidateDispatchID(flags.signal); err != nil {
-			emitResult(stdout, buildSignalErrorAck(flags.signal, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", flags.signal, err), "Provide a dispatch ID without path separators or traversal segments."))
-			return 1
-		}
 		if len(positional) == 0 {
 			emitResult(stdout, buildSignalErrorAck(flags.signal, "invalid_args", "--signal requires a message as the first positional argument", "Provide the signal message as the first positional argument."))
 			return 2
 		}
-		msg := positional[0]
-		artifactDir, err := recovery.ResolveArtifactDir(flags.signal)
+		resolved, err := resolveDispatchReference(flags.signal)
 		if err != nil {
-			emitResult(stdout, buildSignalErrorAck(flags.signal, "recovery_failed", err.Error(), "Check the dispatch ID and control record, then retry."))
+			if validateErr := sanitize.ValidateDispatchID(flags.signal); validateErr != nil {
+				emitResult(stdout, buildSignalErrorAck(flags.signal, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", flags.signal, validateErr), "Provide a dispatch ID without path separators or traversal segments."))
+				return 1
+			}
+			emitResult(stdout, buildSignalErrorAck(flags.signal, "recovery_failed", err.Error(), "Check the dispatch reference and control record, then retry."))
 			return 1
 		}
-		if err := inbox.WriteInbox(artifactDir, msg); err != nil {
+		msg := positional[0]
+		if err := inbox.WriteInbox(resolved.ArtifactDir, msg); err != nil {
 			emitResult(stdout, buildSignalErrorAck(flags.signal, "config_error", err.Error(), "Ensure the inbox path is writable and retry."))
 			return 1
 		}
-		emitResult(stdout, buildSignalAck(flags.signal, artifactDir))
+		emitResult(stdout, buildSignalAck(resolved.DispatchID, resolved.ArtifactDir))
 		return 0
 	}
 	if explicitCommand && !flags.stdin && flags.promptFile == "" && len(positional) == 0 {

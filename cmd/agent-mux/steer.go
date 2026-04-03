@@ -16,7 +16,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
 	"github.com/buildoak/agent-mux/internal/fifo"
 	"github.com/buildoak/agent-mux/internal/inbox"
-	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
 )
 
@@ -29,33 +28,38 @@ func runSteerCommand(args []string, stdout io.Writer) int {
 			"Actions: abort, nudge, redirect, extend, status")
 	}
 
-	idPrefix := strings.TrimSpace(args[0])
+	ref := strings.TrimSpace(args[0])
 	action := strings.TrimSpace(args[1])
 	rest := args[2:]
 
-	if err := sanitize.ValidateDispatchID(idPrefix); err != nil {
-		return emitSteerError(stdout, 1, "invalid_input",
-			fmt.Sprintf("invalid dispatch_id %q: %v", idPrefix, err), "")
-	}
-
-	artifactDir, err := resolveSteerArtifactDir(idPrefix)
+	resolved, err := resolveDispatchReference(ref)
 	if err != nil {
-		return emitSteerError(stdout, 1, "not_found",
-			fmt.Sprintf("no dispatch found for prefix %q", idPrefix),
+		if validateErr := sanitize.ValidateDispatchID(ref); validateErr != nil {
+			return emitSteerError(stdout, 1, "invalid_input",
+				fmt.Sprintf("invalid dispatch_id %q: %v", ref, validateErr), "")
+		}
+		return emitSteerError(stdout, 1, "not_found", err.Error(),
 			"Use `agent-mux list` to find a valid dispatch ID.")
 	}
 
+	dispatchID := resolved.DispatchID
+	if err := sanitize.ValidateDispatchID(ref); err != nil {
+		return emitSteerError(stdout, 1, "invalid_input",
+			fmt.Sprintf("invalid dispatch_id %q: %v", ref, err), "")
+	}
+	artifactDir := resolved.ArtifactDir
+
 	switch action {
 	case "abort":
-		return steerAbort(idPrefix, artifactDir, stdout)
+		return steerAbort(dispatchID, artifactDir, stdout)
 	case "nudge":
-		return steerNudge(idPrefix, artifactDir, rest, stdout)
+		return steerNudge(dispatchID, artifactDir, rest, stdout)
 	case "redirect":
-		return steerRedirect(idPrefix, artifactDir, rest, stdout)
+		return steerRedirect(dispatchID, artifactDir, rest, stdout)
 	case "extend":
-		return steerExtend(idPrefix, artifactDir, rest, stdout)
+		return steerExtend(dispatchID, artifactDir, rest, stdout)
 	case "status":
-		return steerStatus(idPrefix, artifactDir, stdout)
+		return steerStatus(dispatchID, artifactDir, stdout)
 	default:
 		return emitSteerError(stdout, 2, "invalid_args",
 			fmt.Sprintf("unknown steer action %q", action),
@@ -211,18 +215,6 @@ func ReadControlFile(artifactDir string) *ControlFile {
 		return nil
 	}
 	return &cf
-}
-
-// --- helpers ---
-
-func resolveSteerArtifactDir(idPrefix string) (string, error) {
-	// Try recovery index first (covers both completed and in-progress).
-	dir, err := recovery.ResolveArtifactDir(idPrefix)
-	if err == nil {
-		return dir, nil
-	}
-	// Fall back to default artifact dir construction.
-	return recovery.DefaultArtifactDir(idPrefix)
 }
 
 func emitSteerError(stdout io.Writer, exitCode int, code, message, suggestion string) int {

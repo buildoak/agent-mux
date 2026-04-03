@@ -142,7 +142,7 @@ func TestResolveArtifactDirFallsBackToLegacyControlRecord(t *testing.T) {
 		_ = os.Remove(recordPath)
 	})
 
-	data, err := json.MarshalIndent(controlRecord{
+	data, err := json.MarshalIndent(ControlRecord{
 		DispatchID:  dispatchID,
 		ArtifactDir: artifactDir,
 	}, "", "  ")

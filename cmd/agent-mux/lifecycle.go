@@ -93,19 +93,19 @@ func runStatusCommand(args []string, stdout io.Writer) int {
 		return emitLifecycleError(stdout, 2, "invalid_args", "status requires exactly one dispatch_id argument", "Pass a full dispatch ID or unique prefix.")
 	}
 
-	idPrefix := strings.TrimSpace(fs.Args()[0])
-	if err := sanitize.ValidateDispatchID(idPrefix); err != nil {
-		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", idPrefix, err), "")
-	}
-
-	record, err := store.FindRecord("", idPrefix)
+	ref := strings.TrimSpace(fs.Args()[0])
+	resolved, err := resolveDispatchReference(ref)
 	if err != nil {
-		return emitLifecycleError(stdout, 1, "lookup_failed", fmt.Sprintf("find dispatch %q: %v", idPrefix, err), "")
+		if validateErr := sanitize.ValidateDispatchID(ref); validateErr != nil {
+			return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", ref, validateErr), "")
+		}
+		return emitLifecycleError(stdout, 1, "not_found", err.Error(), "")
 	}
+	record := resolved.Record
 
 	// If no store record exists, try reading live status from artifact dir.
 	if record == nil {
-		return statusFromLiveDispatch(idPrefix, jsonOutput, stdout)
+		return statusFromLiveDispatch(resolved, jsonOutput, stdout)
 	}
 
 	// Dispatch is in the store (completed/failed/timed_out).
@@ -126,16 +126,14 @@ func runStatusCommand(args []string, stdout io.Writer) int {
 	return 0
 }
 
-func statusFromLiveDispatch(idPrefix string, jsonOutput bool, stdout io.Writer) int {
-	artifactDir, err := recovery.ResolveArtifactDir(idPrefix)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for prefix %q", idPrefix), "")
-	}
-
+func statusFromLiveDispatch(resolved *dispatchRefResolution, jsonOutput bool, stdout io.Writer) int {
+	artifactDir := resolved.ArtifactDir
 	liveStatus, err := dispatch.ReadStatusJSON(artifactDir)
 	if err != nil {
-		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no status found for dispatch %q", idPrefix), "")
+		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no status found for dispatch %q", resolved.DispatchID), "")
 	}
+	liveStatus.DispatchID = firstNonEmptyString(strings.TrimSpace(liveStatus.DispatchID), resolved.DispatchID)
+	liveStatus.SessionID = firstNonEmptyString(strings.TrimSpace(liveStatus.SessionID), sessionIDFromArtifacts(artifactDir))
 
 	// Check if host process is still alive.
 	if liveStatus.State == "running" {
@@ -180,38 +178,37 @@ func runResultCommand(args []string, stdout io.Writer) int {
 		return emitLifecycleError(stdout, 2, "invalid_args", "result requires exactly one dispatch_id argument", "Pass a full dispatch ID or unique prefix.")
 	}
 
-	idPrefix := strings.TrimSpace(fs.Args()[0])
-	if err := sanitize.ValidateDispatchID(idPrefix); err != nil {
-		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", idPrefix, err), "")
-	}
-
-	record, err := store.FindRecord("", idPrefix)
+	ref := strings.TrimSpace(fs.Args()[0])
+	resolved, err := resolveDispatchReference(ref)
 	if err != nil {
-		return emitLifecycleError(stdout, 1, "lookup_failed", fmt.Sprintf("find dispatch %q: %v", idPrefix, err), "")
+		if validateErr := sanitize.ValidateDispatchID(ref); validateErr != nil {
+			return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", ref, validateErr), "")
+		}
+		return emitLifecycleError(stdout, 1, "not_found", err.Error(), "Use `agent-mux list` to find a durable dispatch ID.")
 	}
+	record := resolved.Record
 
 	// If no record found, dispatch may still be running.
 	if record == nil {
-		artifactDir, resolveErr := recovery.ResolveArtifactDir(idPrefix)
-		if resolveErr != nil {
-			return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no stored result found for prefix %q", idPrefix), "Use `agent-mux list` to find a durable dispatch ID.")
-		}
+		artifactDir := resolved.ArtifactDir
 		liveStatus, statusErr := dispatch.ReadStatusJSON(artifactDir)
 		if statusErr == nil && (liveStatus.State == "running" || liveStatus.State == "initializing") {
 			if noWait {
 				writeCompactJSON(stdout, map[string]any{
 					"error":       "dispatch_running",
-					"dispatch_id": idPrefix,
+					"dispatch_id": resolved.DispatchID,
+					"trace_token": resolved.TraceToken,
+					"session_id":  liveStatus.SessionID,
 					"state":       liveStatus.State,
 				})
 				return 1
 			}
 			// Block: poll status.json until dispatch completes.
-			return pollUntilDone(idPrefix, artifactDir, jsonOutput, showArtifacts, stdout)
+			return pollUntilDone(resolved, jsonOutput, showArtifacts, stdout)
 		}
 	}
 
-	dispatchID := idPrefix
+	dispatchID := resolved.DispatchID
 	if record != nil && strings.TrimSpace(record.ID) != "" {
 		dispatchID = record.ID
 	}
@@ -231,6 +228,7 @@ func runResultCommand(args []string, stdout io.Writer) int {
 		if jsonOutput {
 			writeCompactJSON(stdout, map[string]any{
 				"dispatch_id":  dispatchID,
+				"trace_token":  resolved.TraceToken,
 				"artifact_dir": artifactDir,
 				"artifacts":    artifacts,
 			})
@@ -260,7 +258,7 @@ func runResultCommand(args []string, stdout io.Writer) int {
 		data, fallbackErr := os.ReadFile(fallbackPath)
 		if fallbackErr != nil {
 			if os.IsNotExist(fallbackErr) && record == nil {
-				return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no stored result found for prefix %q", idPrefix), "Use `agent-mux list` to find a durable dispatch ID.")
+				return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no stored result found for reference %q", ref), "Use `agent-mux list` to find a durable dispatch ID.")
 			}
 			if os.IsNotExist(fallbackErr) {
 				return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no stored result found for dispatch %q", dispatchID), "")
@@ -273,6 +271,7 @@ func runResultCommand(args []string, stdout io.Writer) int {
 	if jsonOutput {
 		result := map[string]any{
 			"dispatch_id": dispatchID,
+			"trace_token": resolved.TraceToken,
 			"response":    response,
 		}
 		enrichResultStatus(result, record, dispatchID)
@@ -462,17 +461,17 @@ func runInspectCommand(args []string, stdout io.Writer) int {
 		return emitLifecycleError(stdout, 2, "invalid_args", "inspect requires exactly one dispatch_id argument", "Pass a full dispatch ID or unique prefix.")
 	}
 
-	idPrefix := strings.TrimSpace(fs.Args()[0])
-	if err := sanitize.ValidateDispatchID(idPrefix); err != nil {
-		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", idPrefix, err), "")
-	}
-
-	record, err := store.FindRecord("", idPrefix)
+	ref := strings.TrimSpace(fs.Args()[0])
+	resolved, err := resolveDispatchReference(ref)
 	if err != nil {
-		return emitLifecycleError(stdout, 1, "lookup_failed", fmt.Sprintf("find dispatch %q: %v", idPrefix, err), "")
+		if validateErr := sanitize.ValidateDispatchID(ref); validateErr != nil {
+			return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", ref, validateErr), "")
+		}
+		return emitLifecycleError(stdout, 1, "not_found", err.Error(), "")
 	}
+	record := resolved.Record
 	if record == nil {
-		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for prefix %q", idPrefix), "")
+		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for reference %q", ref), "")
 	}
 
 	dispatchID := record.ID
@@ -503,6 +502,8 @@ func runInspectCommand(args []string, stdout io.Writer) int {
 	if jsonOutput {
 		result := map[string]any{
 			"dispatch_id":  dispatchID,
+			"trace_token":  firstNonEmptyString(record.TraceToken, resolved.TraceToken),
+			"session_id":   firstNonEmptyString(record.SessionID, sessionIDFromArtifacts(artifactDir)),
 			"record":       record,
 			"response":     response,
 			"artifact_dir": artifactDir,
@@ -683,30 +684,32 @@ func parseDuration(s string) (time.Duration, error) {
 
 // pollUntilDone polls status.json every 1s until the dispatch reaches a
 // terminal state, then reads and returns the result from the store.
-func pollUntilDone(idPrefix, artifactDir string, jsonOutput, showArtifacts bool, stdout io.Writer) int {
+func pollUntilDone(resolved *dispatchRefResolution, jsonOutput, showArtifacts bool, stdout io.Writer) int {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		// Check if a store record appeared (dispatch finished and persisted).
-		record, _ := store.FindRecord("", idPrefix)
+		record, _ := store.FindRecordByRef("", resolved.InputRef)
 		if record != nil {
 			// Dispatch completed. Delegate to normal result display.
 			return showResult(record.ID, record, jsonOutput, showArtifacts, stdout)
 		}
 
 		// Check live status.
-		liveStatus, err := dispatch.ReadStatusJSON(artifactDir)
+		liveStatus, err := dispatch.ReadStatusJSON(resolved.ArtifactDir)
 		if err != nil {
 			continue
 		}
 		switch liveStatus.State {
 		case "completed", "failed", "timed_out", "orphaned":
 			// Terminal state reached. Try store once more.
-			record, _ = store.FindRecord("", idPrefix)
+			record, _ = store.FindRecordByRef("", resolved.InputRef)
 			if record != nil {
 				return showResult(record.ID, record, jsonOutput, showArtifacts, stdout)
 			}
+			liveStatus.DispatchID = firstNonEmptyString(strings.TrimSpace(liveStatus.DispatchID), resolved.DispatchID)
+			liveStatus.SessionID = firstNonEmptyString(strings.TrimSpace(liveStatus.SessionID), sessionIDFromArtifacts(resolved.ArtifactDir))
 			// No store record but terminal state — return status.
 			writeCompactJSON(stdout, liveStatus)
 			return 0
@@ -733,6 +736,8 @@ func showResult(dispatchID string, record *store.DispatchRecord, jsonOutput, sho
 		if jsonOutput {
 			writeCompactJSON(stdout, map[string]any{
 				"dispatch_id":  dispatchID,
+				"trace_token":  record.TraceToken,
+				"session_id":   record.SessionID,
 				"artifact_dir": artifactDir,
 				"artifacts":    artifacts,
 			})
@@ -760,6 +765,8 @@ func showResult(dispatchID string, record *store.DispatchRecord, jsonOutput, sho
 	if jsonOutput {
 		result := map[string]any{
 			"dispatch_id": dispatchID,
+			"trace_token": record.TraceToken,
+			"session_id":  record.SessionID,
 			"response":    response,
 		}
 		enrichResultStatus(result, record, dispatchID)
@@ -795,9 +802,13 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 		return emitLifecycleError(stdout, 2, "invalid_args", "wait requires exactly one dispatch_id argument", "Pass a full dispatch ID or unique prefix.")
 	}
 
-	idPrefix := strings.TrimSpace(fs.Args()[0])
-	if err := sanitize.ValidateDispatchID(idPrefix); err != nil {
-		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", idPrefix, err), "")
+	ref := strings.TrimSpace(fs.Args()[0])
+	resolved, err := resolveDispatchReference(ref)
+	if err != nil {
+		if validateErr := sanitize.ValidateDispatchID(ref); validateErr != nil {
+			return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", ref, validateErr), "")
+		}
+		return emitLifecycleError(stdout, 1, "not_found", err.Error(), "")
 	}
 
 	// Resolve poll interval: CLI flag > config > hardcoded default.
@@ -818,14 +829,14 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Check if already done.
-	record, _ := store.FindRecord("", idPrefix)
+	record := resolved.Record
 	if record != nil {
 		return showResult(record.ID, record, jsonOutput, false, stdout)
 	}
 
-	artifactDir, resolveErr := recovery.ResolveArtifactDir(idPrefix)
-	if resolveErr != nil {
-		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for prefix %q", idPrefix), "")
+	artifactDir := resolved.ArtifactDir
+	if artifactDir == "" {
+		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for reference %q", ref), "")
 	}
 
 	ticker := time.NewTicker(interval)
@@ -833,7 +844,7 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 
 	for range ticker.C {
 		// Check store first.
-		record, _ = store.FindRecord("", idPrefix)
+		record, _ = store.FindRecordByRef("", resolved.InputRef)
 		if record != nil {
 			return showResult(record.ID, record, jsonOutput, false, stdout)
 		}
@@ -847,10 +858,12 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 		switch liveStatus.State {
 		case "completed", "failed", "timed_out":
 			// Terminal. Try store one more time.
-			record, _ = store.FindRecord("", idPrefix)
+			record, _ = store.FindRecordByRef("", resolved.InputRef)
 			if record != nil {
 				return showResult(record.ID, record, jsonOutput, false, stdout)
 			}
+			liveStatus.DispatchID = firstNonEmptyString(strings.TrimSpace(liveStatus.DispatchID), resolved.DispatchID)
+			liveStatus.SessionID = firstNonEmptyString(strings.TrimSpace(liveStatus.SessionID), sessionIDFromArtifacts(artifactDir))
 			writeCompactJSON(stdout, liveStatus)
 			return 0
 		case "orphaned":
@@ -874,6 +887,9 @@ func enrichResultStatus(result map[string]any, record *store.DispatchRecord, dis
 	// 1. Store record is the most authoritative source.
 	if record != nil && strings.TrimSpace(record.Status) != "" {
 		result["status"] = record.Status
+		if strings.TrimSpace(record.SessionID) != "" {
+			result["session_id"] = record.SessionID
+		}
 		// Check for kill reason from artifact events.
 		if record.Status == "failed" {
 			if reason := extractKillReason(record.ArtifactDir); reason != "" {
@@ -896,6 +912,9 @@ func enrichResultStatus(result map[string]any, record *store.DispatchRecord, dis
 	if strings.TrimSpace(artifactDir) != "" {
 		if meta, err := dispatch.ReadDispatchMeta(artifactDir); err == nil && meta.Status != "" {
 			result["status"] = meta.Status
+			if strings.TrimSpace(meta.SessionID) != "" {
+				result["session_id"] = meta.SessionID
+			}
 			if meta.Status == "failed" {
 				if reason := extractKillReason(artifactDir); reason != "" {
 					result["kill_reason"] = reason
@@ -906,9 +925,25 @@ func enrichResultStatus(result map[string]any, record *store.DispatchRecord, dis
 		// 3. Fall back to status.json state.
 		if live, err := dispatch.ReadStatusJSON(artifactDir); err == nil && live.State != "" {
 			result["status"] = live.State
+			if strings.TrimSpace(live.SessionID) != "" {
+				result["session_id"] = live.SessionID
+			}
 			return
 		}
 	}
+}
+
+func sessionIDFromArtifacts(artifactDir string) string {
+	if strings.TrimSpace(artifactDir) == "" {
+		return ""
+	}
+	if meta, err := dispatch.ReadDispatchMeta(artifactDir); err == nil && meta != nil && strings.TrimSpace(meta.SessionID) != "" {
+		return meta.SessionID
+	}
+	if live, err := dispatch.ReadStatusJSON(artifactDir); err == nil && live != nil {
+		return strings.TrimSpace(live.SessionID)
+	}
+	return ""
 }
 
 // extractKillReason scans events.jsonl for kill-related error codes

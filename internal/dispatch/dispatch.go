@@ -74,6 +74,7 @@ type DispatchMeta struct {
 	DispatchID          string   `json:"dispatch_id"`
 	DispatchSalt        string   `json:"dispatch_salt"`
 	TraceToken          string   `json:"trace_token,omitempty"`
+	SessionID           string   `json:"session_id,omitempty"`
 	StartedAt           string   `json:"started_at"`
 	Engine              string   `json:"engine"`
 	Model               string   `json:"model"`
@@ -122,6 +123,30 @@ func UpdateDispatchMeta(artifactDir string, status string, artifacts []string) e
 	meta.Status = status
 	meta.Artifacts = artifacts
 
+	return writeMetaFile(path, &meta)
+}
+
+func UpdateDispatchSessionID(artifactDir string, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+
+	path := filepath.Join(artifactDir, "_dispatch_meta.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read meta: %w", err)
+	}
+
+	var meta DispatchMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return fmt.Errorf("unmarshal meta: %w", err)
+	}
+	if meta.SessionID == sessionID {
+		return nil
+	}
+
+	meta.SessionID = sessionID
 	return writeMetaFile(path, &meta)
 }
 

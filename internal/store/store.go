@@ -21,6 +21,7 @@ type DispatchRecord struct {
 	ID            string `json:"id"`
 	Salt          string `json:"salt"`
 	TraceToken    string `json:"trace_token,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
 	Status        string `json:"status"`
 	Engine        string `json:"engine"`
 	Model         string `json:"model"`
@@ -185,6 +186,38 @@ func FindRecord(storePath string, idPrefix string) (*DispatchRecord, error) {
 		}
 		if match != nil {
 			return nil, fmt.Errorf("multiple dispatches match prefix %q", prefix)
+		}
+		recordCopy := record
+		match = &recordCopy
+	}
+
+	return match, nil
+}
+
+func FindRecordByRef(storePath string, ref string) (*DispatchRecord, error) {
+	path, err := ensureStorePath(storePath)
+	if err != nil {
+		return nil, err
+	}
+
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, nil
+	}
+
+	records, err := readAllRecords(dispatchesPath(path))
+	if err != nil {
+		return nil, err
+	}
+
+	var match *DispatchRecord
+	for i := range records {
+		record := records[i]
+		if !strings.HasPrefix(record.ID, ref) && strings.TrimSpace(record.TraceToken) != ref {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("multiple dispatches match reference %q", ref)
 		}
 		recordCopy := record
 		match = &recordCopy

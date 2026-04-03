@@ -170,6 +170,33 @@ approach needed first.
 
 ---
 
+### F-13: Session traceability and lookup normalization
+**Type:** feature | **Priority:** P0 | **Status:** open
+**Decided:** `rollout-2026-04-03T11-12-57-019d5230-18fd-7a01-927a-3aceb81a153a` (2026-04-03)
+
+`agent-mux` already captures the harness `session_id` inside the engine loop,
+but durable and first-mile surfaces stop at `dispatch_id`, `salt`, and
+`trace_token`. That makes Codex / Claude resume correlation asymmetric: the
+system knows the canonical session identity, but callers cannot retrieve it
+reliably from the normal lifecycle commands.
+
+**Intent:**
+- Persist harness `session_id` into `status.json`, `_dispatch_meta.json`, and
+  dispatch store records (`dispatches.jsonl`).
+- Surface `session_id` in `status`, `inspect`, `list --json`, and
+  `result --json`.
+- Accept `trace_token` as a first-class lookup key anywhere a dispatch ref is
+  accepted.
+- Make clear that `salt` is a convenience label, not reliable identity. If a
+  salt lookup is ever offered, it must fail on ambiguity rather than pretend
+  uniqueness.
+
+**Behavior gate:** after worker start, `agent-mux status --json <dispatch_id>`
+returns `session_id`, and the same `session_id` is visible via `inspect`,
+`list --json`, and `result --json`.
+
+---
+
 ## P1 — Soon
 
 ### F-9: `--quiet` output mode — SHIPPED (superseded)
@@ -206,6 +233,43 @@ CI tests that run a live dispatch against a small fixture repo and validate
 behavioral outcomes (files changed, commands run, self-correction events)
 using gpt-5.4-mini high as judge. CI.md guide written covering fixture setup,
 test invocation, and expected pass/fail criteria.
+
+---
+
+### F-14: Bare `agent-mux` should show curated help, not dispatch semantics
+**Type:** feature | **Priority:** P1 | **Status:** open
+**Decided:** `rollout-2026-04-03T11-12-57-019d5230-18fd-7a01-927a-3aceb81a153a` (2026-04-03)
+
+Bare invocation currently falls into implicit dispatch mode and only later
+fails on "missing prompt." That is backwards for a coordinator-facing CLI. A
+zero-argument call should act like a front door, not a malformed dispatch.
+
+**Intent:**
+- Bare `agent-mux` and `agent-mux help` show a curated help menu instead of
+  entering dispatch mode.
+- Preserve `agent-mux <prompt>` shorthand for actual dispatches.
+
+**Behavior gate:** `agent-mux` with no args exits `0`, emits structured help,
+and creates no artifact dir or control record.
+
+---
+
+### B-9: `steer <dispatch_id> status` lives on the wrong command
+**Type:** bug | **Priority:** P1 | **Status:** open
+**Decided:** `rollout-2026-04-03T11-12-57-019d5230-18fd-7a01-927a-3aceb81a153a` (2026-04-03)
+
+`agent-mux steer <id> status` duplicates the existing `status` surface while
+placing an observational read under a mutating verb. The syntax is awkward,
+the mental model is wrong, and the docs now have two ways to ask the same
+question.
+
+**Intent:**
+- Make `agent-mux status <id>` the canonical live-status command.
+- Keep `agent-mux steer <id> status` only as a compatibility alias for one
+  release, then remove it.
+
+**Behavior gate:** docs, help, and examples use `agent-mux status <id>`; the
+deprecated alias returns the same payload during the transition window.
 
 ---
 
