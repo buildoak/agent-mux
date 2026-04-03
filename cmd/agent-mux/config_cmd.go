@@ -111,7 +111,6 @@ func runConfigRoles(args []string, stdout io.Writer) int {
 		Model   string `json:"model"`
 		Effort  string `json:"effort"`
 		Timeout int    `json:"timeout"`
-		Variant string `json:"variant,omitempty"`
 	}
 
 	names := sortedKeys(cfg.Roles)
@@ -125,17 +124,6 @@ func runConfigRoles(args []string, stdout io.Writer) int {
 			Effort:  role.Effort,
 			Timeout: role.Timeout,
 		})
-		for _, vName := range sortedKeys(role.Variants) {
-			v := role.Variants[vName]
-			entries = append(entries, roleEntry{
-				Name:    name,
-				Engine:  coalesce(v.Engine, role.Engine),
-				Model:   coalesce(v.Model, role.Model),
-				Effort:  coalesce(v.Effort, role.Effort),
-				Timeout: coalesceInt(v.Timeout, role.Timeout),
-				Variant: vName,
-			})
-		}
 	}
 
 	if jsonOutput {
@@ -146,16 +134,12 @@ func runConfigRoles(args []string, stdout io.Writer) int {
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tENGINE\tMODEL\tEFFORT\tTIMEOUT")
 	for _, e := range entries {
-		display := e.Name
-		if e.Variant != "" {
-			display = fmt.Sprintf("  \u2514 %s", e.Variant)
-		}
 		timeout := "-"
 		if e.Timeout > 0 {
 			timeout = fmt.Sprintf("%ds", e.Timeout)
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			display,
+			e.Name,
 			dashIfEmpty(e.Engine),
 			dashIfEmpty(e.Model),
 			dashIfEmpty(e.Effort),
@@ -282,23 +266,6 @@ func configToJSONMap(cfg *config.Config) (map[string]any, error) {
 		if role.SystemPromptFile != "" {
 			r["system_prompt_file"] = role.SystemPromptFile
 		}
-		if len(role.Variants) > 0 {
-			variants := make(map[string]any, len(role.Variants))
-			for vName, v := range role.Variants {
-				vm := map[string]any{
-					"engine":  v.Engine,
-					"model":   v.Model,
-					"effort":  v.Effort,
-					"timeout": v.Timeout,
-					"skills":  v.Skills,
-				}
-				if v.SystemPromptFile != "" {
-					vm["system_prompt_file"] = v.SystemPromptFile
-				}
-				variants[vName] = vm
-			}
-			r["variants"] = variants
-		}
 		roles[name] = r
 	}
 
@@ -345,18 +312,4 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func coalesce(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
-}
-
-func coalesceInt(a, b int) int {
-	if a != 0 {
-		return a
-	}
-	return b
 }

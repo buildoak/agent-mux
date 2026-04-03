@@ -514,7 +514,6 @@ func runInspectCommand(args []string, stdout io.Writer) int {
 	fmt.Fprintf(tw, "Engine:\t%s\n", dashIfEmpty(record.Engine))
 	fmt.Fprintf(tw, "Model:\t%s\n", dashIfEmpty(record.Model))
 	fmt.Fprintf(tw, "Role:\t%s\n", dashIfEmpty(record.Role))
-	fmt.Fprintf(tw, "Variant:\t%s\n", dashIfEmpty(record.Variant))
 	fmt.Fprintf(tw, "Started:\t%s\n", dashIfEmpty(record.StartedAt))
 	fmt.Fprintf(tw, "Ended:\t%s\n", dashIfEmpty(record.EndedAt))
 	fmt.Fprintf(tw, "Duration:\t%s\n", formatDuration(record.DurationMs))

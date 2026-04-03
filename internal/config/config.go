@@ -40,23 +40,13 @@ type DefaultsConfig struct {
 }
 
 type RoleConfig struct {
-	Engine           string                 `toml:"engine"`
-	Model            string                 `toml:"model"`
-	Effort           string                 `toml:"effort"`
-	Timeout          int                    `toml:"timeout"`
-	Skills           []string               `toml:"skills"`
-	SystemPromptFile string                 `toml:"system_prompt_file"`
-	Variants         map[string]RoleVariant `toml:"variants"`
-	SourceDir        string                 `toml:"-"`
-}
-
-type RoleVariant struct {
 	Engine           string   `toml:"engine"`
 	Model            string   `toml:"model"`
 	Effort           string   `toml:"effort"`
 	Timeout          int      `toml:"timeout"`
 	Skills           []string `toml:"skills"`
 	SystemPromptFile string   `toml:"system_prompt_file"`
+	SourceDir        string   `toml:"-"`
 }
 
 type LivenessConfig struct {
@@ -325,36 +315,20 @@ func configPaths(configPath string, cwd string) ([]string, error) {
 		return nil, fmt.Errorf("get home directory: %w", err)
 	}
 
-	paths := make([]string, 0, 4)
-
-	// 1. Global config: ~/.agent-mux/config.toml (new canonical location).
-	// 2. Global machine-local config: ~/.agent-mux/config.local.toml
-	newGlobal := filepath.Join(homeDir, ".agent-mux", "config.toml")
-	newGlobalLocal := filepath.Join(homeDir, ".agent-mux", "config.local.toml")
-	oldGlobal := filepath.Join(homeDir, ".config", "agent-mux", "config.toml")
-
-	if _, err := os.Stat(newGlobal); err == nil {
-		// New location exists — use it.
-		paths = append(paths, newGlobal, newGlobalLocal)
-	} else if os.IsNotExist(err) {
-		// New location absent — check old XDG location for backward compat.
-		if _, statErr := os.Stat(oldGlobal); statErr == nil {
-			fmt.Fprintf(os.Stderr, "agent-mux: deprecation: config found at %q; migrate to %q\n", oldGlobal, newGlobal)
-			paths = append(paths, oldGlobal)
-		} else if statErr != nil && !os.IsNotExist(statErr) {
-			return nil, fmt.Errorf("stat global config %q: %w", oldGlobal, statErr)
-		}
-		paths = append(paths, newGlobalLocal)
-	} else {
-		return nil, fmt.Errorf("stat global config %q: %w", newGlobal, err)
+	globalConfig := filepath.Join(homeDir, ".agent-mux", "config.toml")
+	var paths []string
+	if _, err := os.Stat(globalConfig); err == nil {
+		paths = append(paths, globalConfig)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat global config %q: %w", globalConfig, err)
 	}
 
-	// 3. Project config: <cwd>/.agent-mux/config.toml
-	// 4. Project machine-local config: <cwd>/.agent-mux/config.local.toml
-	paths = append(paths,
-		filepath.Join(cwd, ".agent-mux", "config.toml"),
-		filepath.Join(cwd, ".agent-mux", "config.local.toml"),
-	)
+	projectConfig := filepath.Join(cwd, ".agent-mux", "config.toml")
+	if _, err := os.Stat(projectConfig); err == nil {
+		paths = append(paths, projectConfig)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat project config %q: %w", projectConfig, err)
+	}
 
 	return paths, nil
 }
@@ -403,18 +377,6 @@ func merge[T comparable](dst *T, value T, defined bool) {
 func cloneRoleConfig(role RoleConfig) RoleConfig {
 	cloned := role
 	cloned.Skills = append([]string(nil), role.Skills...)
-	if len(role.Variants) > 0 {
-		cloned.Variants = make(map[string]RoleVariant, len(role.Variants))
-		for name, variant := range role.Variants {
-			cloned.Variants[name] = cloneRoleVariant(variant)
-		}
-	}
-	return cloned
-}
-
-func cloneRoleVariant(variant RoleVariant) RoleVariant {
-	cloned := variant
-	cloned.Skills = append([]string(nil), variant.Skills...)
 	return cloned
 }
 
@@ -431,34 +393,6 @@ func mergeRoleConfig(baseRole, overlayRole RoleConfig, overlay *Config, roleName
 	}
 	if overlayRole.SourceDir != "" {
 		merged.SourceDir = overlayRole.SourceDir
-	}
-
-	if len(overlayRole.Variants) > 0 {
-		if merged.Variants == nil {
-			merged.Variants = make(map[string]RoleVariant, len(overlayRole.Variants))
-		}
-		for name, variant := range overlayRole.Variants {
-			if existing, ok := merged.Variants[name]; ok {
-				merged.Variants[name] = mergeRoleVariant(existing, variant, overlay, roleName, name)
-				continue
-			}
-			merged.Variants[name] = cloneRoleVariant(variant)
-		}
-	}
-
-	return merged
-}
-
-func mergeRoleVariant(baseVariant, overlayVariant RoleVariant, overlay *Config, roleName, variantName string) RoleVariant {
-	merged := cloneRoleVariant(baseVariant)
-
-	merge(&merged.Engine, overlayVariant.Engine, overlay.defined("roles", roleName, "variants", variantName, "engine"))
-	merge(&merged.Model, overlayVariant.Model, overlay.defined("roles", roleName, "variants", variantName, "model"))
-	merge(&merged.Effort, overlayVariant.Effort, overlay.defined("roles", roleName, "variants", variantName, "effort"))
-	merge(&merged.Timeout, overlayVariant.Timeout, overlay.defined("roles", roleName, "variants", variantName, "timeout"))
-	merge(&merged.SystemPromptFile, overlayVariant.SystemPromptFile, overlay.defined("roles", roleName, "variants", variantName, "system_prompt_file"))
-	if overlay.defined("roles", roleName, "variants", variantName, "skills") || len(overlayVariant.Skills) > 0 {
-		merged.Skills = append([]string(nil), overlayVariant.Skills...)
 	}
 
 	return merged
@@ -492,14 +426,6 @@ func validateExplicitTimeoutValues(source string, cfg *Config) error {
 		if cfg.defined("roles", roleName, "timeout") {
 			if err := validatePositiveInt("roles."+roleName+".timeout", source, role.Timeout); err != nil {
 				return err
-			}
-		}
-		for variantName, variant := range role.Variants {
-			if cfg.defined("roles", roleName, "variants", variantName, "timeout") {
-				field := "roles." + roleName + ".variants." + variantName + ".timeout"
-				if err := validatePositiveInt(field, source, variant.Timeout); err != nil {
-					return err
-				}
 			}
 		}
 	}

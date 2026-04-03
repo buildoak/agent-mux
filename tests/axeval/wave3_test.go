@@ -69,7 +69,7 @@ func TestConfigIntrospection(t *testing.T) {
 	if strings.TrimSpace(rolesOut) == "" {
 		t.Fatal("config roles stdout empty")
 	}
-	if !strings.Contains(rolesOut, "sysprompt-test") || !strings.Contains(rolesOut, "variant-test") {
+	if !strings.Contains(rolesOut, "sysprompt-test") || !strings.Contains(rolesOut, "variant-test-mini") {
 		t.Fatalf("config roles output missing expected role names\nstdout=%s", rolesOut)
 	}
 

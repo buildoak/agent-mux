@@ -140,13 +140,13 @@ func (e *LoopEngine) SetStreamMode(m event.StreamMode) {
 func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*types.DispatchResult, error) {
 	startTime := time.Now()
 	if spec.MaxDepth > 0 && spec.Depth >= spec.MaxDepth {
-		metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: e.annotations.Role, Variant: e.annotations.Variant, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: &types.TokenUsage{}}
+		metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: e.annotations.Role, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: &types.TokenUsage{}}
 		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "max_depth_exceeded", fmt.Sprintf("Max dispatch depth %d reached. Complete work directly.", spec.MaxDepth), ""), nil
 	}
 	dispatchSpec := *spec
 	dispatchSpec.Prompt = dispatch.WithPromptPreamble(dispatchSpec.Prompt, &dispatchSpec)
 
-	metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: e.annotations.Role, Variant: e.annotations.Variant, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: &types.TokenUsage{}}
+	metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: e.annotations.Role, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: &types.TokenUsage{}}
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
 		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."), nil
 	}
@@ -908,7 +908,7 @@ buildResult:
 	if tokens == nil {
 		tokens = &types.TokenUsage{}
 	}
-	metadata = &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: e.annotations.Role, Variant: e.annotations.Variant, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: tokens, Turns: turns}
+	metadata = &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: e.annotations.Role, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: tokens, Turns: turns}
 	metadata.SessionID = sid
 
 	switch state {

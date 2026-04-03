@@ -257,14 +257,6 @@ timeout = 0
 `,
 			want: "roles.reviewer.timeout",
 		},
-		{
-			name: "variant timeout",
-			content: `
-[roles.reviewer.variants.fast]
-timeout = -5
-`,
-			want: "roles.reviewer.variants.fast.timeout",
-		},
 	}
 
 	for _, tt := range tests {
@@ -288,7 +280,7 @@ timeout = -5
 	}
 }
 
-func TestPrecedenceWithLocalConfigs(t *testing.T) {
+func TestPrecedenceAcrossGlobalAndProjectConfigs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cwd := t.TempDir()
@@ -305,7 +297,6 @@ func TestPrecedenceWithLocalConfigs(t *testing.T) {
 	globalConfig := `
 [defaults]
 engine = "claude"
-model = "global-model"
 max_depth = 4
 
 [roles.reviewer]
@@ -315,41 +306,23 @@ skills = ["global-skill"]
 [timeout]
 medium = 700
 `
-	globalLocalConfig := `
-[defaults]
-model = "global-local-model"
-
-[roles.reviewer]
-model = "global-local-role-model"
-
-[timeout]
-medium = 650
-`
 	projectConfig := `
 [defaults]
 model = "project-model"
 max_depth = 9
 
 [roles.reviewer]
+engine = "codex"
 skills = ["project-skill"]
+system_prompt_file = "prompts/reviewer.md"
 
 [liveness]
 silence_warn_seconds = 45
 `
-	projectLocalConfig := `
-[defaults]
-model = "project-local-model"
-
-[roles.reviewer]
-engine = "codex"
-system_prompt_file = "prompts/reviewer-local.md"
-`
 
 	files := map[string]string{
-		filepath.Join(globalDir, "config.toml"):        globalConfig,
-		filepath.Join(globalDir, "config.local.toml"):  globalLocalConfig,
-		filepath.Join(projectDir, "config.toml"):       projectConfig,
-		filepath.Join(projectDir, "config.local.toml"): projectLocalConfig,
+		filepath.Join(globalDir, "config.toml"):  globalConfig,
+		filepath.Join(projectDir, "config.toml"): projectConfig,
 	}
 	for path, content := range files {
 		if err := os.WriteFile(path, []byte(strings.TrimSpace(content)), 0o644); err != nil {
@@ -365,14 +338,14 @@ system_prompt_file = "prompts/reviewer-local.md"
 	if cfg.Defaults.Engine != "claude" {
 		t.Fatalf("Defaults.Engine = %q, want %q", cfg.Defaults.Engine, "claude")
 	}
-	if cfg.Defaults.Model != "project-local-model" {
-		t.Fatalf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "project-local-model")
+	if cfg.Defaults.Model != "project-model" {
+		t.Fatalf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "project-model")
 	}
 	if cfg.Defaults.MaxDepth != 9 {
 		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 9)
 	}
-	if cfg.Timeout.Medium != 650 {
-		t.Fatalf("Timeout.Medium = %d, want %d", cfg.Timeout.Medium, 650)
+	if cfg.Timeout.Medium != 700 {
+		t.Fatalf("Timeout.Medium = %d, want %d", cfg.Timeout.Medium, 700)
 	}
 	if cfg.Liveness.SilenceWarnSeconds != 45 {
 		t.Fatalf("Liveness.SilenceWarnSeconds = %d, want %d", cfg.Liveness.SilenceWarnSeconds, 45)
@@ -385,77 +358,17 @@ system_prompt_file = "prompts/reviewer-local.md"
 	if role.Engine != "codex" {
 		t.Fatalf("Roles[reviewer].Engine = %q, want %q", role.Engine, "codex")
 	}
-	if role.Model != "global-local-role-model" {
-		t.Fatalf("Roles[reviewer].Model = %q, want %q", role.Model, "global-local-role-model")
+	if role.Model != "global-role-model" {
+		t.Fatalf("Roles[reviewer].Model = %q, want %q", role.Model, "global-role-model")
 	}
 	if !reflect.DeepEqual(role.Skills, []string{"project-skill"}) {
 		t.Fatalf("Roles[reviewer].Skills = %#v, want %#v", role.Skills, []string{"project-skill"})
 	}
-	if role.SystemPromptFile != "prompts/reviewer-local.md" {
-		t.Fatalf("Roles[reviewer].SystemPromptFile = %q, want %q", role.SystemPromptFile, "prompts/reviewer-local.md")
+	if role.SystemPromptFile != "prompts/reviewer.md" {
+		t.Fatalf("Roles[reviewer].SystemPromptFile = %q, want %q", role.SystemPromptFile, "prompts/reviewer.md")
 	}
 	if role.SourceDir != projectDir {
 		t.Fatalf("Roles[reviewer].SourceDir = %q, want %q", role.SourceDir, projectDir)
-	}
-}
-
-// TestBackwardCompatXDGPath verifies that the old ~/.config/agent-mux/config.toml location
-// is used when the new ~/.agent-mux/config.toml does not exist.
-func TestBackwardCompatXDGPath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cwd := t.TempDir()
-
-	// Only create the old XDG path (no new ~/.agent-mux/config.toml).
-	oldDir := filepath.Join(home, ".config", "agent-mux")
-	if err := os.MkdirAll(oldDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	oldPath := filepath.Join(oldDir, "config.toml")
-	if err := os.WriteFile(oldPath, []byte(`[defaults]
-engine = "codex"
-`), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	cfg, err := LoadConfig("", cwd)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.Defaults.Engine != "codex" {
-		t.Fatalf("Defaults.Engine = %q, want %q (backward compat XDG path)", cfg.Defaults.Engine, "codex")
-	}
-}
-
-// TestNewGlobalPathTakesPrecedenceOverXDG verifies that the new ~/.agent-mux/config.toml
-// is preferred over the old XDG path when both exist.
-func TestNewGlobalPathTakesPrecedenceOverXDG(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cwd := t.TempDir()
-
-	// Create both paths with different values.
-	newDir := filepath.Join(home, ".agent-mux")
-	oldDir := filepath.Join(home, ".config", "agent-mux")
-	if err := os.MkdirAll(newDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll new: %v", err)
-	}
-	if err := os.MkdirAll(oldDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll old: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(newDir, "config.toml"), []byte("[defaults]\nengine = \"claude\"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile new: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(oldDir, "config.toml"), []byte("[defaults]\nengine = \"codex\"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile old: %v", err)
-	}
-
-	cfg, err := LoadConfig("", cwd)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.Defaults.Engine != "claude" {
-		t.Fatalf("Defaults.Engine = %q, want %q (new path wins)", cfg.Defaults.Engine, "claude")
 	}
 }
 
@@ -630,13 +543,6 @@ func TestRoleConfigSkillsRoundTrip(t *testing.T) {
 		Timeout:          1800,
 		Skills:           []string{"web-search", "pratchett-read"},
 		SystemPromptFile: "prompts/reviewer.md",
-		Variants: map[string]RoleVariant{
-			"claude": {
-				Engine:           "claude",
-				Model:            "claude-sonnet-4-6",
-				SystemPromptFile: "prompts/reviewer-claude.md",
-			},
-		},
 	}
 
 	var buf bytes.Buffer
@@ -671,7 +577,7 @@ func TestLoadConfigSetsRoleSourceDir(t *testing.T) {
 	}
 }
 
-func TestMergeConfigDeepMergesRolesAcrossFiles(t *testing.T) {
+func TestMergeConfigMergesRolesAcrossFiles(t *testing.T) {
 	base := DefaultConfig()
 	base.meta = &toml.MetaData{}
 	base.Roles["lifter"] = RoleConfig{
@@ -686,10 +592,10 @@ func TestMergeConfigDeepMergesRolesAcrossFiles(t *testing.T) {
 
 	var overlay Config
 	meta, err := toml.Decode(`
-[roles.lifter.variants.claude]
-engine = "claude"
-model = "claude-sonnet-4-6"
-system_prompt_file = "prompts/lifter-claude.md"
+[roles.lifter]
+model = "gpt-5.4-mini"
+skills = ["build"]
+system_prompt_file = "prompts/lifter-override.md"
 `, &overlay)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -702,21 +608,20 @@ system_prompt_file = "prompts/lifter-claude.md"
 	mergeConfig(base, &overlay)
 
 	got := base.Roles["lifter"]
-	if got.Engine != "codex" || got.Model != "gpt-5.4" || got.Effort != "high" || got.Timeout != 1800 {
-		t.Fatalf("merged base fields = %#v, want original base fields preserved", got)
+	if got.Engine != "codex" || got.Effort != "high" || got.Timeout != 1800 {
+		t.Fatalf("merged role = %#v, want original engine/effort/timeout preserved", got)
 	}
-	if got.SystemPromptFile != "prompts/lifter.md" {
-		t.Fatalf("SystemPromptFile = %q, want %q", got.SystemPromptFile, "prompts/lifter.md")
+	if got.Model != "gpt-5.4-mini" {
+		t.Fatalf("Model = %q, want %q", got.Model, "gpt-5.4-mini")
+	}
+	if !reflect.DeepEqual(got.Skills, []string{"build"}) {
+		t.Fatalf("Skills = %#v, want %#v", got.Skills, []string{"build"})
+	}
+	if got.SystemPromptFile != "prompts/lifter-override.md" {
+		t.Fatalf("SystemPromptFile = %q, want %q", got.SystemPromptFile, "prompts/lifter-override.md")
 	}
 	if got.SourceDir != "/overlay" {
 		t.Fatalf("SourceDir = %q, want %q", got.SourceDir, "/overlay")
-	}
-	variant, ok := got.Variants["claude"]
-	if !ok {
-		t.Fatal("Variants[claude] missing")
-	}
-	if variant.Engine != "claude" || variant.Model != "claude-sonnet-4-6" || variant.SystemPromptFile != "prompts/lifter-claude.md" {
-		t.Fatalf("variant = %#v, want overlay variant fields", variant)
 	}
 }
 

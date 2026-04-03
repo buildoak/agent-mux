@@ -26,12 +26,6 @@ effort = "low"
 timeout = 120
 skills = ["web-search"]
 
-[roles.scout.variants.claude]
-engine = "claude"
-model = "sonnet-4"
-effort = "medium"
-timeout = 300
-
 [roles.lifter]
 engine = "claude"
 model = "opus-4"
@@ -139,10 +133,6 @@ func TestConfigRoles_Table(t *testing.T) {
 	if !strings.Contains(out, "lifter") {
 		t.Fatalf("missing role 'lifter' in output:\n%s", out)
 	}
-	// Variant shows as indented sub-row.
-	if !strings.Contains(out, "\u2514 claude") {
-		t.Fatalf("missing variant sub-row for 'claude' in output:\n%s", out)
-	}
 }
 
 func TestConfigRoles_JSON(t *testing.T) {
@@ -160,23 +150,8 @@ func TestConfigRoles_JSON(t *testing.T) {
 		t.Fatalf("invalid JSON array: %v\noutput: %s", err, stdout.String())
 	}
 
-	// Should have: scout, scout/claude variant, lifter = 3 entries.
-	if len(entries) != 3 {
-		t.Fatalf("expected 3 role entries (2 roles + 1 variant), got %d", len(entries))
-	}
-
-	// Check the variant entry.
-	found := false
-	for _, e := range entries {
-		if e["variant"] == "claude" {
-			found = true
-			if e["engine"] != "claude" {
-				t.Fatalf("variant engine = %v, want claude", e["engine"])
-			}
-		}
-	}
-	if !found {
-		t.Fatal("missing variant entry for 'claude'")
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 role entries, got %d", len(entries))
 	}
 }
 

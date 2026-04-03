@@ -616,89 +616,6 @@ func TestPreviewCommandCompactsPromptSummary(t *testing.T) {
 	}
 }
 
-func TestPreviewCommandResolvesRoleVariantAndSystemPromptLayering(t *testing.T) {
-	isolateHome(t)
-
-	configDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(configDir, "prompts"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	cfgPath := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(filepath.Join(configDir, "prompts", "lifter.md"), []byte("base role prompt"), 0o644); err != nil {
-		t.Fatalf("WriteFile base prompt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(configDir, "prompts", "lifter-claude.md"), []byte("claude role prompt"), 0o644); err != nil {
-		t.Fatalf("WriteFile variant prompt: %v", err)
-	}
-	cliPromptPath := filepath.Join(configDir, "cli-system.md")
-	if err := os.WriteFile(cliPromptPath, []byte("cli file prompt"), 0o644); err != nil {
-		t.Fatalf("WriteFile cli prompt: %v", err)
-	}
-	writeTestSkillFile(t, configDir, "cli-skill", "# cli skill\n")
-	writeTestSkillFile(t, configDir, "variant-skill", "# variant skill\n")
-	writeTestSkillFile(t, configDir, "role-skill", "# role skill\n")
-	if err := os.WriteFile(cfgPath, []byte(strings.TrimSpace(`
-[roles.lifter]
-engine = "codex"
-model = "gpt-5.4"
-effort = "high"
-timeout = 1800
-skills = ["role-skill"]
-system_prompt_file = "prompts/lifter.md"
-
-[roles.lifter.variants.claude]
-engine = "claude"
-model = "claude-sonnet-4-6"
-timeout = 900
-skills = ["variant-skill"]
-system_prompt_file = "prompts/lifter-claude.md"
-`)), 0o644); err != nil {
-		t.Fatalf("WriteFile config: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"preview",
-		"--config", cfgPath,
-		"--cwd", configDir,
-		"--role", "lifter",
-		"--variant", "claude",
-		"--skill", "cli-skill",
-		"--system-prompt-file", cliPromptPath,
-		"--system-prompt", "inline prompt",
-		"implement feature",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	preview := decodePreviewResult(t, stdout.Bytes())
-	if preview.ResultMetadata.Role != "lifter" {
-		t.Fatalf("role = %q, want %q", preview.ResultMetadata.Role, "lifter")
-	}
-	if preview.ResultMetadata.Variant != "claude" {
-		t.Fatalf("variant = %q, want %q", preview.ResultMetadata.Variant, "claude")
-	}
-	if preview.DispatchSpec.Engine != "claude" {
-		t.Fatalf("engine = %q, want %q", preview.DispatchSpec.Engine, "claude")
-	}
-	if preview.DispatchSpec.Model != "claude-sonnet-4-6" {
-		t.Fatalf("model = %q, want %q", preview.DispatchSpec.Model, "claude-sonnet-4-6")
-	}
-	if preview.DispatchSpec.TimeoutSec != 900 {
-		t.Fatalf("timeout_sec = %d, want %d", preview.DispatchSpec.TimeoutSec, 900)
-	}
-	if got := preview.ResultMetadata.Skills; len(got) != 3 || got[0] != "cli-skill" || got[1] != "variant-skill" || got[2] != "role-skill" {
-		t.Fatalf("skills = %#v, want CLI > variant > role", got)
-	}
-
-	expectedSystemPrompt := "claude role prompt\n\ncli file prompt\n\ninline prompt"
-	if preview.Prompt.SystemPromptChars != len(expectedSystemPrompt) {
-		t.Fatalf("system_prompt_chars = %d, want %d", preview.Prompt.SystemPromptChars, len(expectedSystemPrompt))
-	}
-}
-
 func TestExplicitPreviewLikeCommandShowsLiteralPromptGuidance(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -823,87 +740,6 @@ func TestBuildDispatchSpecPrefersProfileFlag(t *testing.T) {
 	}
 	if spec.DispatchAnnotations.Profile != "planner" {
 		t.Fatalf("profile = %q, want %q", spec.DispatchAnnotations.Profile, "planner")
-	}
-}
-
-func TestBuildDispatchSpecRejectsVariantWithoutRole(t *testing.T) {
-	t.Parallel()
-
-	fs, parsed := newFlagSet(ioDiscard{})
-	if err := fs.Parse([]string{"--engine", "codex", "--variant", "spark", "implement feature"}); err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-
-	_, err := buildDispatchSpecE(*parsed, fs.Args())
-	if err == nil {
-		t.Fatal("buildDispatchSpecE error = nil, want variant/role validation error")
-	}
-	if err.Error() != "--variant requires --role" {
-		t.Fatalf("error = %q, want %q", err, "--variant requires --role")
-	}
-}
-
-func TestResolveVariantMergesRoleAndVariant(t *testing.T) {
-	t.Parallel()
-
-	role := config.RoleConfig{
-		Engine:           "codex",
-		Model:            "gpt-5.4",
-		Effort:           "high",
-		Timeout:          1800,
-		Skills:           []string{"role-skill"},
-		SystemPromptFile: "prompts/base.md",
-		SourceDir:        "/config",
-		Variants: map[string]config.RoleVariant{
-			"spark": {
-				Model:   "gpt-5.3-codex-spark",
-				Effort:  "low",
-				Timeout: 600,
-				Skills:  []string{"variant-skill"},
-			},
-			"claude": {
-				Engine:           "claude",
-				Model:            "claude-sonnet-4-6",
-				SystemPromptFile: "prompts/claude.md",
-			},
-		},
-	}
-
-	spark, err := resolveVariant(role, "spark")
-	if err != nil {
-		t.Fatalf("resolveVariant(spark): %v", err)
-	}
-	if spark.Engine != "codex" || spark.Model != "gpt-5.3-codex-spark" || spark.Effort != "low" || spark.Timeout != 600 {
-		t.Fatalf("spark = %#v, want merged engine/model/effort/timeout", spark)
-	}
-	if got := spark.Skills; len(got) != 2 || got[0] != "variant-skill" || got[1] != "role-skill" {
-		t.Fatalf("spark skills = %#v, want variant additive over role", got)
-	}
-	if spark.SystemPromptFile != "prompts/base.md" {
-		t.Fatalf("spark system_prompt_file = %q, want inherited base file", spark.SystemPromptFile)
-	}
-
-	claude, err := resolveVariant(role, "claude")
-	if err != nil {
-		t.Fatalf("resolveVariant(claude): %v", err)
-	}
-	if claude.Engine != "claude" || claude.Model != "claude-sonnet-4-6" {
-		t.Fatalf("claude = %#v, want engine/model override", claude)
-	}
-	if claude.SystemPromptFile != "prompts/claude.md" {
-		t.Fatalf("claude system_prompt_file = %q, want variant replacement", claude.SystemPromptFile)
-	}
-}
-
-func TestResolveVariantUnknownVariant(t *testing.T) {
-	t.Parallel()
-
-	_, err := resolveVariant(config.RoleConfig{Variants: map[string]config.RoleVariant{}}, "missing")
-	if err == nil {
-		t.Fatal("resolveVariant error = nil, want not found")
-	}
-	if !strings.Contains(err.Error(), `variant "missing" not found`) {
-		t.Fatalf("error = %q, want variant not found", err)
 	}
 }
 
@@ -1222,89 +1058,6 @@ func TestStdinMode(t *testing.T) {
 	}
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-}
-
-func TestRunUnknownVariantReturnsConfigError(t *testing.T) {
-	isolateHome(t)
-
-	cfgPath := writeTempConfig(t, `
-[roles.lifter]
-engine = "codex"
-model = "gpt-5.4"
-`)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"--config", cfgPath,
-		"--role", "lifter",
-		"--variant", "missing",
-		"implement feature",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	result := decodeResult(t, stdout.Bytes())
-	if result.Error == nil || result.Error.Code != "config_error" {
-		t.Fatalf("error = %#v, want config_error", result.Error)
-	}
-	if result.Error.Message != `variant "missing" not found in role "lifter"` {
-		t.Fatalf("error.message = %q, want unknown variant message", result.Error.Message)
-	}
-}
-
-func TestStdinModeResolvesVariantFromRole(t *testing.T) {
-	isolateHome(t)
-
-	t.Setenv("PATH", t.TempDir())
-
-	cfgPath := writeTempConfig(t, `
-[roles.lifter]
-engine = "codex"
-model = "gpt-5.4"
-effort = "high"
-
-[roles.lifter.variants.claude]
-engine = "claude"
-model = "claude-sonnet-4-6"
-effort = "medium"
-timeout = 900
-`)
-
-	input := map[string]any{
-		"dispatch_id":  "stdin-variant-dispatch",
-		"role":         "lifter",
-		"variant":      "claude",
-		"prompt":       "from stdin",
-		"cwd":          t.TempDir(),
-		"artifact_dir": filepath.Join(t.TempDir(), "artifacts") + "/",
-	}
-	data, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("marshal input: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"--stdin", "--config", cfgPath}, bytes.NewReader(data), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	result := decodeResult(t, stdout.Bytes())
-	if result.Error == nil || result.Error.Code != "binary_not_found" {
-		t.Fatalf("error = %#v, want binary_not_found", result.Error)
-	}
-	if result.Metadata == nil {
-		t.Fatal("metadata = nil, want resolved engine/model")
-	}
-	if result.Metadata.Engine != "claude" || result.Metadata.Model != "claude-sonnet-4-6" {
-		t.Fatalf("metadata = %#v, want variant engine/model", result.Metadata)
-	}
-	if strings.Contains(stderr.String(), `"kind":"preview"`) {
-		t.Fatalf("stderr = %q, want no preview JSON in --stdin mode", stderr.String())
 	}
 }
 
@@ -2010,7 +1763,7 @@ func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response str
 	if err := os.MkdirAll(record.ArtifactDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(artifactDir): %v", err)
 	}
-	annotations := types.DispatchAnnotations{Role: record.Role, Variant: record.Variant, Profile: record.Profile}
+	annotations := types.DispatchAnnotations{Role: record.Role, Profile: record.Profile}
 	if err := dispatch.WriteDispatchMeta(record.ArtifactDir, spec, annotations); err != nil {
 		t.Fatalf("WriteDispatchMeta: %v", err)
 	}
@@ -2033,7 +1786,6 @@ func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response str
 				Engine:    record.Engine,
 				Model:     record.Model,
 				Role:      record.Role,
-				Variant:   record.Variant,
 				Profile:   record.Profile,
 				SessionID: record.SessionID,
 				Tokens:    &types.TokenUsage{},
@@ -2059,7 +1811,6 @@ func testStoreRecord(id, status string) dispatch.DispatchRecord {
 		Engine:        "codex",
 		Model:         "gpt-5.4",
 		Role:          "explorer",
-		Variant:       "default",
 		StartedAt:     "2026-03-28T13:45:00Z",
 		EndedAt:       "2026-03-28T13:58:44Z",
 		DurationMs:    824000,
@@ -2092,7 +1843,6 @@ type previewResultForTest struct {
 	} `json:"dispatch_spec"`
 	ResultMetadata struct {
 		Role    string   `json:"role"`
-		Variant string   `json:"variant"`
 		Profile string   `json:"profile"`
 		Skills  []string `json:"skills"`
 	} `json:"result_metadata"`

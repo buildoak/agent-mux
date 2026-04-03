@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/buildoak/agent-mux/internal/sanitize"
 	"gopkg.in/yaml.v3"
 )
@@ -22,23 +21,23 @@ type CoordinatorSpec struct {
 	SystemPrompt string
 }
 
-func LoadProfile(name, cwd string) (*CoordinatorSpec, *Config, error) {
+func LoadProfile(name, cwd string) (*CoordinatorSpec, error) {
 	name = strings.TrimSpace(name)
 	if err := sanitize.ValidateBasename(name); err != nil {
-		return nil, nil, fmt.Errorf("invalid profile name %q: %w", name, err)
+		return nil, fmt.Errorf("invalid profile name %q: %w", name, err)
 	}
 
 	if cwd == "" {
 		var err error
 		cwd, err = os.Getwd()
 		if err != nil {
-			return nil, nil, fmt.Errorf("get working directory: %w", err)
+			return nil, fmt.Errorf("get working directory: %w", err)
 		}
 	}
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return nil, nil, fmt.Errorf("get home directory: %w", err)
+		return nil, fmt.Errorf("get home directory: %w", err)
 	}
 
 	searchDirs := []string{
@@ -55,28 +54,24 @@ func LoadProfile(name, cwd string) (*CoordinatorSpec, *Config, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, nil, fmt.Errorf("stat profile %q: %w", path, err)
+			return nil, fmt.Errorf("stat profile %q: %w", path, err)
 		}
 		if info.IsDir() {
-			return nil, nil, fmt.Errorf("profile path %q is a directory", path)
+			return nil, fmt.Errorf("profile path %q is a directory", path)
 		}
 
 		spec, err := loadCoordinatorSpec(path, name)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		companionCfg, err := loadCoordinatorCompanionConfig(filepath.Join(dir, name+".toml"))
-		if err != nil {
-			return nil, nil, err
-		}
-		return spec, companionCfg, nil
+		return spec, nil
 	}
 
 	available, err := availableCoordinators(searchDirs)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return nil, nil, fmt.Errorf("profile %q not found. Available profiles: %v", name, available)
+	return nil, fmt.Errorf("profile %q not found. Available profiles: %v", name, available)
 }
 
 func loadCoordinatorSpec(path, name string) (*CoordinatorSpec, error) {
@@ -127,34 +122,6 @@ func loadCoordinatorSpec(path, name string) (*CoordinatorSpec, error) {
 	spec.Timeout = parsed.Timeout
 
 	return spec, nil
-}
-
-func loadCoordinatorCompanionConfig(path string) (*Config, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("stat profile companion config %q: %w", path, err)
-	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("profile companion config %q is a directory", path)
-	}
-
-	var cfg Config
-	meta, err := toml.DecodeFile(path, &cfg)
-	if err != nil {
-		return nil, fmt.Errorf("decode profile companion config %q: %w", path, err)
-	}
-	cfg.meta = &meta
-	for name, role := range cfg.Roles {
-		role.SourceDir = filepath.Dir(path)
-		cfg.Roles[name] = role
-	}
-	if err := validateExplicitTimeoutValues(path, &cfg); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
 }
 
 func splitFrontmatter(data []byte) ([]byte, string, error) {

@@ -16,11 +16,7 @@ effort = "high"
 timeout = 120
 system_prompt_file = "sysprompt-test.md"
 
-[roles.variant-test]
+[roles.variant-test-mini]
 engine = "codex"
-model = "gpt-5.4"
-effort = "high"
-
-[roles.variant-test.variants.mini]
 model = "gpt-5.4-mini"
-
+effort = "high"

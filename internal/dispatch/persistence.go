@@ -29,7 +29,6 @@ type DispatchRecord struct {
 	Engine        string `json:"engine"`
 	Model         string `json:"model"`
 	Role          string `json:"role,omitempty"`
-	Variant       string `json:"variant,omitempty"`
 	StartedAt     string `json:"started"`
 	EndedAt       string `json:"ended,omitempty"`
 	DurationMs    int64  `json:"duration_ms,omitempty"`
@@ -49,7 +48,6 @@ type PersistentDispatchMeta struct {
 	Model       string `json:"model"`
 	Effort      string `json:"effort,omitempty"`
 	Role        string `json:"role,omitempty"`
-	Variant     string `json:"variant,omitempty"`
 	Profile     string `json:"profile,omitempty"`
 	Cwd         string `json:"cwd"`
 	ArtifactDir string `json:"artifact_dir,omitempty"`
@@ -67,7 +65,6 @@ type PersistentDispatchResult struct {
 	Engine        string `json:"engine,omitempty"`
 	Model         string `json:"model,omitempty"`
 	Role          string `json:"role,omitempty"`
-	Variant       string `json:"variant,omitempty"`
 	Profile       string `json:"profile,omitempty"`
 	Effort        string `json:"effort,omitempty"`
 	SessionID     string `json:"session_id,omitempty"`
@@ -122,7 +119,6 @@ func WritePersistentMeta(spec *types.DispatchSpec, annotations types.DispatchAnn
 		Model:       spec.Model,
 		Effort:      spec.Effort,
 		Role:        annotations.Role,
-		Variant:     annotations.Variant,
 		Profile:     annotations.Profile,
 		Cwd:         spec.Cwd,
 		ArtifactDir: artifactDir,
@@ -175,7 +171,6 @@ func UpdatePersistentResultStatus(dispatchID, status string, artifacts []string)
 		result.Engine = firstNonEmpty(result.Engine, meta.Engine)
 		result.Model = firstNonEmpty(result.Model, meta.Model)
 		result.Role = firstNonEmpty(result.Role, meta.Role)
-		result.Variant = firstNonEmpty(result.Variant, meta.Variant)
 		result.Profile = firstNonEmpty(result.Profile, meta.Profile)
 		result.Cwd = firstNonEmpty(result.Cwd, meta.Cwd)
 		result.ArtifactDir = firstNonEmpty(result.ArtifactDir, meta.ArtifactDir)
@@ -244,7 +239,6 @@ func WritePersistentResult(spec *types.DispatchSpec, annotations types.DispatchA
 		Engine:         firstNonEmpty(resultMetadataEngine(result), spec.Engine),
 		Model:          firstNonEmpty(resultMetadataModel(result), spec.Model),
 		Role:           firstNonEmpty(resultMetadataRole(result), annotations.Role),
-		Variant:        firstNonEmpty(resultMetadataVariant(result), annotations.Variant),
 		Profile:        firstNonEmpty(resultMetadataProfile(result), annotations.Profile),
 		Effort:         spec.Effort,
 		SessionID:      resultMetadataSessionID(result),
@@ -358,7 +352,6 @@ func buildDispatchRecord(dispatchID string, meta *PersistentDispatchMeta, result
 		record.Engine = strings.TrimSpace(meta.Engine)
 		record.Model = strings.TrimSpace(meta.Model)
 		record.Role = strings.TrimSpace(meta.Role)
-		record.Variant = strings.TrimSpace(meta.Variant)
 		record.StartedAt = strings.TrimSpace(meta.StartedAt)
 		record.Cwd = strings.TrimSpace(meta.Cwd)
 		record.ArtifactDir = strings.TrimSpace(meta.ArtifactDir)
@@ -373,7 +366,6 @@ func buildDispatchRecord(dispatchID string, meta *PersistentDispatchMeta, result
 		record.Engine = firstNonEmpty(result.Engine, resultMetadataEngine(&result.DispatchResult), record.Engine)
 		record.Model = firstNonEmpty(result.Model, resultMetadataModel(&result.DispatchResult), record.Model)
 		record.Role = firstNonEmpty(result.Role, resultMetadataRole(&result.DispatchResult), record.Role)
-		record.Variant = firstNonEmpty(result.Variant, record.Variant)
 		record.StartedAt = firstNonEmpty(result.StartedAt, record.StartedAt)
 		record.EndedAt = strings.TrimSpace(result.EndedAt)
 		record.DurationMs = result.DurationMS
@@ -494,13 +486,6 @@ func resultMetadataRole(result *types.DispatchResult) string {
 		return ""
 	}
 	return strings.TrimSpace(result.Metadata.Role)
-}
-
-func resultMetadataVariant(result *types.DispatchResult) string {
-	if result == nil || result.Metadata == nil {
-		return ""
-	}
-	return strings.TrimSpace(result.Metadata.Variant)
 }
 
 func resultMetadataProfile(result *types.DispatchResult) string {

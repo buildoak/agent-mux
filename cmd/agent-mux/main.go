@@ -64,13 +64,13 @@ func (s *stringSlice) Set(value string) error {
 }
 
 type cliFlags struct {
-	engine, role, variant, profile, cwd, model, effort, systemPrompt, systemPromptFile string
-	contextFile, artifactDir, config, promptFile, recover                              string
-	signal                                                                             string
-	permissionMode, sandbox, reasoning                                                 string
-	timeout, maxDepth, maxTurns                                                        int
-	full, noFull, skipSkills, stdin, version, verbose, yes, stream, async              bool
-	skills, addDirs                                                                    stringSlice
+	engine, role, profile, cwd, model, effort, systemPrompt, systemPromptFile string
+	contextFile, artifactDir, config, promptFile, recover                     string
+	signal                                                                    string
+	permissionMode, sandbox, reasoning                                        string
+	timeout, maxDepth, maxTurns                                               int
+	full, noFull, skipSkills, stdin, version, verbose, yes, stream, async     bool
+	skills, addDirs                                                           stringSlice
 }
 
 type previewResult struct {
@@ -102,7 +102,6 @@ type previewDispatchSpec struct {
 
 type previewResultMeta struct {
 	Role    string   `json:"role,omitempty"`
-	Variant string   `json:"variant,omitempty"`
 	Profile string   `json:"profile,omitempty"`
 	Skills  []string `json:"skills,omitempty"`
 }
@@ -290,12 +289,9 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	profileName := req.DispatchAnnotations.Profile
 	if profileName != "" {
-		coordSpec, companionCfg, err := config.LoadProfile(profileName, spec.Cwd)
+		coordSpec, err := config.LoadProfile(profileName, spec.Cwd)
 		if err != nil {
 			return failResult(spec, configFailureCode(err), err.Error(), "")
-		}
-		if companionCfg != nil {
-			config.MergeConfigInto(cfg, companionCfg)
 		}
 		if flags.stdin {
 			if spec.Engine == "" && coordSpec.Engine != "" {
@@ -320,13 +316,8 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 
 	roleName := flags.role
-	variantName := flags.variant
 	if flags.stdin {
 		roleName = req.DispatchAnnotations.Role
-		variantName = req.DispatchAnnotations.Variant
-	}
-	if roleName == "" && variantName != "" {
-		return failResult(spec, "invalid_args", "--variant requires --role", "")
 	}
 	// roleConfigDir is the directory of the config file that defined the active
 	// role. It is used as a fallback skill search root when spec.Cwd does not
@@ -336,13 +327,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		role, err := config.ResolveRole(cfg, roleName)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
-		}
-		if variantName != "" {
-			resolvedRole, err := resolveVariant(*role, variantName)
-			if err != nil {
-				return failResult(spec, "config_error", fmt.Sprintf("variant %q not found in role %q", variantName, roleName), "")
-			}
-			role = &resolvedRole
 		}
 		if flags.stdin {
 			if spec.Engine == "" && role.Engine != "" {
@@ -370,7 +354,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		spec.SystemPrompt = prependSystemPrompt(roleSystemPrompt, spec.SystemPrompt)
 		req.DispatchAnnotations.Skills = mergeSkills(role.Skills, req.DispatchAnnotations.Skills)
 		req.DispatchAnnotations.Role = roleName
-		req.DispatchAnnotations.Variant = variantName
 		roleConfigDir = role.SourceDir
 	}
 
@@ -533,38 +516,6 @@ func mergeSkills(base, overlay []string) []string {
 	}
 
 	return merged
-}
-
-func resolveVariant(role config.RoleConfig, variantName string) (config.RoleConfig, error) {
-	variantName = strings.TrimSpace(variantName)
-	if variantName == "" {
-		return role, nil
-	}
-
-	variant, ok := role.Variants[variantName]
-	if !ok {
-		return config.RoleConfig{}, fmt.Errorf("variant %q not found", variantName)
-	}
-
-	resolved := role
-	if variant.Engine != "" {
-		resolved.Engine = variant.Engine
-	}
-	if variant.Model != "" {
-		resolved.Model = variant.Model
-	}
-	if variant.Effort != "" {
-		resolved.Effort = variant.Effort
-	}
-	if variant.Timeout > 0 {
-		resolved.Timeout = variant.Timeout
-	}
-	resolved.Skills = mergeSkills(role.Skills, variant.Skills)
-	if variant.SystemPromptFile != "" {
-		resolved.SystemPromptFile = variant.SystemPromptFile
-	}
-
-	return resolved, nil
 }
 
 func loadSystemPromptFile(sourceDir, promptFile string) (string, error) {
@@ -872,7 +823,6 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 
 	var aux struct {
 		Role        string   `json:"role"`
-		Variant     string   `json:"variant"`
 		Profile     string   `json:"profile"`
 		Coordinator string   `json:"coordinator"`
 		Skills      []string `json:"skills"`
@@ -887,7 +837,6 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 		return err
 	}
 	req.DispatchAnnotations.Role = strings.TrimSpace(aux.Role)
-	req.DispatchAnnotations.Variant = strings.TrimSpace(aux.Variant)
 	req.DispatchAnnotations.Profile = strings.TrimSpace(profile)
 	req.SkipSkills = aux.SkipSkills
 	req.RecoverDispatchID = strings.TrimSpace(aux.Recover)
@@ -901,7 +850,6 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 		value string
 	}{
 		{label: "role", value: req.DispatchAnnotations.Role},
-		{label: "variant", value: req.DispatchAnnotations.Variant},
 	} {
 		if strings.TrimSpace(field.value) == "" {
 			continue
@@ -1006,7 +954,6 @@ func buildPreviewResult(req *dispatchRequest, confirmationRequired bool) preview
 		DispatchSpec:  previewDispatchSpecFrom(spec),
 		ResultMetadata: previewResultMeta{
 			Role:    req.DispatchAnnotations.Role,
-			Variant: req.DispatchAnnotations.Variant,
 			Profile: req.DispatchAnnotations.Profile,
 			Skills:  append([]string(nil), req.DispatchAnnotations.Skills...),
 		},
@@ -1137,7 +1084,6 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 
 	bindStr(fs, &flags.engine, "Engine name", "", "engine", "E")
 	bindStr(fs, &flags.role, "Role", "", "role", "R")
-	fs.StringVar(&flags.variant, "variant", "", "Role variant")
 	fs.StringVar(&flags.profile, "profile", "", "Profile")
 	bindStr(fs, &flags.cwd, "Working directory", "", "cwd", "C")
 	bindStr(fs, &flags.model, "Model", "", "model", "m")
@@ -1175,9 +1121,6 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 func buildDispatchSpecE(flags cliFlags, args []string) (*dispatchRequest, error) {
 	if flags.promptFile != "" && len(args) > 0 {
 		return nil, errors.New("prompt must come from either the first positional arg or --prompt-file, not both")
-	}
-	if flags.variant != "" && flags.role == "" {
-		return nil, errors.New("--variant requires --role")
 	}
 	var (
 		prompt, systemPrompt string
@@ -1261,7 +1204,6 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*dispatchRequest, error)
 		DispatchSpec: spec,
 		DispatchAnnotations: types.DispatchAnnotations{
 			Role:    flags.role,
-			Variant: flags.variant,
 			Profile: flags.profile,
 			Skills:  append([]string(nil), flags.skills...),
 		},
@@ -1306,7 +1248,6 @@ func flagTakesValue(name string) bool {
 	switch name {
 	case "--engine", "-E",
 		"--role", "-R",
-		"--variant",
 		"--profile",
 		"--cwd", "-C",
 		"--model", "-m",
@@ -1358,7 +1299,7 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 			"",
 			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]"),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Variant: annotations.Variant, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
@@ -1374,7 +1315,7 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 			"",
 			dispatch.NewDispatchError("model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Variant: annotations.Variant, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
@@ -1385,7 +1326,7 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 			"",
 			dispatch.NewDispatchError("artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Variant: annotations.Variant, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
@@ -1395,7 +1336,7 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 			"",
 			dispatch.NewDispatchError("config_error", fmt.Sprintf("Register control path for dispatch %q: %v", spec.DispatchID, err), "Ensure the control path is writable."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Variant: annotations.Variant, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
@@ -1442,9 +1383,6 @@ func mergeStdinCLIFlags(req *dispatchRequest, flags cliFlags, flagsSet map[strin
 	}
 	if flagsSet["role"] || flagsSet["R"] {
 		req.DispatchAnnotations.Role = flags.role
-	}
-	if flagsSet["variant"] {
-		req.DispatchAnnotations.Variant = flags.variant
 	}
 	if flagsSet["profile"] {
 		req.DispatchAnnotations.Profile = flags.profile
@@ -1522,7 +1460,6 @@ func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {
 	for _, name := range []string{
 		"engine", "E",
 		"role", "R",
-		"variant",
 		"profile",
 		"cwd", "C",
 		"model", "m",

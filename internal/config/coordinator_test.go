@@ -25,12 +25,9 @@ temperature: 0.2
 You are the planning coordinator.
 `)
 
-	spec, companion, err := LoadProfile("planner", cwd)
+	spec, err := LoadProfile("planner", cwd)
 	if err != nil {
 		t.Fatalf("LoadProfile: %v", err)
-	}
-	if companion != nil {
-		t.Fatalf("companion config = %#v, want nil", companion)
 	}
 	if spec.Name != "planner" {
 		t.Fatalf("Name = %q, want %q", spec.Name, "planner")
@@ -55,7 +52,7 @@ You are the planning coordinator.
 	}
 }
 
-func TestLoadProfileLoadsCompanionConfig(t *testing.T) {
+func TestLoadProfileIgnoresCompanionConfig(t *testing.T) {
 	cwd := t.TempDir()
 	agentsDir := filepath.Join(cwd, ".claude", "agents")
 	mustMkdirAll(t, agentsDir)
@@ -67,38 +64,15 @@ skills: [repo-map]
 Build things.
 `)
 	writeTestFile(t, filepath.Join(agentsDir, "builder.toml"), `
-[defaults]
-engine = "claude"
-model = "claude-sonnet-4-6"
-max_depth = 7
-
-[roles.reviewer]
-engine = "gemini"
-model = "gemini-2.5-pro"
-effort = "medium"
+not valid toml = [
 `)
 
-	spec, companion, err := LoadProfile("builder", cwd)
+	spec, err := LoadProfile("builder", cwd)
 	if err != nil {
 		t.Fatalf("LoadProfile: %v", err)
 	}
 	if spec.Model != "gpt-5.4-mini" {
 		t.Fatalf("frontmatter Model = %q, want %q", spec.Model, "gpt-5.4-mini")
-	}
-	if companion == nil {
-		t.Fatal("companion config = nil, want loaded config")
-	}
-	if companion.Defaults.Engine != "claude" {
-		t.Fatalf("companion Defaults.Engine = %q, want %q", companion.Defaults.Engine, "claude")
-	}
-	if companion.Defaults.Model != "claude-sonnet-4-6" {
-		t.Fatalf("companion Defaults.Model = %q, want %q", companion.Defaults.Model, "claude-sonnet-4-6")
-	}
-	if companion.Defaults.MaxDepth != 7 {
-		t.Fatalf("companion Defaults.MaxDepth = %d, want %d", companion.Defaults.MaxDepth, 7)
-	}
-	if role := companion.Roles["reviewer"]; role.Engine != "gemini" || role.Model != "gemini-2.5-pro" || role.Effort != "medium" {
-		t.Fatalf("companion reviewer role = %#v, want decoded role", role)
 	}
 }
 
@@ -113,7 +87,7 @@ timeout: 0
 planner
 `)
 
-	_, _, err := LoadProfile("planner", cwd)
+	_, err := LoadProfile("planner", cwd)
 	if err == nil {
 		t.Fatal("LoadProfile error = nil, want validation error")
 	}
@@ -122,64 +96,6 @@ planner
 	}
 	if !strings.Contains(err.Error(), "invalid timeout") {
 		t.Fatalf("error = %q, want invalid timeout message", err)
-	}
-}
-
-func TestLoadProfileRejectsNonPositiveCompanionTimeout(t *testing.T) {
-	cwd := t.TempDir()
-	agentsDir := filepath.Join(cwd, ".claude", "agents")
-	mustMkdirAll(t, agentsDir)
-
-	writeTestFile(t, filepath.Join(agentsDir, "builder.md"), "Build things.\n")
-	writeTestFile(t, filepath.Join(agentsDir, "builder.toml"), `
-[timeout]
-grace = 0
-`)
-
-	_, _, err := LoadProfile("builder", cwd)
-	if err == nil {
-		t.Fatal("LoadProfile error = nil, want validation error")
-	}
-	if !IsValidationError(err) {
-		t.Fatalf("error = %T %v, want validation error", err, err)
-	}
-	if !strings.Contains(err.Error(), "timeout.grace") {
-		t.Fatalf("error = %q, want timeout.grace message", err)
-	}
-}
-
-func TestLoadProfileReturnsSeparateSourcesForPrecedence(t *testing.T) {
-	cwd := t.TempDir()
-	agentsDir := filepath.Join(cwd, ".claude", "agents")
-	mustMkdirAll(t, agentsDir)
-
-	writeTestFile(t, filepath.Join(agentsDir, "orchestrator.md"), `---
-engine: codex
-model: gpt-5.4
-effort: high
-skills: [plan]
----
-Coordinate the run.
-`)
-	writeTestFile(t, filepath.Join(agentsDir, "orchestrator.toml"), `
-[defaults]
-engine = "claude"
-model = "claude-sonnet-4-6"
-effort = "medium"
-`)
-
-	spec, companion, err := LoadProfile("orchestrator", cwd)
-	if err != nil {
-		t.Fatalf("LoadProfile: %v", err)
-	}
-	if spec.Engine != "codex" || spec.Model != "gpt-5.4" || spec.Effort != "high" {
-		t.Fatalf("frontmatter fields = %#v, want coordinator overrides preserved separately", spec)
-	}
-	if companion == nil {
-		t.Fatal("companion config = nil, want config for lower-precedence merge")
-	}
-	if companion.Defaults.Engine != "claude" || companion.Defaults.Model != "claude-sonnet-4-6" || companion.Defaults.Effort != "medium" {
-		t.Fatalf("companion defaults = %#v, want TOML values", companion.Defaults)
 	}
 }
 
@@ -195,7 +111,7 @@ func TestLoadProfileNotFoundListsAvailable(t *testing.T) {
 	writeTestFile(t, filepath.Join(projectAgents, "alpha.md"), "Project alpha.")
 	writeTestFile(t, filepath.Join(globalAgents, "beta.md"), "Global beta.")
 
-	_, _, err := LoadProfile("missing", cwd)
+	_, err := LoadProfile("missing", cwd)
 	if err == nil {
 		t.Fatal("LoadProfile(missing) error = nil, want error")
 	}
@@ -211,7 +127,7 @@ func TestLoadProfileNotFoundListsAvailable(t *testing.T) {
 func TestLoadProfileRejectsInvalidName(t *testing.T) {
 	cwd := t.TempDir()
 
-	_, _, err := LoadProfile("../planner", cwd)
+	_, err := LoadProfile("../planner", cwd)
 	if err == nil {
 		t.Fatal("LoadProfile error = nil, want invalid profile name")
 	}
@@ -245,7 +161,7 @@ engine: gemini
 fallback prompt
 `)
 
-	spec, _, err := LoadProfile("shared", cwd)
+	spec, err := LoadProfile("shared", cwd)
 	if err != nil {
 		t.Fatalf("LoadProfile(shared): %v", err)
 	}
@@ -253,7 +169,7 @@ fallback prompt
 		t.Fatalf("project coordinator = %#v, want project file to win", spec)
 	}
 
-	spec, _, err = LoadProfile("fallback", cwd)
+	spec, err = LoadProfile("fallback", cwd)
 	if err != nil {
 		t.Fatalf("LoadProfile(fallback): %v", err)
 	}
@@ -277,7 +193,7 @@ engine: codex
 ---
 lifted prompt
 `)
-		spec, _, err := LoadProfile("lifter", cwd)
+		spec, err := LoadProfile("lifter", cwd)
 		if err != nil {
 			t.Fatalf("LoadProfile: %v", err)
 		}
@@ -294,7 +210,7 @@ engine: claude
 ---
 global agent prompt
 `)
-		spec, _, err := LoadProfile("global-agent", cwd)
+		spec, err := LoadProfile("global-agent", cwd)
 		if err != nil {
 			t.Fatalf("LoadProfile: %v", err)
 		}
@@ -311,12 +227,9 @@ func TestLoadProfileWithoutFrontmatterUsesBodyOnly(t *testing.T) {
 
 	writeTestFile(t, filepath.Join(agentsDir, "plain.md"), "Just the prompt body.\nSecond line.\n")
 
-	spec, companion, err := LoadProfile("plain", cwd)
+	spec, err := LoadProfile("plain", cwd)
 	if err != nil {
 		t.Fatalf("LoadProfile: %v", err)
-	}
-	if companion != nil {
-		t.Fatalf("companion config = %#v, want nil", companion)
 	}
 	if spec.Model != "" || spec.Engine != "" || spec.Effort != "" || spec.Timeout != 0 || len(spec.Skills) != 0 {
 		t.Fatalf("spec fields = %#v, want empty frontmatter fields", spec)

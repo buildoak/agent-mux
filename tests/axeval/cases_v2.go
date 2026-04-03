@@ -107,7 +107,7 @@ func buildCasesV2(cwd string) []TestCase {
 			),
 		},
 		{
-			Name:         "variant-resolution",
+			Name:         "flat-role-resolution",
 			Category:     CatCorrectness,
 			Engine:       "codex",
 			Model:        "gpt-5.4",
@@ -117,13 +117,13 @@ func buildCasesV2(cwd string) []TestCase {
 			TimeoutSec:   120,
 			MaxWallClock: 3 * time.Minute,
 			SkipSkills:   true,
-			ExtraFlags:   []string{"-R=variant-test", "--variant=mini", "--cwd", cwd},
+			ExtraFlags:   []string{"-R=variant-test-mini", "--cwd", cwd},
 			Evaluate: compose(
 				statusIs("completed"),
 				func(r Result) Verdict {
 					events, err := parseNDJSONObjects(r.RawStderr, "stderr")
 					if err != nil {
-						return Verdict{Pass: true, Score: 0.5, Reason: fmt.Sprintf("TODO: could not parse stderr events for variant resolution: %v", err)}
+						return Verdict{Pass: true, Score: 0.5, Reason: fmt.Sprintf("TODO: could not parse stderr events for flat role resolution: %v", err)}
 					}
 					for _, evt := range events {
 						if eventType, _ := jsonStringField(evt, "type"); eventType != "dispatch_start" {
@@ -133,9 +133,9 @@ func buildCasesV2(cwd string) []TestCase {
 						if model == "gpt-5.4-mini" {
 							return Verdict{Pass: true, Score: 1.0, Reason: "dispatch_start model=gpt-5.4-mini"}
 						}
-						return Verdict{Pass: true, Score: 0.5, Reason: fmt.Sprintf("TODO: variant resolution not reflected in dispatch_start model (got %q)", model)}
+						return Verdict{Pass: true, Score: 0.5, Reason: fmt.Sprintf("TODO: flat role resolution not reflected in dispatch_start model (got %q)", model)}
 					}
-					return Verdict{Pass: true, Score: 0.5, Reason: "TODO: dispatch_start event missing from stderr; variant resolution could not be verified"}
+					return Verdict{Pass: true, Score: 0.5, Reason: "TODO: dispatch_start event missing from stderr; flat role resolution could not be verified"}
 				},
 			),
 		},
