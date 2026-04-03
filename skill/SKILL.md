@@ -2,11 +2,10 @@
 name: agent-mux
 description: |
   Cross-engine dispatch layer for AI coding agents. Use when you need to:
-  spawn a worker on Codex/Claude/Gemini, run a multi-step pipeline, recover
-  a timed-out dispatch, steer a running worker mid-flight, or coordinate
-  multi-model work. Trigger on: agent-mux, dispatch, spawn worker, codex
-  worker, pipeline, role dispatch, async dispatch, steer agent, recover
-  timeout, multi-engine.
+  spawn a worker on Codex/Claude/Gemini, recover a timed-out dispatch, steer
+  a running worker mid-flight, or coordinate multi-model work. Trigger on:
+  agent-mux, dispatch, spawn worker, codex worker, role dispatch, async
+  dispatch, steer agent, recover timeout, multi-engine.
 ---
 
 # agent-mux
@@ -22,7 +21,6 @@ preserved across timeout, crash, or cancel.
 ### Discovery (mandatory first step)
 ```bash
 agent-mux config roles        # role catalog: engines, models, timeouts, variants
-agent-mux config pipelines    # named multi-step workflows
 ```
 Always run before dispatching. Roles change per project config.
 
@@ -33,7 +31,7 @@ Always run before dispatching. Roles change per project config.
 ```bash
 # DISPATCH — instant ack with dispatch_id
 agent-mux -R=scout --async -C=/repo "Find all deprecated API usages" 2>/dev/null
-# -> {"kind":"async_started","dispatch_id":"01KMY...","salt":"fair-elk-one","artifact_dir":"/tmp/agent-mux/01KMY..."}
+# -> {"kind":"async_started","dispatch_id":"01KMY...","artifact_dir":"/tmp/agent-mux/01KMY..."}
 
 # WAIT — blocks until terminal state. THE completion primitive.
 # NEVER poll `status --json` in a loop — use wait instead.
@@ -72,6 +70,11 @@ cat > /tmp/spec.json << 'EOF'
 EOF
 agent-mux --stdin --async < /tmp/spec.json 2>/dev/null
 ```
+
+DispatchSpec now stays narrow. The runtime JSON fields are:
+`dispatch_id`, `engine`, `model`, `effort`, `prompt`, `system_prompt`, `cwd`,
+`artifact_dir`, `context_file`, `timeout_sec`, `grace_sec`, `max_depth`,
+`depth`, `full_access`, `engine_opts`.
 
 **Codex workers:** Omit `--sandbox` — the default (`danger-full-access`) maps
 to `--dangerously-bypass-approvals-and-sandbox`, giving full filesystem and
@@ -148,7 +151,7 @@ to restore full event output for human debugging.
 **Research:** `researcher` (Claude, external) | `explorer` (Codex, internal KB)
 **Architecture:** `architect` (Claude, strategic reasoning)
 **Verification:** `auditor` (Codex xhigh, adversarial review)
-**Writing:** `writer` (Codex, voice-matched, full publishing pipeline)
+**Writing:** `writer` (Codex, voice-matched, publishing-focused)
 **Specialized:** `handoff-extractor` (session handoff extraction)
 
 Variants swap the engine within a role: `-R=lifter --variant=claude`. Common
@@ -167,8 +170,8 @@ Always parse JSON from stdout. Never parse as text. `result --json` gives
 clean single JSON. For full schemas:
 [references/output-contract.md](references/output-contract.md).
 
-**Pipelines** (`-P=name`) return a different JSON shape — see
-[references/pipeline-guide.md](references/pipeline-guide.md).
+`preview` returns the resolved runtime shape split into `dispatch_spec` and
+`result_metadata`. Use it to confirm role/profile resolution before launch.
 
 ## Failure & Recovery
 
@@ -257,15 +260,14 @@ Roles set their own timeouts. Check with `agent-mux config roles`.
 |-----------|-----------|
 | [cli-flags.md](references/cli-flags.md) | Complete flag table, DispatchSpec JSON fields, precedence |
 | [async-and-steering.md](references/async-and-steering.md) | Async dispatch, wait, steer, poll intervals, status.json |
-| [output-contract.md](references/output-contract.md) | DispatchResult/PipelineResult schemas, error codes |
+| [output-contract.md](references/output-contract.md) | DispatchResult schema, preview shape, error codes |
 | [recovery-guide.md](references/recovery-guide.md) | Recovery decision tree, signal mechanics, artifact layout |
 | [prompting-guide.md](references/prompting-guide.md) | Per-engine prompt patterns, word budgets, context loading |
 | [config-and-roles.md](references/config-and-roles.md) | TOML structure, role authoring, variants, skill injection |
-| [pipeline-guide.md](references/pipeline-guide.md) | Pipeline TOML, fan-out, handoff modes |
 
 **Architecture and internals** (docs/):
 `docs/architecture.md`, `docs/dispatch.md`, `docs/engines.md`,
-`docs/config.md`, `docs/pipelines.md`, `docs/recovery.md`,
+`docs/config.md`, `docs/recovery.md`,
 `docs/lifecycle.md`, `docs/async.md`, `docs/steering.md`.
 
 Discover paths: `agent-mux config --sources`.

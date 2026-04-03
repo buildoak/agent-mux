@@ -23,7 +23,7 @@ Lifecycle:
   agent-mux status <dispatch_id> [--json]
   agent-mux result <dispatch_id> [--json]
   agent-mux inspect <dispatch_id> [--json]
-  agent-mux wait <dispatch_id> [--poll 30s]
+  agent-mux wait [--poll 30s] <dispatch_id>
 
 Steer actions:
   agent-mux steer <dispatch_id> abort

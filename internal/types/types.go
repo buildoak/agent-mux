@@ -78,21 +78,23 @@ type TokenUsage struct {
 }
 
 type DispatchSpec struct {
-	DispatchID   string         `json:"dispatch_id"`
-	Engine       string         `json:"engine"`
-	Model        string         `json:"model,omitempty"`
-	Effort       string         `json:"effort"`
-	Prompt       string         `json:"prompt"`
-	SystemPrompt string         `json:"system_prompt,omitempty"`
-	Cwd          string         `json:"cwd"`
-	ArtifactDir  string         `json:"artifact_dir"`
-	ContextFile  string         `json:"context_file,omitempty"`
-	TimeoutSec   int            `json:"timeout_sec,omitempty"`
-	GraceSec     int            `json:"grace_sec,omitempty"`
-	MaxDepth     int            `json:"max_depth"`
-	Depth        int            `json:"depth"`
-	FullAccess   bool           `json:"full_access"`
-	EngineOpts   map[string]any `json:"engine_opts,omitempty"`
+	DispatchID   string `json:"dispatch_id"`
+	Engine       string `json:"engine"`
+	Model        string `json:"model,omitempty"`
+	Effort       string `json:"effort"`
+	Prompt       string `json:"prompt"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
+	Cwd          string `json:"cwd"`
+	ArtifactDir  string `json:"artifact_dir"`
+	ContextFile  string `json:"context_file,omitempty"`
+	TimeoutSec   int    `json:"timeout_sec,omitempty"`
+	GraceSec     int    `json:"grace_sec,omitempty"`
+	MaxDepth     int    `json:"max_depth"`
+	Depth        int    `json:"depth"`
+	// FullAccess only changes Codex sandbox resolution. Claude and Gemini use
+	// EngineOpts["permission-mode"] for their permission/approval flags.
+	FullAccess bool           `json:"full_access"`
+	EngineOpts map[string]any `json:"engine_opts,omitempty"`
 }
 
 type dispatchSpecJSON struct {

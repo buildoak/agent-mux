@@ -40,7 +40,7 @@ LLM behavioral variance means some cases are inherently flaky:
 - **`freeze-stdin-nudge`** — tests stdin-based liveness recovery, which
   depends on timing. Passes ~85% of runs.
 
-All other cases (error handling, streaming, async, pipeline) are deterministic
+All other cases (error handling, streaming, async, lifecycle) are deterministic
 at the harness level and should not flake.
 
 When a flaky case fails, check the trace output before investigating — if the
@@ -51,7 +51,7 @@ behavioral variance rather than a regression.
 
 | Trigger       | What to run                                            |
 |---------------|--------------------------------------------------------|
-| Every PR      | Deterministic cases only: `error`, `streaming`, `async`, `pipeline`, `signal` |
+| Every PR      | Deterministic cases only: `error`, `streaming`, `async`, `signal` |
 | Nightly       | Full suite (`go test -tags axeval ./tests/axeval/`)    |
 | Pre-release   | Full suite, 3 runs, all must pass                      |
 
@@ -59,7 +59,7 @@ Example PR-only CI step:
 
 ```bash
 go test -tags axeval -timeout 300s \
-  -run 'TestAxEval/(error|streaming|async|pipeline|signal)' \
+  -run 'TestAxEval/(error|streaming|async|signal)' \
   ./tests/axeval/
 ```
 

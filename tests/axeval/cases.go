@@ -778,45 +778,6 @@ func buildCasesV1(cwd string) []TestCase {
 				},
 			),
 		},
-		{
-			Name:         "pipeline-e2e",
-			Category:     CatCorrectness,
-			Engine:       "codex",
-			Model:        "gpt-5.4-mini",
-			Effort:       "high",
-			Prompt:       "Analyze the main.go file in this repository. Identify bugs and suggest fixes.",
-			CWD:          cwd,
-			TimeoutSec:   900,
-			MaxWallClock: 16 * time.Minute,
-			SkipSkills:   true,
-			// Use --pipeline=build — plan → implement → verify.
-			// Note: the build pipeline uses architect (claude) + lifter + auditor (codex).
-			// If ANTHROPIC_API_KEY is not set, the claude step will fail and the pipeline
-			// returns status=failed. We accept either completed or failed as valid behavior
-			// because the test validates the pipeline dispatch mechanism, not API availability.
-			ExtraFlags: []string{"--pipeline=build"},
-			Evaluate: func(r Result) Verdict {
-				// Pipeline dispatch should at least parse and attempt execution.
-				if r.Status == "completed" {
-					if len(strings.TrimSpace(r.Response)) < 50 {
-						return Verdict{Pass: false, Score: 0.5,
-							Reason: fmt.Sprintf("pipeline completed but response too short; len=%d", len(r.Response))}
-					}
-					return Verdict{Pass: true, Score: 1.0,
-						Reason: fmt.Sprintf("pipeline=build completed successfully; response_len=%d", len(r.Response))}
-				}
-				if r.Status == "failed" {
-					// Pipeline attempted but a step failed (likely missing API key for claude engine).
-					// This validates the pipeline dispatch mechanism works.
-					return Verdict{Pass: true, Score: 0.7,
-						Reason: fmt.Sprintf("pipeline=build dispatched and failed gracefully (likely missing API key); error=%s", r.ErrorMessage)}
-				}
-				// parse_error = pipeline flag wasn't even recognized.
-				return Verdict{Pass: false, Score: 0.0,
-					Reason: fmt.Sprintf("pipeline dispatch unexpected status=%q; error=%s", r.Status, r.ErrorMessage)}
-			},
-		},
-
 		// ── P1: Effort Tiers ────────────────────────────────────────────
 		// Note: skills-injection, recovery-redispatch, and context-file are
 		// standalone tests in p1_test.go because they require CLI-mode dispatch

@@ -2,7 +2,7 @@
 
 // L2 · Skill Comprehension
 //
-// Test question: "Agent, here's the skill doc. Plan a 3-step dispatch pipeline."
+// Test question: "Agent, here's the skill doc. Plan a 3-step dispatch workflow."
 //
 // Implementation:
 // 1. Fan out Codex workers with the full skill/SKILL.md
@@ -35,9 +35,9 @@ func skillDoc() string {
 
 // l2Scenario describes a complex task for the agent to plan.
 type l2Scenario struct {
-	Name       string
-	Task       string
-	Checklist  string
+	Name      string
+	Task      string
+	Checklist string
 }
 
 func buildL2Scenarios() []l2Scenario {
@@ -47,11 +47,11 @@ func buildL2Scenarios() []l2Scenario {
 			Task: `You are a coordinator agent with access to agent-mux. A user asks you to:
 "Audit the authentication module in /home/user/webapp for security issues, fix any critical issues found, and verify the fixes pass tests."
 
-Plan a 3-step pipeline using agent-mux. Show the exact commands you would run.
+Plan a 3-step workflow using agent-mux. Show the exact commands you would run.
 Each step should use --async, wait for completion, and check the result before proceeding.`,
 			Checklist: `Evaluate the agent's dispatch plan:
 1. Does it use --async for each dispatch? (required for coordinator patterns)
-2. Does it use "agent-mux wait --poll <duration> <id>" to wait for completion? (NOT polling steer status in a loop)
+2. Does it use "agent-mux wait --poll <duration> <id>" to wait for completion? (NOT polling status in a loop)
 3. Does it use "agent-mux result <id> --json" to collect results?
 4. Does it use --cwd or -C= to set the working directory?
 5. Does it use valid engines (codex, claude, or gemini)?
@@ -63,14 +63,14 @@ Each step should use --async, wait for completion, and check the result before p
 11. Is the overall 3-step flow logical (audit -> fix -> verify)?
 
 Score 1.0 if all 11 items met. Deduct ~0.09 per missed item.
-Critical failures (invalid flags, polling steer status) are -0.2 each.`,
+Critical failures (invalid flags, polling status in a loop) are -0.2 each.`,
 		},
 		{
 			Name: "parallel-research-synthesis",
 			Task: `You are a coordinator agent with access to agent-mux. A user asks you to:
 "Research three different approaches to implementing rate limiting: token bucket, sliding window, and leaky bucket. Then synthesize the findings into a recommendation."
 
-Plan a multi-step pipeline using agent-mux:
+Plan a multi-step workflow using agent-mux:
 - Step 1: Fan out 3 parallel research dispatches (one per approach).
 - Step 2: Synthesize all three results into a recommendation.
 
@@ -126,24 +126,24 @@ Using agent-mux, show the exact commands to:
 
 The dispatch ID is "01KMY3ABC".`,
 			Checklist: `Evaluate the agent's steering commands:
-1. Does it use "agent-mux steer 01KMY3ABC status" (not a loop) for the live check?
+1. Does it use "agent-mux status 01KMY3ABC --json" (not a loop) for the live check?
 2. Does it use "agent-mux steer 01KMY3ABC redirect <message>" with a specific redirect message?
 3. Does it use "agent-mux wait --poll <duration> 01KMY3ABC" to wait after redirect?
 4. Does it have a fallback using "agent-mux steer 01KMY3ABC abort" if redirect fails?
 5. Does the abort fallback include a redispatch with narrower scope?
 6. Does it redirect stderr (2>/dev/null) on all commands?
-7. Does it NOT poll "steer status" in a loop? (use wait instead)
+7. Does it NOT poll "status" in a loop? (use wait instead)
 8. Are the steer commands syntactically correct (action before message)?
 
 Score 1.0 if all 8 items met. Deduct 0.125 per missed item.
-Polling steer status in a loop is a critical anti-pattern: -0.3.`,
+Polling status in a loop is a critical anti-pattern: -0.3.`,
 		},
 		{
 			Name: "context-and-roles",
 			Task: `You are a coordinator agent with access to agent-mux. A user asks you to:
 "We have a detailed specification in /tmp/spec.md (2000 lines). Have a scout quickly scan it, then have an architect plan the implementation, then have a lifter implement the first module."
 
-Plan this 3-step pipeline using agent-mux roles and context passing.
+Plan this 3-step workflow using agent-mux roles and context passing.
 Show the exact commands, including how context flows between steps.`,
 			Checklist: `Evaluate the agent's plan:
 1. Does it use -R=scout for the first step (scanning)?
@@ -192,7 +192,7 @@ Now complete this task:
 
 			// Judge the plan.
 			materials := &AXMaterials{
-				AgentPrompt:  sc.Task,
+				AgentPrompt:   sc.Task,
 				AgentResponse: agentResponse,
 				ReferenceDoc:  skill,
 			}

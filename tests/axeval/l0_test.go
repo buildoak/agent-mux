@@ -166,7 +166,7 @@ Be precise. Name every field you see.
 
 		// Step 3: Judge the agent's response.
 		materials := &AXMaterials{
-			AgentPrompt:  agentPrompt,
+			AgentPrompt:   agentPrompt,
 			AgentResponse: agentResponse,
 			ReferenceDoc:  contract,
 			Extra: map[string]string{
@@ -177,7 +177,7 @@ Be precise. Name every field you see.
 		checklist := `Check each criterion:
 1. Did the agent identify and explain schema_version (should be 1)?
 2. Did the agent identify and explain status (should be "completed")?
-3. Did the agent identify dispatch_id, dispatch_salt, trace_token?
+3. Did the agent identify dispatch_id?
 4. Did the agent identify and explain the response field?
 5. Did the agent identify the activity object with its four arrays?
 6. Did the agent identify the metadata object (engine, model, tokens, turns)?
@@ -221,7 +221,7 @@ Score 1.0 if all 10 met. Deduct 0.1 per missed item. Hallucinated meanings count
 Your task:
 1. Parse every top-level field in the result JSON.
 2. Identify that the status is "failed" and explain what that means.
-3. Parse the error object: identify code, message, suggestion, hint, example, retryable fields.
+3. Parse the error object: identify code, message, hint, example, retryable fields.
 4. Based on the error.retryable field, state whether this error can be retried.
 5. Based on error.hint and error.example, suggest what the caller should do next.
 6. Confirm the metadata and activity objects are present even on failure.
@@ -241,7 +241,7 @@ Be precise. Name every field you see.
 
 		// Step 3: Judge.
 		materials := &AXMaterials{
-			AgentPrompt:  agentPrompt,
+			AgentPrompt:   agentPrompt,
 			AgentResponse: agentResponse,
 			ReferenceDoc:  contract,
 			Extra: map[string]string{
@@ -283,12 +283,10 @@ Score 1.0 if all 8 met. Deduct 0.125 per missed item.`
 Answer these specific questions precisely:
 
 1. What is the difference between "response" and "handoff_summary"?
-2. What is the difference between "dispatch_id" and "trace_token"?
-3. What does "dispatch_salt" look like and what is it for?
-4. When is "full_output_path" set vs null?
-5. What three values can "status" take and what does each mean?
-6. What is the difference between "partial" and "recoverable"?
-7. In the error object, what is the difference between "hint", "example", and "suggestion"?
+2. When is "full_output_path" set vs null?
+3. What three values can "status" take and what does each mean?
+4. What is the difference between "partial" and "recoverable"?
+5. In the error object, what is the difference between "hint" and "example"?
 
 ## Output Contract Documentation
 %s`, contract)
@@ -299,21 +297,19 @@ Answer these specific questions precisely:
 		}
 
 		materials := &AXMaterials{
-			AgentPrompt:  agentPrompt,
+			AgentPrompt:   agentPrompt,
 			AgentResponse: agentResponse,
 			ReferenceDoc:  contract,
 		}
 
 		checklist := `Check each question was answered correctly:
 1. response is the full worker response text; handoff_summary is extracted from ## Summary/## Handoff headers or shortened. They are NOT the same.
-2. dispatch_id is a ULID; trace_token is "AGENT_MUX_GO_" + dispatch_id. They are related but distinct.
-3. dispatch_salt is adjective-noun-digit (e.g., "mint-ant-five") for human-greppable identification.
-4. full_output_path is set when response was truncated due to response_max_chars; null otherwise.
-5. status can be: completed (clean exit), timed_out (timeout), failed (validation/startup/adapter error).
-6. partial=true and recoverable=true appear on timed_out runs. partial means work is incomplete, recoverable means it can be resumed.
-7. hint is the guidance text, example is the corrective command example, suggestion is the backward-compat concatenation of hint + " " + example.
+2. full_output_path is set when response was truncated due to response_max_chars; null otherwise.
+3. status can be: completed (clean exit), timed_out (timeout), failed (validation/startup/adapter error).
+4. partial=true and recoverable=true appear on timed_out runs. partial means work is incomplete, recoverable means it can be resumed.
+5. hint is guidance text; example is the corrective command example.
 
-Score 1.0 if all 7 answered correctly. Deduct ~0.14 per wrong/missing answer. Hallucinations count as -0.2.`
+Score 1.0 if all 5 answered correctly. Deduct 0.2 per wrong/missing answer. Hallucinations count as -0.2.`
 
 		verdict := axJudge(t, binaryPath, materials, checklist)
 		verdict.Tier = TierL0

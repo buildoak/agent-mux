@@ -5,12 +5,9 @@ package axeval
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 )
-
-var dispatchSaltPattern = regexp.MustCompile(`^[a-z]+-[a-z]+-[a-z]+$`)
 
 // buildCasesV2 returns the v2 ax-eval test cases using the given fixture cwd.
 func buildCasesV2(cwd string) []TestCase {
@@ -47,28 +44,6 @@ func buildCasesV2(cwd string) []TestCase {
 						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
 					}
 					return Verdict{Pass: true, Score: 1.0, Reason: "dispatch_id present"}
-				},
-				func(r Result) Verdict {
-					raw, err := stdoutJSONObject(r)
-					if err != nil {
-						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
-					}
-					salt, ok := jsonStringField(raw, "dispatch_salt")
-					if !ok || !dispatchSaltPattern.MatchString(salt) {
-						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("dispatch_salt=%q does not match word-word-word", salt)}
-					}
-					return Verdict{Pass: true, Score: 1.0, Reason: "dispatch_salt matches pattern"}
-				},
-				func(r Result) Verdict {
-					raw, err := stdoutJSONObject(r)
-					if err != nil {
-						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
-					}
-					traceToken, ok := jsonStringField(raw, "trace_token")
-					if !ok || !strings.HasPrefix(traceToken, "AGENT_MUX_GO_") {
-						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("trace_token=%q missing AGENT_MUX_GO_ prefix", traceToken)}
-					}
-					return Verdict{Pass: true, Score: 1.0, Reason: "trace_token prefix ok"}
 				},
 				func(r Result) Verdict {
 					raw, err := stdoutJSONObject(r)
