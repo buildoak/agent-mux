@@ -23,8 +23,6 @@ const (
 
 type DispatchRecord struct {
 	ID            string `json:"id"`
-	Salt          string `json:"salt"`
-	TraceToken    string `json:"trace_token,omitempty"`
 	SessionID     string `json:"session_id,omitempty"`
 	Status        string `json:"status,omitempty"`
 	Engine        string `json:"engine"`
@@ -44,20 +42,18 @@ type DispatchRecord struct {
 }
 
 type PersistentDispatchMeta struct {
-	DispatchID   string `json:"dispatch_id"`
-	DispatchSalt string `json:"dispatch_salt"`
-	TraceToken   string `json:"trace_token,omitempty"`
-	SessionID    string `json:"session_id,omitempty"`
-	Engine       string `json:"engine"`
-	Model        string `json:"model"`
-	Effort       string `json:"effort,omitempty"`
-	Role         string `json:"role,omitempty"`
-	Variant      string `json:"variant,omitempty"`
-	Profile      string `json:"profile,omitempty"`
-	Cwd          string `json:"cwd"`
-	ArtifactDir  string `json:"artifact_dir,omitempty"`
-	StartedAt    string `json:"started_at"`
-	TimeoutSec   int    `json:"timeout_sec,omitempty"`
+	DispatchID  string `json:"dispatch_id"`
+	SessionID   string `json:"session_id,omitempty"`
+	Engine      string `json:"engine"`
+	Model       string `json:"model"`
+	Effort      string `json:"effort,omitempty"`
+	Role        string `json:"role,omitempty"`
+	Variant     string `json:"variant,omitempty"`
+	Profile     string `json:"profile,omitempty"`
+	Cwd         string `json:"cwd"`
+	ArtifactDir string `json:"artifact_dir,omitempty"`
+	StartedAt   string `json:"started_at"`
+	TimeoutSec  int    `json:"timeout_sec,omitempty"`
 }
 
 type PersistentDispatchResult struct {
@@ -101,11 +97,10 @@ func DispatchDir(dispatchID string) (string, error) {
 	return path, nil
 }
 
-func WritePersistentMeta(spec *types.DispatchSpec) error {
+func WritePersistentMeta(spec *types.DispatchSpec, annotations types.DispatchAnnotations) error {
 	if spec == nil {
 		return fmt.Errorf("missing dispatch spec")
 	}
-	EnsureTraceability(spec)
 	artifactDir := strings.TrimSpace(spec.ArtifactDir)
 	if artifactDir != "" {
 		artifactDirAbs, err := filepath.Abs(artifactDir)
@@ -119,19 +114,17 @@ func WritePersistentMeta(spec *types.DispatchSpec) error {
 		return err
 	}
 	meta := PersistentDispatchMeta{
-		DispatchID:   spec.DispatchID,
-		DispatchSalt: spec.Salt,
-		TraceToken:   spec.TraceToken,
-		Engine:       spec.Engine,
-		Model:        spec.Model,
-		Effort:       spec.Effort,
-		Role:         spec.Role,
-		Variant:      spec.Variant,
-		Profile:      spec.Profile,
-		Cwd:          spec.Cwd,
-		ArtifactDir:  artifactDir,
-		StartedAt:    time.Now().UTC().Format(time.RFC3339),
-		TimeoutSec:   spec.TimeoutSec,
+		DispatchID:  spec.DispatchID,
+		Engine:      spec.Engine,
+		Model:       spec.Model,
+		Effort:      spec.Effort,
+		Role:        annotations.Role,
+		Variant:     annotations.Variant,
+		Profile:     annotations.Profile,
+		Cwd:         spec.Cwd,
+		ArtifactDir: artifactDir,
+		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+		TimeoutSec:  spec.TimeoutSec,
 	}
 	return writeJSONFile(filepath.Join(dir, metaFileName), meta)
 }
@@ -169,11 +162,10 @@ func ReadPersistentMeta(dispatchID string) (*PersistentDispatchMeta, error) {
 	return &meta, nil
 }
 
-func WritePersistentResult(spec *types.DispatchSpec, result *types.DispatchResult, responseText, startedAt, endedAt string) error {
+func WritePersistentResult(spec *types.DispatchSpec, annotations types.DispatchAnnotations, result *types.DispatchResult, responseText, startedAt, endedAt string) error {
 	if spec == nil || result == nil {
 		return fmt.Errorf("missing persistent dispatch result payload")
 	}
-	EnsureTraceability(spec)
 	artifactDir := strings.TrimSpace(spec.ArtifactDir)
 	if artifactDir != "" {
 		artifactDirAbs, err := filepath.Abs(artifactDir)
@@ -196,9 +188,9 @@ func WritePersistentResult(spec *types.DispatchSpec, result *types.DispatchResul
 		Cwd:            spec.Cwd,
 		Engine:         firstNonEmpty(resultMetadataEngine(result), spec.Engine),
 		Model:          firstNonEmpty(resultMetadataModel(result), spec.Model),
-		Role:           firstNonEmpty(resultMetadataRole(result), spec.Role),
-		Variant:        spec.Variant,
-		Profile:        spec.Profile,
+		Role:           firstNonEmpty(resultMetadataRole(result), annotations.Role),
+		Variant:        firstNonEmpty(resultMetadataVariant(result), annotations.Variant),
+		Profile:        firstNonEmpty(resultMetadataProfile(result), annotations.Profile),
 		Effort:         spec.Effort,
 		SessionID:      resultMetadataSessionID(result),
 		ResponseChars:  utf8.RuneCountInString(responseText),
@@ -287,7 +279,7 @@ func FindDispatchRecordByRef(ref string) (*DispatchRecord, error) {
 	var match *DispatchRecord
 	for i := range records {
 		record := records[i]
-		if !strings.HasPrefix(record.ID, ref) && strings.TrimSpace(record.TraceToken) != ref {
+		if !strings.HasPrefix(record.ID, ref) {
 			continue
 		}
 		if match != nil && match.ID != record.ID {
@@ -307,8 +299,6 @@ func buildDispatchRecord(dispatchID string, meta *PersistentDispatchMeta, result
 	}
 	if meta != nil {
 		record.ID = firstNonEmpty(meta.DispatchID, record.ID)
-		record.Salt = strings.TrimSpace(meta.DispatchSalt)
-		record.TraceToken = strings.TrimSpace(meta.TraceToken)
 		record.SessionID = strings.TrimSpace(meta.SessionID)
 		record.Engine = strings.TrimSpace(meta.Engine)
 		record.Model = strings.TrimSpace(meta.Model)
@@ -323,8 +313,6 @@ func buildDispatchRecord(dispatchID string, meta *PersistentDispatchMeta, result
 	}
 	if result != nil {
 		record.ID = firstNonEmpty(result.DispatchID, record.ID)
-		record.Salt = firstNonEmpty(result.DispatchSalt, record.Salt)
-		record.TraceToken = firstNonEmpty(result.TraceToken, record.TraceToken)
 		record.SessionID = firstNonEmpty(result.SessionID, resultMetadataSessionID(&result.DispatchResult), record.SessionID)
 		record.Status = string(result.Status)
 		record.Engine = firstNonEmpty(result.Engine, resultMetadataEngine(&result.DispatchResult), record.Engine)
@@ -451,6 +439,20 @@ func resultMetadataRole(result *types.DispatchResult) string {
 		return ""
 	}
 	return strings.TrimSpace(result.Metadata.Role)
+}
+
+func resultMetadataVariant(result *types.DispatchResult) string {
+	if result == nil || result.Metadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(result.Metadata.Variant)
+}
+
+func resultMetadataProfile(result *types.DispatchResult) string {
+	if result == nil || result.Metadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(result.Metadata.Profile)
 }
 
 func resultMetadataSessionID(result *types.DispatchResult) string {

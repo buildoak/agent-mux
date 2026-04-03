@@ -79,6 +79,7 @@ type previewResult struct {
 	SchemaVersion        int                 `json:"schema_version"`
 	Kind                 string              `json:"kind"`
 	DispatchSpec         previewDispatchSpec `json:"dispatch_spec"`
+	ResultMetadata       previewResultMeta   `json:"result_metadata"`
 	Prompt               previewPrompt       `json:"prompt"`
 	Control              previewControl      `json:"control"`
 	PromptPreamble       []string            `json:"prompt_preamble"`
@@ -87,27 +88,33 @@ type previewResult struct {
 }
 
 type previewDispatchSpec struct {
-	DispatchID          string   `json:"dispatch_id"`
-	Salt                string   `json:"salt,omitempty"`
-	TraceToken          string   `json:"trace_token,omitempty"`
-	Engine              string   `json:"engine"`
-	Model               string   `json:"model,omitempty"`
-	Effort              string   `json:"effort,omitempty"`
-	Role                string   `json:"role,omitempty"`
-	Variant             string   `json:"variant,omitempty"`
-	Profile             string   `json:"profile,omitempty"`
-	Cwd                 string   `json:"cwd"`
-	Skills              []string `json:"skills,omitempty"`
-	SkipSkills          bool     `json:"skip_skills,omitempty"`
-	ContextFile         string   `json:"context_file,omitempty"`
-	ArtifactDir         string   `json:"artifact_dir"`
-	TimeoutSec          int      `json:"timeout_sec,omitempty"`
-	GraceSec            int      `json:"grace_sec,omitempty"`
-	MaxDepth            int      `json:"max_depth,omitempty"`
-	AllowSubdispatch    bool     `json:"allow_subdispatch"`
-	ContinuesDispatchID string   `json:"continues_dispatch_id,omitempty"`
-	ResponseMaxChars    int      `json:"response_max_chars"`
-	FullAccess          bool     `json:"full_access"`
+	DispatchID  string `json:"dispatch_id"`
+	Engine      string `json:"engine"`
+	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
+	Cwd         string `json:"cwd"`
+	ContextFile string `json:"context_file,omitempty"`
+	ArtifactDir string `json:"artifact_dir"`
+	TimeoutSec  int    `json:"timeout_sec,omitempty"`
+	GraceSec    int    `json:"grace_sec,omitempty"`
+	MaxDepth    int    `json:"max_depth,omitempty"`
+	Depth       int    `json:"depth,omitempty"`
+	FullAccess  bool   `json:"full_access"`
+}
+
+type previewResultMeta struct {
+	Role             string   `json:"role,omitempty"`
+	Variant          string   `json:"variant,omitempty"`
+	Profile          string   `json:"profile,omitempty"`
+	Skills           []string `json:"skills,omitempty"`
+	ResponseMaxChars int      `json:"response_max_chars,omitempty"`
+}
+
+type dispatchRequest struct {
+	*types.DispatchSpec
+	types.DispatchAnnotations
+	SkipSkills        bool
+	RecoverDispatchID string
 }
 
 type previewPrompt struct {
@@ -230,9 +237,9 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		return emitFailureResult(stdout, spec, 1, code, msg, suggestion)
 	}
 
-	var spec *types.DispatchSpec
+	var req *dispatchRequest
 	if flags.stdin {
-		spec, err = decodeStdinDispatchSpec(stdin)
+		req, err = decodeStdinDispatchSpec(stdin)
 		if err != nil {
 			code := "invalid_args"
 			if isInputValidationError(err) {
@@ -245,14 +252,15 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		if err := validateDispatchFlags(flags, flagsSet); err != nil {
 			return emitFailureResult(stdout, &types.DispatchSpec{}, 1, "invalid_input", err.Error(), "")
 		}
-		spec, err = buildDispatchSpecE(flags, positional)
+		req, err = buildDispatchSpecE(flags, positional)
 		if err != nil {
 			return emitFailureResult(stdout, &types.DispatchSpec{}, 1, "invalid_args", err.Error(), "")
 		}
 	}
+	spec := req.DispatchSpec
 
 	if flags.stdin {
-		mergeStdinCLIFlags(spec, flags, flagsSet)
+		mergeStdinCLIFlags(req, flags, flagsSet)
 	}
 
 	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
@@ -283,7 +291,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 	}
 
-	profileName := spec.Profile
+	profileName := req.DispatchAnnotations.Profile
 	if profileName != "" {
 		coordSpec, companionCfg, err := config.LoadProfile(profileName, spec.Cwd)
 		if err != nil {
@@ -311,14 +319,14 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		if spec.SystemPrompt == "" && coordSpec.SystemPrompt != "" {
 			spec.SystemPrompt = coordSpec.SystemPrompt
 		}
-		spec.Skills = append(coordSpec.Skills, spec.Skills...)
+		req.DispatchAnnotations.Skills = append(coordSpec.Skills, req.DispatchAnnotations.Skills...)
 	}
 
 	roleName := flags.role
 	variantName := flags.variant
 	if flags.stdin {
-		roleName = spec.Role
-		variantName = spec.Variant
+		roleName = req.DispatchAnnotations.Role
+		variantName = req.DispatchAnnotations.Variant
 	}
 	if roleName == "" && variantName != "" {
 		return failResult(spec, "invalid_args", "--variant requires --role", "")
@@ -363,9 +371,9 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 			return failResult(spec, "config_error", err.Error(), "")
 		}
 		spec.SystemPrompt = prependSystemPrompt(roleSystemPrompt, spec.SystemPrompt)
-		spec.Skills = mergeSkills(role.Skills, spec.Skills)
-		spec.Role = roleName
-		spec.Variant = variantName
+		req.DispatchAnnotations.Skills = mergeSkills(role.Skills, req.DispatchAnnotations.Skills)
+		req.DispatchAnnotations.Role = roleName
+		req.DispatchAnnotations.Variant = variantName
 		roleConfigDir = role.SourceDir
 	}
 
@@ -373,14 +381,11 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if spec.Effort == "" {
 		spec.Effort = "high"
 	}
-	if spec.ResponseMaxChars < 0 {
-		spec.ResponseMaxChars = cfg.Defaults.ResponseMaxChars
-	}
 	if spec.MaxDepth == 0 {
 		spec.MaxDepth = cfg.Defaults.MaxDepth
 	}
-	if !flags.stdin && !flags.noSubdispatch {
-		spec.AllowSubdispatch = cfg.Defaults.AllowSubdispatch
+	if req.DispatchAnnotations.ResponseMaxChars < 0 {
+		req.DispatchAnnotations.ResponseMaxChars = cfg.Defaults.ResponseMaxChars
 	}
 
 	if spec.TimeoutSec == 0 {
@@ -414,8 +419,8 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 	}
 
-	if len(spec.Skills) > 0 && !spec.SkipSkills {
-		skillPrompt, pathDirs, err := config.LoadSkills(spec.Skills, spec.Cwd, roleConfigDir, cfg.Skills.SearchPaths, roleName)
+	if len(req.DispatchAnnotations.Skills) > 0 && !req.SkipSkills {
+		skillPrompt, pathDirs, err := config.LoadSkills(req.DispatchAnnotations.Skills, spec.Cwd, roleConfigDir, cfg.Skills.SearchPaths, roleName)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
@@ -442,19 +447,14 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 			return failResult(spec, "config_error",
 				fmt.Sprintf("cannot stat context file %s: %v", spec.ContextFile, err), "")
 		}
-		spec.Prompt = contextFilePromptPreamble + "\n" + spec.Prompt
 	}
 
-	recoverDispatchID := spec.ContinuesDispatchID
-	if !flags.stdin {
-		recoverDispatchID = flags.recover
-	}
+	recoverDispatchID := req.RecoverDispatchID
 	if recoverDispatchID != "" {
 		recoveryCtx, err := recovery.RecoverDispatch(recoverDispatchID)
 		if err != nil {
 			return emitFailureResult(stdout, spec, 1, "recovery_failed", err.Error(), "")
 		}
-		spec.ContinuesDispatchID = recoverDispatchID
 		spec.Prompt = recovery.BuildRecoveryPrompt(recoveryCtx, spec.Prompt)
 	}
 
@@ -469,9 +469,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 	}
 
-	dispatch.EnsureTraceability(spec)
-
-	preview := buildPreviewResult(spec, shouldRequireConfirmation(flags.yes, stdin, stdout, stderr, isTerminal))
+	preview := buildPreviewResult(req, shouldRequireConfirmation(flags.yes, stdin, stdout, stderr, isTerminal))
 	if command == commandPreview {
 		emitResult(stdout, preview)
 		return 0
@@ -494,10 +492,10 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	defer cancel()
 
 	if flags.async {
-		return runAsyncDispatch(ctx, spec, cfg, stderr, stdout, flags.verbose, flags.stream, hookEval)
+		return runAsyncDispatch(ctx, spec, req.DispatchAnnotations, cfg, stderr, stdout, flags.verbose, flags.stream, hookEval)
 	}
 
-	result, err := dispatchSpec(ctx, spec, cfg, stderr, flags.verbose, flags.stream, hookEval)
+	result, err := dispatchSpec(ctx, spec, req.DispatchAnnotations, cfg, stderr, flags.verbose, flags.stream, hookEval)
 	if err != nil {
 		return emitFailureResult(stdout, spec, 1, "startup_failed", err.Error(), "")
 	}
@@ -709,10 +707,11 @@ func buildFailedResult(spec *types.DispatchSpec, code, msg, suggestion string) *
 	}
 	return dispatch.BuildFailedResult(
 		spec,
+		unsetResponseMaxChars,
 		"",
 		dispatch.NewDispatchError(code, msg, suggestion),
 		&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-		&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+		&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Tokens: &types.TokenUsage{}},
 		0,
 	)
 }
@@ -820,7 +819,7 @@ func configFailureCode(err error) string {
 	return "config_error"
 }
 
-func decodeStdinDispatchSpec(stdin io.Reader) (*types.DispatchSpec, error) {
+func decodeStdinDispatchSpec(stdin io.Reader) (*dispatchRequest, error) {
 	data, err := io.ReadAll(stdin)
 	if err != nil {
 		return nil, fmt.Errorf("read stdin: %w", err)
@@ -841,16 +840,18 @@ func decodeStdinDispatchSpec(stdin io.Reader) (*types.DispatchSpec, error) {
 	if err := json.Unmarshal(data, &spec); err != nil {
 		return nil, fmt.Errorf("decode stdin DispatchSpec: %w", err)
 	}
-	if err := materializeStdinDispatchSpec(&spec, fields); err != nil {
+	req := &dispatchRequest{DispatchSpec: &spec}
+	if err := materializeStdinDispatchSpec(req, data, fields); err != nil {
 		return nil, err
 	}
-	return &spec, nil
+	return req, nil
 }
 
-func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]json.RawMessage) error {
-	if spec == nil {
+func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[string]json.RawMessage) error {
+	if req == nil || req.DispatchSpec == nil {
 		return errors.New("missing DispatchSpec")
 	}
+	spec := req.DispatchSpec
 
 	spec.DispatchID = strings.TrimSpace(spec.DispatchID)
 	if spec.DispatchID != "" {
@@ -860,20 +861,6 @@ func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]js
 	}
 	if spec.DispatchID == "" {
 		spec.DispatchID = ulid.Make().String()
-	}
-
-	spec.Profile = strings.TrimSpace(spec.Profile)
-	if spec.Profile != "" {
-		if err := sanitize.ValidateBasename(spec.Profile); err != nil {
-			return newInputValidationError("profile", spec.Profile, err)
-		}
-	}
-	for i, name := range spec.Skills {
-		name = strings.TrimSpace(name)
-		if err := sanitize.ValidateBasename(name); err != nil {
-			return newInputValidationError("skill", name, err)
-		}
-		spec.Skills[i] = name
 	}
 
 	if strings.TrimSpace(spec.Prompt) == "" {
@@ -898,9 +885,6 @@ func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]js
 		spec.ArtifactDir = filepath.ToSlash(artifactDir) + "/"
 	}
 
-	if !jsonFieldSet(fields, "allow_subdispatch") {
-		spec.AllowSubdispatch = true
-	}
 	if !jsonFieldSet(fields, "full_access") {
 		spec.FullAccess = true
 	}
@@ -916,9 +900,60 @@ func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]js
 			return err
 		}
 	}
-	if !jsonFieldSet(fields, "response_max_chars") {
-		spec.ResponseMaxChars = unsetResponseMaxChars
+
+	var aux struct {
+		Role             string   `json:"role"`
+		Variant          string   `json:"variant"`
+		Profile          string   `json:"profile"`
+		Coordinator      string   `json:"coordinator"`
+		Skills           []string `json:"skills"`
+		SkipSkills       bool     `json:"skip_skills"`
+		Recover          string   `json:"recover"`
+		ResponseMaxChars int      `json:"response_max_chars"`
 	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return fmt.Errorf("decode stdin dispatch metadata: %w", err)
+	}
+	profile, err := resolveProfileAlias(aux.Profile, aux.Coordinator)
+	if err != nil {
+		return err
+	}
+	req.DispatchAnnotations.Role = strings.TrimSpace(aux.Role)
+	req.DispatchAnnotations.Variant = strings.TrimSpace(aux.Variant)
+	req.DispatchAnnotations.Profile = strings.TrimSpace(profile)
+	req.SkipSkills = aux.SkipSkills
+	req.RecoverDispatchID = strings.TrimSpace(aux.Recover)
+	req.DispatchAnnotations.ResponseMaxChars = unsetResponseMaxChars
+	if jsonFieldSet(fields, "response_max_chars") {
+		req.DispatchAnnotations.ResponseMaxChars = aux.ResponseMaxChars
+	}
+	if req.DispatchAnnotations.Profile != "" {
+		if err := sanitize.ValidateBasename(req.DispatchAnnotations.Profile); err != nil {
+			return newInputValidationError("profile", req.DispatchAnnotations.Profile, err)
+		}
+	}
+	for _, field := range []struct {
+		label string
+		value string
+	}{
+		{label: "role", value: req.DispatchAnnotations.Role},
+		{label: "variant", value: req.DispatchAnnotations.Variant},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			continue
+		}
+		if err := sanitize.ValidateBasename(field.value); err != nil {
+			return newInputValidationError(field.label, field.value, err)
+		}
+	}
+	for i, name := range aux.Skills {
+		name = strings.TrimSpace(name)
+		if err := sanitize.ValidateBasename(name); err != nil {
+			return newInputValidationError("skill", name, err)
+		}
+		aux.Skills[i] = name
+	}
+	req.DispatchAnnotations.Skills = aux.Skills
 	return nil
 }
 
@@ -946,6 +981,19 @@ func validateStdinProfileAliases(fields map[string]json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+func resolveProfileAlias(profile, coordinator string) (string, error) {
+	profile = strings.TrimSpace(profile)
+	coordinator = strings.TrimSpace(coordinator)
+	switch {
+	case profile == "":
+		return coordinator, nil
+	case coordinator == "" || coordinator == profile:
+		return profile, nil
+	default:
+		return "", fmt.Errorf("conflicting profile values: profile=%q coordinator=%q", profile, coordinator)
+	}
 }
 
 func jsonFieldSet(fields map[string]json.RawMessage, name string) bool {
@@ -986,12 +1034,20 @@ func splitCommand(args []string) (cliCommand, []string, bool) {
 	}
 }
 
-func buildPreviewResult(spec *types.DispatchSpec, confirmationRequired bool) previewResult {
+func buildPreviewResult(req *dispatchRequest, confirmationRequired bool) previewResult {
+	spec := req.DispatchSpec
 	return previewResult{
 		SchemaVersion: 1,
 		Kind:          "preview",
 		DispatchSpec:  previewDispatchSpecFrom(spec),
-		Prompt:        previewPromptFrom(spec),
+		ResultMetadata: previewResultMeta{
+			Role:             req.DispatchAnnotations.Role,
+			Variant:          req.DispatchAnnotations.Variant,
+			Profile:          req.DispatchAnnotations.Profile,
+			Skills:           append([]string(nil), req.DispatchAnnotations.Skills...),
+			ResponseMaxChars: req.DispatchAnnotations.ResponseMaxChars,
+		},
+		Prompt: previewPromptFrom(spec),
 		Control: previewControl{
 			ControlRecord: recovery.ControlRecordPath(spec.DispatchID),
 			ArtifactDir:   spec.ArtifactDir,
@@ -1007,27 +1063,18 @@ func previewDispatchSpecFrom(spec *types.DispatchSpec) previewDispatchSpec {
 		return previewDispatchSpec{}
 	}
 	return previewDispatchSpec{
-		DispatchID:          spec.DispatchID,
-		Salt:                spec.Salt,
-		TraceToken:          spec.TraceToken,
-		Engine:              spec.Engine,
-		Model:               spec.Model,
-		Effort:              spec.Effort,
-		Role:                spec.Role,
-		Variant:             spec.Variant,
-		Profile:             spec.Profile,
-		Cwd:                 spec.Cwd,
-		Skills:              append([]string(nil), spec.Skills...),
-		SkipSkills:          spec.SkipSkills,
-		ContextFile:         spec.ContextFile,
-		ArtifactDir:         spec.ArtifactDir,
-		TimeoutSec:          spec.TimeoutSec,
-		GraceSec:            spec.GraceSec,
-		MaxDepth:            spec.MaxDepth,
-		AllowSubdispatch:    spec.AllowSubdispatch,
-		ContinuesDispatchID: spec.ContinuesDispatchID,
-		ResponseMaxChars:    spec.ResponseMaxChars,
-		FullAccess:          spec.FullAccess,
+		DispatchID:  spec.DispatchID,
+		Engine:      spec.Engine,
+		Model:       spec.Model,
+		Effort:      spec.Effort,
+		Cwd:         spec.Cwd,
+		ContextFile: spec.ContextFile,
+		ArtifactDir: spec.ArtifactDir,
+		TimeoutSec:  spec.TimeoutSec,
+		GraceSec:    spec.GraceSec,
+		MaxDepth:    spec.MaxDepth,
+		Depth:       spec.Depth,
+		FullAccess:  spec.FullAccess,
 	}
 }
 
@@ -1074,10 +1121,11 @@ func previewExcerpt(text string, maxRunes int) (string, bool) {
 func buildCancelledResult(spec *types.DispatchSpec) *types.DispatchResult {
 	return dispatch.BuildFailedResult(
 		spec,
+		unsetResponseMaxChars,
 		"",
 		dispatch.NewDispatchError("cancelled", "Dispatch cancelled at confirmation prompt before launch.", "Re-run with --yes to skip preview and confirmation."),
 		&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-		&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+		&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Tokens: &types.TokenUsage{}},
 		0,
 	)
 }
@@ -1166,7 +1214,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	return fs, flags
 }
 
-func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, error) {
+func buildDispatchSpecE(flags cliFlags, args []string) (*dispatchRequest, error) {
 	if flags.promptFile != "" && len(args) > 0 {
 		return nil, errors.New("prompt must come from either the first positional arg or --prompt-file, not both")
 	}
@@ -1226,11 +1274,6 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 		fullAccess = false
 	}
 
-	allowSubdispatch := true
-	if flags.noSubdispatch {
-		allowSubdispatch = false
-	}
-
 	engineOpts := map[string]any{
 		"sandbox":         flags.sandbox,
 		"reasoning":       flags.reasoning,
@@ -1240,31 +1283,34 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 	}
 
 	spec := &types.DispatchSpec{
-		DispatchID:       dispatchID,
-		Salt:             flags.salt,
-		Engine:           flags.engine,
-		Model:            flags.model,
-		Effort:           flags.effort,
-		Prompt:           prompt,
-		SystemPrompt:     systemPrompt,
-		Cwd:              cwd,
-		Skills:           append([]string(nil), flags.skills...),
-		SkipSkills:       flags.skipSkills,
-		Profile:          flags.profile,
-		ContextFile:      flags.contextFile,
-		ArtifactDir:      artifactDir,
-		TimeoutSec:       flags.timeout,
-		GraceSec:         60,
-		Role:             flags.role,
-		Variant:          flags.variant,
-		MaxDepth:         flags.maxDepth,
-		AllowSubdispatch: allowSubdispatch,
-		ResponseMaxChars: flags.responseMaxChars,
-		EngineOpts:       engineOpts,
-		FullAccess:       fullAccess,
+		DispatchID:   dispatchID,
+		Engine:       flags.engine,
+		Model:        flags.model,
+		Effort:       flags.effort,
+		Prompt:       prompt,
+		SystemPrompt: systemPrompt,
+		Cwd:          cwd,
+		ContextFile:  flags.contextFile,
+		ArtifactDir:  artifactDir,
+		TimeoutSec:   flags.timeout,
+		GraceSec:     60,
+		MaxDepth:     flags.maxDepth,
+		EngineOpts:   engineOpts,
+		FullAccess:   fullAccess,
 	}
 
-	return spec, nil
+	return &dispatchRequest{
+		DispatchSpec: spec,
+		DispatchAnnotations: types.DispatchAnnotations{
+			Role:             flags.role,
+			Variant:          flags.variant,
+			Profile:          flags.profile,
+			Skills:           append([]string(nil), flags.skills...),
+			ResponseMaxChars: flags.responseMaxChars,
+		},
+		SkipSkills:        flags.skipSkills,
+		RecoverDispatchID: flags.recover,
+	}, nil
 }
 
 func normalizeArgs(args []string) []string {
@@ -1347,18 +1393,18 @@ func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...stri
 	}
 }
 
-func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
-	dispatch.EnsureTraceability(spec)
+func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, cfg *config.Config, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
 	reg := adapter.NewRegistry(configuredModels(cfg))
 
 	adp, err := reg.Get(spec.Engine)
 	if err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
+			annotations.ResponseMaxChars,
 			"",
 			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]"),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Variant: annotations.Variant, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
@@ -1371,10 +1417,11 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 		}
 		return dispatch.BuildFailedResult(
 			spec,
+			annotations.ResponseMaxChars,
 			"",
 			dispatch.NewDispatchError("model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Variant: annotations.Variant, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
@@ -1382,25 +1429,28 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
+			annotations.ResponseMaxChars,
 			"",
 			dispatch.NewDispatchError("artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Variant: annotations.Variant, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
 	if err := recovery.RegisterDispatchSpec(spec); err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
+			annotations.ResponseMaxChars,
 			"",
 			dispatch.NewDispatchError("config_error", fmt.Sprintf("Register control path for dispatch %q: %v", spec.DispatchID, err), "Ensure the control path is writable."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Variant: annotations.Variant, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
 
 	eng := engine.NewLoopEngine(adp, stderr, hookEval)
+	eng.SetAnnotations(annotations)
 	eng.SetVerbose(verbose)
 	switch {
 	case verbose:
@@ -1416,20 +1466,19 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 // mergeStdinCLIFlags merges explicitly-set CLI flags into a DispatchSpec that
 // was decoded from --stdin JSON. CLI flags take precedence over JSON fields,
 // allowing callers to override specific spec fields without rewriting the JSON.
-func mergeStdinCLIFlags(spec *types.DispatchSpec, flags cliFlags, flagsSet map[string]bool) {
+func mergeStdinCLIFlags(req *dispatchRequest, flags cliFlags, flagsSet map[string]bool) {
+	spec := req.DispatchSpec
 	if flagsSet["skill"] {
-		// CLI skills prepend so they take precedence over JSON skills during
-		// resolution (first match wins in the skill resolver).
-		spec.Skills = append(append([]string(nil), flags.skills...), spec.Skills...)
+		req.DispatchAnnotations.Skills = append(append([]string(nil), flags.skills...), req.DispatchAnnotations.Skills...)
 	}
 	if flagsSet["skip-skills"] {
-		spec.SkipSkills = flags.skipSkills
+		req.SkipSkills = flags.skipSkills
 	}
 	if flagsSet["context-file"] {
 		spec.ContextFile = flags.contextFile
 	}
 	if flagsSet["recover"] {
-		spec.ContinuesDispatchID = flags.recover
+		req.RecoverDispatchID = flags.recover
 	}
 	if flagsSet["engine"] || flagsSet["E"] {
 		spec.Engine = flags.engine
@@ -1441,13 +1490,13 @@ func mergeStdinCLIFlags(spec *types.DispatchSpec, flags cliFlags, flagsSet map[s
 		spec.Effort = flags.effort
 	}
 	if flagsSet["role"] || flagsSet["R"] {
-		spec.Role = flags.role
+		req.DispatchAnnotations.Role = flags.role
 	}
 	if flagsSet["variant"] {
-		spec.Variant = flags.variant
+		req.DispatchAnnotations.Variant = flags.variant
 	}
 	if flagsSet["profile"] {
-		spec.Profile = flags.profile
+		req.DispatchAnnotations.Profile = flags.profile
 	}
 	if flagsSet["cwd"] || flagsSet["C"] {
 		spec.Cwd = flags.cwd
@@ -1472,17 +1521,11 @@ func mergeStdinCLIFlags(spec *types.DispatchSpec, flags cliFlags, flagsSet map[s
 			}
 		}
 	}
-	if flagsSet["salt"] {
-		spec.Salt = flags.salt
-	}
 	if flagsSet["max-depth"] {
 		spec.MaxDepth = flags.maxDepth
 	}
-	if flagsSet["no-subdispatch"] {
-		spec.AllowSubdispatch = !flags.noSubdispatch
-	}
 	if flagsSet["response-max-chars"] {
-		spec.ResponseMaxChars = flags.responseMaxChars
+		req.DispatchAnnotations.ResponseMaxChars = flags.responseMaxChars
 	}
 	if flagsSet["full"] || flagsSet["f"] {
 		spec.FullAccess = flags.full

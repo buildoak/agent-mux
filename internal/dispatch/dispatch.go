@@ -4,105 +4,43 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
-var (
-	adjectives = []string{
-		"amber", "blue", "coral", "dark", "eager", "fair", "gold",
-		"hot", "icy", "jade", "keen", "lime", "mint", "navy",
-		"oak", "pale", "quick", "red", "sage", "teal",
-	}
-	nouns = []string{
-		"ant", "bear", "cat", "deer", "elk", "fox", "goat",
-		"hawk", "ibis", "jay", "koi", "lark", "moth", "newt",
-		"owl", "pike", "quail", "ray", "swan", "toad",
-	}
-	digits = []string{
-		"one", "two", "three", "four", "five",
-		"six", "seven", "eight", "nine", "zero",
-	}
-	saltRand = rand.New(rand.NewSource(time.Now().UnixNano()))
-	saltMu   sync.Mutex
-)
-
-func GenerateSalt() string {
-	saltMu.Lock()
-	defer saltMu.Unlock()
-	return fmt.Sprintf("%s-%s-%s",
-		adjectives[saltRand.Intn(len(adjectives))],
-		nouns[saltRand.Intn(len(nouns))],
-		digits[saltRand.Intn(len(digits))],
-	)
-}
-
-func DefaultTraceToken(dispatchID string) string {
-	dispatchID = strings.TrimSpace(dispatchID)
-	if dispatchID == "" {
-		return ""
-	}
-	return "AGENT_MUX_GO_" + dispatchID
-}
-
-func EnsureTraceability(spec *types.DispatchSpec) {
-	if spec == nil {
-		return
-	}
-	spec.Salt = strings.TrimSpace(spec.Salt)
-	if spec.Salt == "" {
-		spec.Salt = GenerateSalt()
-	}
-	spec.TraceToken = strings.TrimSpace(spec.TraceToken)
-	if spec.TraceToken == "" {
-		spec.TraceToken = DefaultTraceToken(spec.DispatchID)
-	}
-}
-
 func EnsureArtifactDir(dir string) error {
 	return os.MkdirAll(dir, 0755)
 }
 
 type DispatchMeta struct {
-	DispatchID          string   `json:"dispatch_id"`
-	DispatchSalt        string   `json:"dispatch_salt"`
-	TraceToken          string   `json:"trace_token,omitempty"`
-	SessionID           string   `json:"session_id,omitempty"`
-	StartedAt           string   `json:"started_at"`
-	Engine              string   `json:"engine"`
-	Model               string   `json:"model"`
-	Role                string   `json:"role,omitempty"`
-	PromptHash          string   `json:"prompt_hash"`
-	Cwd                 string   `json:"cwd"`
-	ContinuesDispatchID *string  `json:"continues_dispatch_id"`
-	EndedAt             string   `json:"ended_at,omitempty"`
-	Status              string   `json:"status,omitempty"`
-	Artifacts           []string `json:"artifacts,omitempty"`
+	DispatchID string   `json:"dispatch_id"`
+	SessionID  string   `json:"session_id,omitempty"`
+	StartedAt  string   `json:"started_at"`
+	Engine     string   `json:"engine"`
+	Model      string   `json:"model"`
+	Role       string   `json:"role,omitempty"`
+	PromptHash string   `json:"prompt_hash"`
+	Cwd        string   `json:"cwd"`
+	EndedAt    string   `json:"ended_at,omitempty"`
+	Status     string   `json:"status,omitempty"`
+	Artifacts  []string `json:"artifacts,omitempty"`
 }
 
-func WriteDispatchMeta(artifactDir string, spec *types.DispatchSpec) error {
-	EnsureTraceability(spec)
+func WriteDispatchMeta(artifactDir string, spec *types.DispatchSpec, annotations types.DispatchAnnotations) error {
 	hash := sha256.Sum256([]byte(spec.Prompt))
 	meta := DispatchMeta{
-		DispatchID:   spec.DispatchID,
-		DispatchSalt: spec.Salt,
-		TraceToken:   spec.TraceToken,
-		StartedAt:    time.Now().UTC().Format(time.RFC3339),
-		Engine:       spec.Engine,
-		Model:        spec.Model,
-		Role:         spec.Role,
-		PromptHash:   fmt.Sprintf("sha256:%x", hash[:8]),
-		Cwd:          spec.Cwd,
-	}
-	if spec.ContinuesDispatchID != "" {
-		meta.ContinuesDispatchID = &spec.ContinuesDispatchID
+		DispatchID: spec.DispatchID,
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		Engine:     spec.Engine,
+		Model:      spec.Model,
+		Role:       annotations.Role,
+		PromptHash: fmt.Sprintf("sha256:%x", hash[:8]),
+		Cwd:        spec.Cwd,
 	}
 
 	return writeMetaFile(filepath.Join(artifactDir, "_dispatch_meta.json"), &meta)
@@ -215,12 +153,9 @@ func PromptPreamble(spec *types.DispatchSpec) []string {
 	if spec == nil {
 		return nil
 	}
-	lines := make([]string, 0, 3)
-	if spec.TraceToken != "" {
-		lines = append(lines, "Trace token: "+spec.TraceToken)
-	}
-	if spec.DispatchID != "" {
-		lines = append(lines, "Dispatch ID: "+spec.DispatchID)
+	lines := make([]string, 0, 2)
+	if spec.ContextFile != "" {
+		lines = append(lines, "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.")
 	}
 	if spec.ArtifactDir != "" {
 		lines = append(lines, "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.")
@@ -472,24 +407,24 @@ func levenshtein(a, b string) int {
 
 	return prev[lb]
 }
-func BuildCompletedResult(spec *types.DispatchSpec, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := baseResult(spec, types.StatusCompleted, shapeTerminalResponse(spec, response), activity, metadata, durationMS)
+func BuildCompletedResult(spec *types.DispatchSpec, responseMaxChars int, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := baseResult(spec, types.StatusCompleted, shapeTerminalResponse(spec.ArtifactDir, responseMaxChars, response), activity, metadata, durationMS)
 
 	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
 	return result
 }
-func BuildTimedOutResult(spec *types.DispatchSpec, response, reason string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := baseResult(spec, types.StatusTimedOut, shapeTerminalResponse(spec, response), activity, metadata, durationMS)
+func BuildTimedOutResult(spec *types.DispatchSpec, responseMaxChars int, response, reason string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := baseResult(spec, types.StatusTimedOut, shapeTerminalResponse(spec.ArtifactDir, responseMaxChars, response), activity, metadata, durationMS)
 	result.Partial = true
 	result.Recoverable = true
 	result.Reason = reason
 	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
 	return result
 }
-func BuildFailedResult(spec *types.DispatchSpec, response string, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+func BuildFailedResult(spec *types.DispatchSpec, responseMaxChars int, response string, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	// FM-9: Include accumulated partial response so callers can see what the
 	// worker accomplished before failure.
-	result := baseResult(spec, types.StatusFailed, shapeTerminalResponse(spec, response), activity, metadata, durationMS)
+	result := baseResult(spec, types.StatusFailed, shapeTerminalResponse(spec.ArtifactDir, responseMaxChars, response), activity, metadata, durationMS)
 	if response == "" {
 		result.HandoffSummary = dispatchErr.Message
 	}
@@ -559,38 +494,35 @@ func truncateAtBoundary(s string, maxChars int) string {
 	return truncated
 }
 
-func shapeTerminalResponse(spec *types.DispatchSpec, response string) terminalResponseShape {
+func shapeTerminalResponse(artifactDir string, responseMaxChars int, response string) terminalResponseShape {
 	shape := terminalResponseShape{
 		Response:       response,
 		HandoffSummary: ExtractHandoffSummary(response, 2000),
 	}
 
-	if spec == nil || spec.ResponseMaxChars <= 0 {
+	if responseMaxChars <= 0 {
 		return shape
 	}
-	if utf8.RuneCountInString(response) <= spec.ResponseMaxChars {
+	if utf8.RuneCountInString(response) <= responseMaxChars {
 		return shape
 	}
 
-	fullOutputPath, err := WriteFullOutput(spec.ArtifactDir, response)
+	fullOutputPath, err := WriteFullOutput(artifactDir, response)
 	if err != nil {
 		return shape
 	}
 
-	shape.Response = truncateAtBoundary(response, spec.ResponseMaxChars)
+	shape.Response = truncateAtBoundary(response, responseMaxChars)
 	shape.ResponseTruncated = true
 	shape.FullOutputPath = &fullOutputPath
 	return shape
 }
 
 func baseResult(spec *types.DispatchSpec, status types.DispatchStatus, shaped terminalResponseShape, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	EnsureTraceability(spec)
 	return &types.DispatchResult{
 		SchemaVersion:     1,
 		Status:            status,
 		DispatchID:        spec.DispatchID,
-		DispatchSalt:      spec.Salt,
-		TraceToken:        spec.TraceToken,
 		Response:          shaped.Response,
 		ResponseTruncated: shaped.ResponseTruncated,
 		FullOutputPath:    shaped.FullOutputPath,

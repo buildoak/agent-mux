@@ -2,8 +2,6 @@ package types
 
 import (
 	"encoding/json"
-	"fmt"
-	"strings"
 	"time"
 )
 
@@ -19,8 +17,6 @@ type DispatchResult struct {
 	SchemaVersion     int               `json:"schema_version"`
 	Status            DispatchStatus    `json:"status"`
 	DispatchID        string            `json:"dispatch_id"`
-	DispatchSalt      string            `json:"dispatch_salt"`
-	TraceToken        string            `json:"trace_token"`
 	Response          string            `json:"response"`
 	ResponseTruncated bool              `json:"response_truncated"`
 	FullOutput        *string           `json:"full_output"`
@@ -56,10 +52,21 @@ type DispatchMetadata struct {
 	Engine    string      `json:"engine"`
 	Model     string      `json:"model"`
 	Role      string      `json:"role,omitempty"`
+	Variant   string      `json:"variant,omitempty"`
+	Profile   string      `json:"profile,omitempty"`
+	Skills    []string    `json:"skills,omitempty"`
 	Tokens    *TokenUsage `json:"tokens"`
 	Turns     int         `json:"turns"`
 	CostUSD   float64     `json:"cost_usd"`
 	SessionID string      `json:"session_id,omitempty"`
+}
+
+type DispatchAnnotations struct {
+	Role             string
+	Variant          string
+	Profile          string
+	Skills           []string
+	ResponseMaxChars int
 }
 
 type TokenUsage struct {
@@ -71,89 +78,58 @@ type TokenUsage struct {
 }
 
 type DispatchSpec struct {
-	DispatchID          string         `json:"dispatch_id"`
-	Salt                string         `json:"salt,omitempty"`
-	TraceToken          string         `json:"trace_token,omitempty"`
-	Engine              string         `json:"engine"`
-	Model               string         `json:"model,omitempty"`
-	Effort              string         `json:"effort"`
-	Prompt              string         `json:"prompt"`
-	SystemPrompt        string         `json:"system_prompt,omitempty"`
-	Cwd                 string         `json:"cwd"`
-	Skills              []string       `json:"skills,omitempty"`
-	SkipSkills          bool           `json:"skip_skills,omitempty"`
-	Profile             string         `json:"-"`
-	ContextFile         string         `json:"context_file,omitempty"`
-	ArtifactDir         string         `json:"artifact_dir"`
-	TimeoutSec          int            `json:"timeout_sec,omitempty"`
-	GraceSec            int            `json:"grace_sec,omitempty"`
-	Role                string         `json:"role,omitempty"`
-	Variant             string         `json:"variant,omitempty"`
-	MaxDepth            int            `json:"max_depth"`
-	AllowSubdispatch    bool           `json:"allow_subdispatch"`
-	Depth               int            `json:"depth"`
-	ContinuesDispatchID string         `json:"continues_dispatch_id,omitempty"`
-	ResponseMaxChars    int            `json:"response_max_chars,omitempty"`
-	EngineOpts          map[string]any `json:"engine_opts,omitempty"`
-	FullAccess          bool           `json:"full_access"`
+	DispatchID   string         `json:"dispatch_id"`
+	Engine       string         `json:"engine"`
+	Model        string         `json:"model,omitempty"`
+	Effort       string         `json:"effort"`
+	Prompt       string         `json:"prompt"`
+	SystemPrompt string         `json:"system_prompt,omitempty"`
+	Cwd          string         `json:"cwd"`
+	ArtifactDir  string         `json:"artifact_dir"`
+	ContextFile  string         `json:"context_file,omitempty"`
+	TimeoutSec   int            `json:"timeout_sec,omitempty"`
+	GraceSec     int            `json:"grace_sec,omitempty"`
+	MaxDepth     int            `json:"max_depth"`
+	Depth        int            `json:"depth"`
+	FullAccess   bool           `json:"full_access"`
+	EngineOpts   map[string]any `json:"engine_opts,omitempty"`
 }
 
 type dispatchSpecJSON struct {
-	DispatchID          string         `json:"dispatch_id"`
-	Salt                string         `json:"salt,omitempty"`
-	TraceToken          string         `json:"trace_token,omitempty"`
-	Engine              string         `json:"engine"`
-	Model               string         `json:"model,omitempty"`
-	Effort              string         `json:"effort"`
-	Prompt              string         `json:"prompt"`
-	SystemPrompt        string         `json:"system_prompt,omitempty"`
-	Cwd                 string         `json:"cwd"`
-	Skills              []string       `json:"skills,omitempty"`
-	SkipSkills          bool           `json:"skip_skills,omitempty"`
-	Profile             string         `json:"profile,omitempty"`
-	Coordinator         string         `json:"coordinator,omitempty"`
-	ContextFile         string         `json:"context_file,omitempty"`
-	ArtifactDir         string         `json:"artifact_dir"`
-	TimeoutSec          int            `json:"timeout_sec,omitempty"`
-	GraceSec            int            `json:"grace_sec,omitempty"`
-	Role                string         `json:"role,omitempty"`
-	Variant             string         `json:"variant,omitempty"`
-	MaxDepth            int            `json:"max_depth"`
-	AllowSubdispatch    bool           `json:"allow_subdispatch"`
-	Depth               int            `json:"depth"`
-	ContinuesDispatchID string         `json:"continues_dispatch_id,omitempty"`
-	ResponseMaxChars    int            `json:"response_max_chars,omitempty"`
-	EngineOpts          map[string]any `json:"engine_opts,omitempty"`
-	FullAccess          bool           `json:"full_access"`
+	DispatchID   string         `json:"dispatch_id"`
+	Engine       string         `json:"engine"`
+	Model        string         `json:"model,omitempty"`
+	Effort       string         `json:"effort"`
+	Prompt       string         `json:"prompt"`
+	SystemPrompt string         `json:"system_prompt,omitempty"`
+	Cwd          string         `json:"cwd"`
+	ContextFile  string         `json:"context_file,omitempty"`
+	ArtifactDir  string         `json:"artifact_dir"`
+	TimeoutSec   int            `json:"timeout_sec,omitempty"`
+	GraceSec     int            `json:"grace_sec,omitempty"`
+	MaxDepth     int            `json:"max_depth"`
+	Depth        int            `json:"depth"`
+	EngineOpts   map[string]any `json:"engine_opts,omitempty"`
+	FullAccess   bool           `json:"full_access"`
 }
 
 func (s DispatchSpec) MarshalJSON() ([]byte, error) {
 	wire := dispatchSpecJSON{
-		DispatchID:          s.DispatchID,
-		Salt:                s.Salt,
-		TraceToken:          s.TraceToken,
-		Engine:              s.Engine,
-		Model:               s.Model,
-		Effort:              s.Effort,
-		Prompt:              s.Prompt,
-		SystemPrompt:        s.SystemPrompt,
-		Cwd:                 s.Cwd,
-		Skills:              append([]string(nil), s.Skills...),
-		SkipSkills:          s.SkipSkills,
-		Profile:             s.Profile,
-		ContextFile:         s.ContextFile,
-		ArtifactDir:         s.ArtifactDir,
-		TimeoutSec:          s.TimeoutSec,
-		GraceSec:            s.GraceSec,
-		Role:                s.Role,
-		Variant:             s.Variant,
-		MaxDepth:            s.MaxDepth,
-		AllowSubdispatch:    s.AllowSubdispatch,
-		Depth:               s.Depth,
-		ContinuesDispatchID: s.ContinuesDispatchID,
-		ResponseMaxChars:    s.ResponseMaxChars,
-		EngineOpts:          s.EngineOpts,
-		FullAccess:          s.FullAccess,
+		DispatchID:   s.DispatchID,
+		Engine:       s.Engine,
+		Model:        s.Model,
+		Effort:       s.Effort,
+		Prompt:       s.Prompt,
+		SystemPrompt: s.SystemPrompt,
+		Cwd:          s.Cwd,
+		ContextFile:  s.ContextFile,
+		ArtifactDir:  s.ArtifactDir,
+		TimeoutSec:   s.TimeoutSec,
+		GraceSec:     s.GraceSec,
+		MaxDepth:     s.MaxDepth,
+		Depth:        s.Depth,
+		EngineOpts:   s.EngineOpts,
+		FullAccess:   s.FullAccess,
 	}
 	return json.Marshal(wire)
 }
@@ -164,52 +140,24 @@ func (s *DispatchSpec) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	profile, err := resolveProfileAlias(wire.Profile, wire.Coordinator)
-	if err != nil {
-		return err
-	}
-
 	*s = DispatchSpec{
-		DispatchID:          wire.DispatchID,
-		Salt:                wire.Salt,
-		TraceToken:          wire.TraceToken,
-		Engine:              wire.Engine,
-		Model:               wire.Model,
-		Effort:              wire.Effort,
-		Prompt:              wire.Prompt,
-		SystemPrompt:        wire.SystemPrompt,
-		Cwd:                 wire.Cwd,
-		Skills:              append([]string(nil), wire.Skills...),
-		SkipSkills:          wire.SkipSkills,
-		Profile:             profile,
-		ContextFile:         wire.ContextFile,
-		ArtifactDir:         wire.ArtifactDir,
-		TimeoutSec:          wire.TimeoutSec,
-		GraceSec:            wire.GraceSec,
-		Role:                wire.Role,
-		Variant:             wire.Variant,
-		MaxDepth:            wire.MaxDepth,
-		AllowSubdispatch:    wire.AllowSubdispatch,
-		Depth:               wire.Depth,
-		ContinuesDispatchID: wire.ContinuesDispatchID,
-		ResponseMaxChars:    wire.ResponseMaxChars,
-		EngineOpts:          wire.EngineOpts,
-		FullAccess:          wire.FullAccess,
+		DispatchID:   wire.DispatchID,
+		Engine:       wire.Engine,
+		Model:        wire.Model,
+		Effort:       wire.Effort,
+		Prompt:       wire.Prompt,
+		SystemPrompt: wire.SystemPrompt,
+		Cwd:          wire.Cwd,
+		ContextFile:  wire.ContextFile,
+		ArtifactDir:  wire.ArtifactDir,
+		TimeoutSec:   wire.TimeoutSec,
+		GraceSec:     wire.GraceSec,
+		MaxDepth:     wire.MaxDepth,
+		Depth:        wire.Depth,
+		EngineOpts:   wire.EngineOpts,
+		FullAccess:   wire.FullAccess,
 	}
 	return nil
-}
-
-func resolveProfileAlias(profile, coordinator string) (string, error) {
-	profile = strings.TrimSpace(profile)
-	coordinator = strings.TrimSpace(coordinator)
-	switch {
-	case profile == "":
-		return coordinator, nil
-	case coordinator == "" || coordinator == profile:
-		return profile, nil
-	default:
-		return "", fmt.Errorf("conflicting profile values: profile=%q coordinator=%q", profile, coordinator)
-	}
 }
 
 type EventKind int

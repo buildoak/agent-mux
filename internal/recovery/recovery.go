@@ -21,10 +21,8 @@ type RecoveryContext struct {
 }
 
 type ControlRecord struct {
-	DispatchID   string `json:"dispatch_id"`
-	ArtifactDir  string `json:"artifact_dir"`
-	DispatchSalt string `json:"dispatch_salt,omitempty"`
-	TraceToken   string `json:"trace_token,omitempty"`
+	DispatchID  string `json:"dispatch_id"`
+	ArtifactDir string `json:"artifact_dir"`
 }
 
 func DefaultArtifactDir(dispatchID string) (string, error) {
@@ -86,10 +84,8 @@ func ResolveControlRecord(ref string) (*ControlRecord, error) {
 		return nil, err
 	}
 	return &ControlRecord{
-		DispatchID:   record.ID,
-		ArtifactDir:  record.ArtifactDir,
-		DispatchSalt: record.Salt,
-		TraceToken:   record.TraceToken,
+		DispatchID:  record.ID,
+		ArtifactDir: record.ArtifactDir,
 	}, nil
 }
 
@@ -114,15 +110,13 @@ func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
 	if err != nil {
 		if persistentMeta, persistentErr := dispatch.ReadPersistentMeta(dispatchID); persistentErr == nil {
 			meta = &dispatch.DispatchMeta{
-				DispatchID:   persistentMeta.DispatchID,
-				DispatchSalt: persistentMeta.DispatchSalt,
-				TraceToken:   persistentMeta.TraceToken,
-				SessionID:    persistentMeta.SessionID,
-				StartedAt:    persistentMeta.StartedAt,
-				Engine:       persistentMeta.Engine,
-				Model:        persistentMeta.Model,
-				Role:         persistentMeta.Role,
-				Cwd:          persistentMeta.Cwd,
+				DispatchID: persistentMeta.DispatchID,
+				SessionID:  persistentMeta.SessionID,
+				StartedAt:  persistentMeta.StartedAt,
+				Engine:     persistentMeta.Engine,
+				Model:      persistentMeta.Model,
+				Role:       persistentMeta.Role,
+				Cwd:        persistentMeta.Cwd,
 			}
 		} else {
 			return nil, fmt.Errorf("read dispatch meta for %q: %w", dispatchID, err)
@@ -178,7 +172,6 @@ func registerDispatchMeta(spec *types.DispatchSpec) error {
 	if spec == nil {
 		return fmt.Errorf("missing dispatch spec")
 	}
-	dispatch.EnsureTraceability(spec)
 	artifactDir := strings.TrimSpace(spec.ArtifactDir)
 	if artifactDir == "" {
 		return fmt.Errorf("missing artifact dir for dispatch %q", spec.DispatchID)
@@ -189,7 +182,7 @@ func registerDispatchMeta(spec *types.DispatchSpec) error {
 	}
 	specCopy := *spec
 	specCopy.ArtifactDir = filepath.Clean(artifactDirAbs)
-	return dispatch.WritePersistentMeta(&specCopy)
+	return dispatch.WritePersistentMeta(&specCopy, types.DispatchAnnotations{})
 }
 
 func BuildRecoveryPrompt(ctx *RecoveryContext, additionalInstruction string) string {

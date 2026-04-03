@@ -11,14 +11,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
-func TestGenerateSalt(t *testing.T) {
-	salt := GenerateSalt()
-	parts := strings.Split(salt, "-")
-	if len(parts) != 3 {
-		t.Errorf("salt should have 3 parts, got %d: %q", len(parts), salt)
-	}
-}
-
 func TestEnsureArtifactDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "a", "b", "c")
 	if err := EnsureArtifactDir(dir); err != nil {
@@ -33,37 +25,16 @@ func TestEnsureArtifactDir(t *testing.T) {
 	}
 }
 
-func TestDefaultTraceToken(t *testing.T) {
-	const dispatchID = "01JQXYZ"
-	if got := DefaultTraceToken(dispatchID); got != "AGENT_MUX_GO_01JQXYZ" {
-		t.Fatalf("DefaultTraceToken(%q) = %q, want %q", dispatchID, got, "AGENT_MUX_GO_01JQXYZ")
-	}
-}
-
-func TestEnsureTraceabilityDerivesMissingFields(t *testing.T) {
-	spec := &types.DispatchSpec{DispatchID: "01JQXYZ"}
-
-	EnsureTraceability(spec)
-
-	if spec.Salt == "" {
-		t.Fatal("salt should be populated")
-	}
-	if spec.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
-		t.Fatalf("trace_token = %q, want %q", spec.TraceToken, "AGENT_MUX_GO_01JQXYZ")
-	}
-}
-
 func TestPromptPreamble(t *testing.T) {
 	spec := &types.DispatchSpec{
 		DispatchID:  "01JQXYZ",
-		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
+		ContextFile: "/tmp/context.md",
 		ArtifactDir: "/tmp/agent-mux/01JQXYZ",
 	}
 
 	lines := PromptPreamble(spec)
 	want := []string{
-		"Trace token: AGENT_MUX_GO_01JQXYZ",
-		"Dispatch ID: 01JQXYZ",
+		"Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.",
 		"Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.",
 	}
 	if len(lines) != len(want) {
@@ -80,15 +51,13 @@ func TestWriteAndUpdateDispatchMeta(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID: "01JQXYZ",
-		Salt:       "coral-fox-nine",
-		TraceToken: "AGENT_MUX_GO_01JQXYZ",
 		Engine:     "codex",
 		Model:      "gpt-5.4",
 		Prompt:     "Build the parser",
 		Cwd:        "/path/to/project",
 	}
 
-	if err := WriteDispatchMeta(dir, spec); err != nil {
+	if err := WriteDispatchMeta(dir, spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
 		t.Fatalf("WriteDispatchMeta: %v", err)
 	}
 
@@ -112,9 +81,6 @@ func TestWriteAndUpdateDispatchMeta(t *testing.T) {
 	}
 	if meta.Engine != "codex" {
 		t.Errorf("engine = %q, want codex", meta.Engine)
-	}
-	if meta.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
-		t.Errorf("trace_token = %q, want AGENT_MUX_GO_01JQXYZ", meta.TraceToken)
 	}
 	if !strings.HasPrefix(meta.PromptHash, "sha256:") {
 		t.Errorf("prompt_hash should start with sha256:, got %q", meta.PromptHash)
@@ -147,13 +113,12 @@ func TestUpdateDispatchMetaPropagatesWriteErrors(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID: "01JQXYZ",
-		Salt:       "coral-fox-nine",
 		Engine:     "codex",
 		Model:      "gpt-5.4",
 		Prompt:     "Build the parser",
 		Cwd:        "/path/to/project",
 	}
-	if err := WriteDispatchMeta(dir, spec); err != nil {
+	if err := WriteDispatchMeta(dir, spec, types.DispatchAnnotations{}); err != nil {
 		t.Fatalf("WriteDispatchMeta: %v", err)
 	}
 
@@ -252,8 +217,6 @@ func TestBuildCompletedResult(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID:  "01JQXYZ",
-		Salt:        "coral-fox-nine",
-		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
 		ArtifactDir: dir,
 	}
 	activity := &types.DispatchActivity{
@@ -268,16 +231,13 @@ func TestBuildCompletedResult(t *testing.T) {
 		Tokens: &types.TokenUsage{Input: 100, Output: 50},
 	}
 
-	result := BuildCompletedResult(spec, "Done.", activity, metadata, 5000)
+	result := BuildCompletedResult(spec, 0, "Done.", activity, metadata, 5000)
 
 	if result.Status != types.StatusCompleted {
 		t.Errorf("status = %q, want completed", result.Status)
 	}
 	if result.SchemaVersion != 1 {
 		t.Errorf("schema_version = %d, want 1", result.SchemaVersion)
-	}
-	if result.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
-		t.Errorf("trace_token = %q, want AGENT_MUX_GO_01JQXYZ", result.TraceToken)
 	}
 	if result.Response != "Done." {
 		t.Errorf("response = %q, want 'Done.'", result.Response)
@@ -290,11 +250,8 @@ func TestBuildCompletedResult(t *testing.T) {
 func TestBuildCompletedResultSpillsOversizedResponse(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
-		DispatchID:       "01JQXYZ",
-		Salt:             "coral-fox-nine",
-		TraceToken:       "AGENT_MUX_GO_01JQXYZ",
-		ArtifactDir:      dir,
-		ResponseMaxChars: 20,
+		DispatchID:  "01JQXYZ",
+		ArtifactDir: dir,
 	}
 	activity := &types.DispatchActivity{
 		FilesChanged: []string{},
@@ -309,7 +266,7 @@ func TestBuildCompletedResultSpillsOversizedResponse(t *testing.T) {
 	}
 	response := "First sentence. Second sentence. Third sentence."
 
-	result := BuildCompletedResult(spec, response, activity, metadata, 5000)
+	result := BuildCompletedResult(spec, 20, response, activity, metadata, 5000)
 
 	if !result.ResponseTruncated {
 		t.Fatal("response_truncated = false, want true")
@@ -320,8 +277,8 @@ func TestBuildCompletedResultSpillsOversizedResponse(t *testing.T) {
 	if result.Response == response {
 		t.Fatalf("response = %q, want truncated response", result.Response)
 	}
-	if utf8.RuneCountInString(result.Response) > spec.ResponseMaxChars {
-		t.Fatalf("response rune count = %d, want <= %d", utf8.RuneCountInString(result.Response), spec.ResponseMaxChars)
+	if utf8.RuneCountInString(result.Response) > 20 {
+		t.Fatalf("response rune count = %d, want <= %d", utf8.RuneCountInString(result.Response), 20)
 	}
 	data, err := os.ReadFile(*result.FullOutputPath)
 	if err != nil {
@@ -336,8 +293,6 @@ func TestBuildTimedOutResult(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID:  "01JQXYZ",
-		Salt:        "coral-fox-nine",
-		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
 		ArtifactDir: dir,
 	}
 	activity := &types.DispatchActivity{
@@ -351,7 +306,7 @@ func TestBuildTimedOutResult(t *testing.T) {
 		Tokens: &types.TokenUsage{},
 	}
 
-	result := BuildTimedOutResult(spec, "partial", "Soft timeout at 600s.", activity, metadata, 660000)
+	result := BuildTimedOutResult(spec, 0, "partial", "Soft timeout at 600s.", activity, metadata, 660000)
 
 	if result.Status != types.StatusTimedOut {
 		t.Errorf("status = %q, want timed_out", result.Status)
@@ -368,8 +323,6 @@ func TestBuildFailedResult(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID:  "01JQXYZ",
-		Salt:        "coral-fox-nine",
-		TraceToken:  "AGENT_MUX_GO_01JQXYZ",
 		ArtifactDir: dir,
 	}
 	activity := &types.DispatchActivity{
@@ -384,7 +337,7 @@ func TestBuildFailedResult(t *testing.T) {
 	}
 	dispatchErr := NewDispatchError("model_not_found", "Model not found.", "Try gpt-5.4")
 
-	result := BuildFailedResult(spec, "", dispatchErr, activity, metadata, 430)
+	result := BuildFailedResult(spec, 0, "", dispatchErr, activity, metadata, 430)
 
 	if result.Status != types.StatusFailed {
 		t.Errorf("status = %q, want failed", result.Status)
@@ -400,16 +353,13 @@ func TestBuildFailedResult(t *testing.T) {
 func TestBuildTimedOutResultSpillsOversizedResponse(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
-		DispatchID:       "01JQXYZ",
-		Salt:             "coral-fox-nine",
-		TraceToken:       "AGENT_MUX_GO_01JQXYZ",
-		ArtifactDir:      dir,
-		ResponseMaxChars: 10,
+		DispatchID:  "01JQXYZ",
+		ArtifactDir: dir,
 	}
 	activity := &types.DispatchActivity{}
 	metadata := &types.DispatchMetadata{Engine: "codex", Tokens: &types.TokenUsage{}}
 
-	result := BuildTimedOutResult(spec, "1234567890\nabcdefghij", "Soft timeout at 600s.", activity, metadata, 660000)
+	result := BuildTimedOutResult(spec, 10, "1234567890\nabcdefghij", "Soft timeout at 600s.", activity, metadata, 660000)
 
 	if !result.ResponseTruncated {
 		t.Fatal("response_truncated = false, want true")
@@ -422,18 +372,15 @@ func TestBuildTimedOutResultSpillsOversizedResponse(t *testing.T) {
 func TestBuildFailedResultSpillsOversizedResponseAndKeepsFullSummary(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
-		DispatchID:       "01JQXYZ",
-		Salt:             "coral-fox-nine",
-		TraceToken:       "AGENT_MUX_GO_01JQXYZ",
-		ArtifactDir:      dir,
-		ResponseMaxChars: 12,
+		DispatchID:  "01JQXYZ",
+		ArtifactDir: dir,
 	}
 	activity := &types.DispatchActivity{}
 	metadata := &types.DispatchMetadata{Engine: "codex", Tokens: &types.TokenUsage{}}
 	dispatchErr := NewDispatchError("internal_error", "", "")
 	response := "## Summary\nunicode canary: 你好 alpha beta gamma.\n## Details\nmore"
 
-	result := BuildFailedResult(spec, response, dispatchErr, activity, metadata, 430)
+	result := BuildFailedResult(spec, 12, response, dispatchErr, activity, metadata, 430)
 
 	if !result.ResponseTruncated {
 		t.Fatal("response_truncated = false, want true")

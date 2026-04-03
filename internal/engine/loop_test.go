@@ -253,9 +253,9 @@ func TestLoopEnginePersistsCompletedDispatchToStore(t *testing.T) {
 	}, "\n"))
 
 	spec := testDispatchSpec(artifactDir)
-	spec.ResponseMaxChars = 0
 
 	engine := NewLoopEngine(adapter, io.Discard, nil)
+	engine.SetAnnotations(types.DispatchAnnotations{ResponseMaxChars: 0})
 	result, err := engine.Dispatch(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -563,7 +563,7 @@ func TestLoopEngineResumePassesOriginalModel(t *testing.T) {
 	}
 }
 
-func TestLoopEngineInjectsTracePreambleIntoPrompt(t *testing.T) {
+func TestLoopEngineInjectsUsefulPreambleIntoPrompt(t *testing.T) {
 	artifactDir := t.TempDir()
 	adapter := newScriptedAdapter(strings.Join([]string{
 		"echo 'RESPONSE:ok'",
@@ -572,8 +572,7 @@ func TestLoopEngineInjectsTracePreambleIntoPrompt(t *testing.T) {
 
 	spec := testDispatchSpec(artifactDir)
 	spec.DispatchID = "01TRACE"
-	spec.Salt = "coral-fox-nine"
-	spec.TraceToken = "AGENT_MUX_GO_01TRACE"
+	spec.ContextFile = "/tmp/context.md"
 	spec.Prompt = "build the parser"
 
 	engine := NewLoopEngine(adapter, io.Discard, nil)
@@ -586,8 +585,7 @@ func TestLoopEngineInjectsTracePreambleIntoPrompt(t *testing.T) {
 	}
 
 	wantPrefix := strings.Join([]string{
-		"Trace token: AGENT_MUX_GO_01TRACE",
-		"Dispatch ID: 01TRACE",
+		"Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.",
 		"Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.",
 		"",
 		"build the parser",
@@ -597,17 +595,15 @@ func TestLoopEngineInjectsTracePreambleIntoPrompt(t *testing.T) {
 	}
 }
 
-func TestLoopEngineExportsTraceEnvVars(t *testing.T) {
+func TestLoopEngineExportsDispatchEnvVars(t *testing.T) {
 	artifactDir := t.TempDir()
 	adapter := newScriptedAdapter(strings.Join([]string{
-		`echo "RESPONSE:$AGENT_MUX_TRACE_TOKEN|$AGENT_MUX_SALT|$AGENT_MUX_DISPATCH_ID"`,
+		`echo "RESPONSE:$AGENT_MUX_DISPATCH_ID|$AGENT_MUX_ARTIFACT_DIR"`,
 		"echo 'TURN:1,1,0'",
 	}, "\n"))
 
 	spec := testDispatchSpec(artifactDir)
 	spec.DispatchID = "01TRACEENV"
-	spec.Salt = "coral-fox-nine"
-	spec.TraceToken = "AGENT_MUX_GO_01TRACEENV"
 
 	engine := NewLoopEngine(adapter, io.Discard, nil)
 	result, err := engine.Dispatch(context.Background(), spec)
@@ -617,7 +613,7 @@ func TestLoopEngineExportsTraceEnvVars(t *testing.T) {
 	if result.Status != types.StatusCompleted {
 		t.Fatalf("status = %q, want completed", result.Status)
 	}
-	want := "AGENT_MUX_GO_01TRACEENV|coral-fox-nine|01TRACEENV"
+	want := "01TRACEENV|" + artifactDir
 	if result.Response != want {
 		t.Fatalf("response = %q, want %q", result.Response, want)
 	}
@@ -836,7 +832,6 @@ func runDispatchWithInboxMessageAndSpec(t *testing.T, adapter *scriptedAdapter, 
 func testDispatchSpec(artifactDir string) *types.DispatchSpec {
 	return &types.DispatchSpec{
 		DispatchID:  "01TEST",
-		Salt:        "test-salt",
 		Engine:      "codex",
 		Model:       "gpt-5.4",
 		Prompt:      "ignored by scripted adapter",
@@ -856,10 +851,10 @@ func testMetadata() *types.DispatchMetadata {
 
 func newTestEmitter(t *testing.T, spec *types.DispatchSpec, stream *strings.Builder) *event.Emitter {
 	t.Helper()
-	if err := dispatch.WriteDispatchMeta(spec.ArtifactDir, spec); err != nil {
+	if err := dispatch.WriteDispatchMeta(spec.ArtifactDir, spec, types.DispatchAnnotations{}); err != nil {
 		t.Fatalf("WriteDispatchMeta: %v", err)
 	}
-	emitter, err := event.NewEmitter(spec.DispatchID, spec.Salt, spec.TraceToken, stream, filepath.Join(spec.ArtifactDir, "events.jsonl"))
+	emitter, err := event.NewEmitter(spec.DispatchID, stream, filepath.Join(spec.ArtifactDir, "events.jsonl"))
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -907,7 +902,6 @@ func TestLongCommandExtendsSilenceThreshold(t *testing.T) {
 
 	spec := &types.DispatchSpec{
 		DispatchID:  "01LONGCMD",
-		Salt:        "test-salt",
 		Engine:      "codex",
 		Model:       "test",
 		Prompt:      "ignored",
@@ -949,14 +943,13 @@ func TestFinalizeCompletedEmitsResponseTruncatedAndStoresFullResponse(t *testing
 
 	artifactDir := t.TempDir()
 	spec := testDispatchSpec(artifactDir)
-	spec.ResponseMaxChars = 10
 	response := strings.Repeat("A", 50000)
 
 	var stream strings.Builder
 	emitter := newTestEmitter(t, spec, &stream)
 	defer func() { _ = emitter.Close() }()
 
-	result := finalizeCompleted(spec, emitter, response, emptyActivity(), testMetadata(), 25)
+	result := finalizeCompleted(spec, types.DispatchAnnotations{ResponseMaxChars: 10}, emitter, response, emptyActivity(), testMetadata(), 25)
 
 	if !result.ResponseTruncated || result.FullOutputPath == nil {
 		t.Fatalf("result = %+v, want truncated response with full_output_path", result)
@@ -985,7 +978,6 @@ func TestFinalizeTimedOutEmitsResponseTruncatedAndStoresFullResponse(t *testing.
 
 	artifactDir := t.TempDir()
 	spec := testDispatchSpec(artifactDir)
-	spec.ResponseMaxChars = 10
 	spec.TimeoutSec = 1
 	response := strings.Repeat("B", 50000)
 
@@ -993,7 +985,7 @@ func TestFinalizeTimedOutEmitsResponseTruncatedAndStoresFullResponse(t *testing.
 	emitter := newTestEmitter(t, spec, &stream)
 	defer func() { _ = emitter.Close() }()
 
-	result := finalizeTimedOut(spec, emitter, response, emptyActivity(), testMetadata(), 25)
+	result := finalizeTimedOut(spec, types.DispatchAnnotations{ResponseMaxChars: 10}, emitter, response, emptyActivity(), testMetadata(), 25)
 
 	if result.Status != types.StatusTimedOut {
 		t.Fatalf("status = %q, want timed_out", result.Status)
@@ -1018,14 +1010,13 @@ func TestFinalizeFailedEmitsResponseTruncatedAndStoresFullResponse(t *testing.T)
 
 	artifactDir := t.TempDir()
 	spec := testDispatchSpec(artifactDir)
-	spec.ResponseMaxChars = 10
 	response := "你好" + strings.Repeat("C", 50000)
 
 	var stream strings.Builder
 	emitter := newTestEmitter(t, spec, &stream)
 	defer func() { _ = emitter.Close() }()
 
-	result := finalizeFailed(spec, emitter, response, emptyActivity(), testMetadata(), 25, dispatch.NewDispatchError("internal_error", "", ""))
+	result := finalizeFailed(spec, types.DispatchAnnotations{ResponseMaxChars: 10}, emitter, response, emptyActivity(), testMetadata(), 25, dispatch.NewDispatchError("internal_error", "", ""))
 
 	if result.Status != types.StatusFailed {
 		t.Fatalf("status = %q, want failed", result.Status)
@@ -1060,7 +1051,6 @@ func TestUnknownCommandKilledAtNormalThreshold(t *testing.T) {
 
 	spec := &types.DispatchSpec{
 		DispatchID:  "01SHORTCMD",
-		Salt:        "test-salt",
 		Engine:      "codex",
 		Model:       "test",
 		Prompt:      "ignored",
@@ -1116,7 +1106,6 @@ func TestLongCommandEndResumesNormalThreshold(t *testing.T) {
 
 	spec := &types.DispatchSpec{
 		DispatchID:  "01LONGEND",
-		Salt:        "test-salt",
 		Engine:      "codex",
 		Model:       "test",
 		Prompt:      "ignored",
@@ -1165,7 +1154,6 @@ func TestStdinNudgeOnFrozenWarning(t *testing.T) {
 
 	spec := &types.DispatchSpec{
 		DispatchID:  "01NUDGE",
-		Salt:        "test-salt",
 		Engine:      "codex",
 		Model:       "test",
 		Prompt:      "ignored",

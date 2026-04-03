@@ -10,8 +10,6 @@ func TestDispatchResultCompleted(t *testing.T) {
 		SchemaVersion:     1,
 		Status:            StatusCompleted,
 		DispatchID:        "01JQXYZ",
-		DispatchSalt:      "coral-fox-nine",
-		TraceToken:        "AGENT_MUX_GO_01JQXYZ",
 		Response:          "Built the parser.",
 		ResponseTruncated: false,
 		FullOutput:        nil,
@@ -49,9 +47,6 @@ func TestDispatchResultCompleted(t *testing.T) {
 	if decoded.DispatchID != "01JQXYZ" {
 		t.Errorf("dispatch_id = %q, want %q", decoded.DispatchID, "01JQXYZ")
 	}
-	if decoded.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
-		t.Errorf("trace_token = %q, want %q", decoded.TraceToken, "AGENT_MUX_GO_01JQXYZ")
-	}
 	if decoded.FullOutput != nil {
 		t.Errorf("full_output should be nil")
 	}
@@ -71,8 +66,6 @@ func TestDispatchResultTimedOut(t *testing.T) {
 		SchemaVersion:  1,
 		Status:         StatusTimedOut,
 		DispatchID:     "01JQXYZ",
-		DispatchSalt:   "coral-fox-nine",
-		TraceToken:     "AGENT_MUX_GO_01JQXYZ",
 		Response:       "Was building parser when timeout hit.",
 		HandoffSummary: "Parser partially built.",
 		Artifacts:      []string{"/tmp/agent-mux/01JQXYZ/src/parser.go"},
@@ -97,9 +90,6 @@ func TestDispatchResultTimedOut(t *testing.T) {
 	if decoded.Status != StatusTimedOut {
 		t.Errorf("status = %q, want %q", decoded.Status, StatusTimedOut)
 	}
-	if decoded.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
-		t.Errorf("trace_token = %q, want %q", decoded.TraceToken, "AGENT_MUX_GO_01JQXYZ")
-	}
 	if !decoded.Partial {
 		t.Error("partial should be true for timed_out")
 	}
@@ -113,8 +103,6 @@ func TestDispatchResultFailed(t *testing.T) {
 		SchemaVersion:  1,
 		Status:         StatusFailed,
 		DispatchID:     "01JQXYZ",
-		DispatchSalt:   "coral-fox-nine",
-		TraceToken:     "AGENT_MUX_GO_01JQXYZ",
 		Response:       "",
 		HandoffSummary: "",
 		Artifacts:      []string{},
@@ -142,9 +130,6 @@ func TestDispatchResultFailed(t *testing.T) {
 
 	if decoded.Status != StatusFailed {
 		t.Errorf("status = %q, want %q", decoded.Status, StatusFailed)
-	}
-	if decoded.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
-		t.Errorf("trace_token = %q, want %q", decoded.TraceToken, "AGENT_MUX_GO_01JQXYZ")
 	}
 	if decoded.Error == nil {
 		t.Fatal("error should not be nil for failed")
@@ -244,7 +229,7 @@ func TestOmitemptyFields(t *testing.T) {
 	}
 
 	// These should always be present (no omitempty)
-	for _, key := range []string{"schema_version", "status", "dispatch_id", "trace_token", "response", "response_truncated", "full_output", "handoff_summary", "artifacts", "activity", "metadata", "duration_ms"} {
+	for _, key := range []string{"schema_version", "status", "dispatch_id", "response", "response_truncated", "full_output", "handoff_summary", "artifacts", "activity", "metadata", "duration_ms"} {
 		if _, exists := raw[key]; !exists {
 			t.Errorf("%q should always be present", key)
 		}
@@ -253,22 +238,19 @@ func TestOmitemptyFields(t *testing.T) {
 
 func TestDispatchSpecRoundTrip(t *testing.T) {
 	spec := &DispatchSpec{
-		DispatchID:       "01JQXYZ",
-		Salt:             "coral-fox-nine",
-		TraceToken:       "AGENT_MUX_GO_01JQXYZ",
-		Engine:           "codex",
-		Model:            "gpt-5.4",
-		Effort:           "high",
-		Prompt:           "Build the parser",
-		Cwd:              "/path/to/project",
-		Profile:          "planner",
-		ArtifactDir:      "/tmp/agent-mux/01JQXYZ/",
-		Variant:          "spark",
-		MaxDepth:         2,
-		AllowSubdispatch: true,
-		FullAccess:       true,
-		GraceSec:         60,
-		EngineOpts:       map[string]any{"sandbox": "danger-full-access"},
+		DispatchID:  "01JQXYZ",
+		Engine:      "codex",
+		Model:       "gpt-5.4",
+		Effort:      "high",
+		Prompt:      "Build the parser",
+		Cwd:         "/path/to/project",
+		ContextFile: "/tmp/context.md",
+		ArtifactDir: "/tmp/agent-mux/01JQXYZ/",
+		MaxDepth:    2,
+		Depth:       1,
+		FullAccess:  true,
+		GraceSec:    60,
+		EngineOpts:  map[string]any{"sandbox": "danger-full-access"},
 	}
 
 	data, err := json.Marshal(spec)
@@ -284,14 +266,8 @@ func TestDispatchSpecRoundTrip(t *testing.T) {
 	if decoded.Engine != "codex" {
 		t.Errorf("engine = %q, want %q", decoded.Engine, "codex")
 	}
-	if decoded.TraceToken != "AGENT_MUX_GO_01JQXYZ" {
-		t.Errorf("trace_token = %q, want %q", decoded.TraceToken, "AGENT_MUX_GO_01JQXYZ")
-	}
-	if decoded.Profile != "planner" {
-		t.Errorf("profile = %q, want %q", decoded.Profile, "planner")
-	}
-	if decoded.Variant != "spark" {
-		t.Errorf("variant = %q, want %q", decoded.Variant, "spark")
+	if decoded.ContextFile != "/tmp/context.md" {
+		t.Errorf("context_file = %q, want %q", decoded.ContextFile, "/tmp/context.md")
 	}
 	if decoded.FullAccess != true {
 		t.Error("full_access should be true")
@@ -303,20 +279,16 @@ func TestDispatchSpecRoundTrip(t *testing.T) {
 
 func TestDispatchSpecJSONTagNames(t *testing.T) {
 	spec := &DispatchSpec{
-		DispatchID:          "01JQXYZ",
-		TraceToken:          "AGENT_MUX_GO_01JQXYZ",
-		Engine:              "codex",
-		Effort:              "high",
-		Prompt:              "test",
-		Cwd:                 "/tmp",
-		Profile:             "planner",
-		Variant:             "claude",
-		ArtifactDir:         "/tmp/agent-mux/01JQXYZ/",
-		MaxDepth:            2,
-		AllowSubdispatch:    true,
-		FullAccess:          true,
-		ContinuesDispatchID: "01JABCD",
-		ResponseMaxChars:    2000,
+		DispatchID:  "01JQXYZ",
+		Engine:      "codex",
+		Effort:      "high",
+		Prompt:      "test",
+		Cwd:         "/tmp",
+		ContextFile: "/tmp/context.md",
+		ArtifactDir: "/tmp/agent-mux/01JQXYZ/",
+		MaxDepth:    2,
+		Depth:       1,
+		FullAccess:  true,
 	}
 
 	data, err := json.Marshal(spec)
@@ -330,11 +302,8 @@ func TestDispatchSpecJSONTagNames(t *testing.T) {
 	}
 
 	expectedKeys := []string{
-		"dispatch_id", "trace_token", "engine", "effort", "prompt", "cwd",
-		"profile", "variant",
-		"artifact_dir", "max_depth", "allow_subdispatch", "depth",
-		"full_access", "continues_dispatch_id",
-		"response_max_chars",
+		"dispatch_id", "engine", "effort", "prompt", "cwd",
+		"context_file", "artifact_dir", "max_depth", "depth", "full_access",
 	}
 	for _, key := range expectedKeys {
 		if _, exists := raw[key]; !exists {
@@ -343,27 +312,6 @@ func TestDispatchSpecJSONTagNames(t *testing.T) {
 	}
 	if _, exists := raw["coordinator"]; exists {
 		t.Errorf("legacy JSON key %q should be omitted when marshaling", "coordinator")
-	}
-}
-
-func TestDispatchSpecUnmarshalAcceptsLegacyCoordinatorAlias(t *testing.T) {
-	var spec DispatchSpec
-	if err := json.Unmarshal([]byte(`{"dispatch_id":"01JQXYZ","engine":"codex","prompt":"test","cwd":"/tmp","artifact_dir":"/tmp/agent-mux/01JQXYZ/","coordinator":"planner","allow_subdispatch":true,"depth":0,"full_access":true}`), &spec); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if spec.Profile != "planner" {
-		t.Fatalf("profile = %q, want %q", spec.Profile, "planner")
-	}
-}
-
-func TestDispatchSpecUnmarshalRejectsConflictingProfileAlias(t *testing.T) {
-	var spec DispatchSpec
-	err := json.Unmarshal([]byte(`{"engine":"codex","prompt":"test","cwd":"/tmp","artifact_dir":"/tmp/agent-mux/01JQXYZ/","profile":"planner","coordinator":"legacy","allow_subdispatch":true,"depth":0,"full_access":true}`), &spec)
-	if err == nil {
-		t.Fatal("unmarshal error = nil, want conflict")
-	}
-	if err.Error() != `conflicting profile values: profile="planner" coordinator="legacy"` {
-		t.Fatalf("error = %q, want conflicting profile values", err)
 	}
 }
 

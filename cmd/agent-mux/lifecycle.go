@@ -116,7 +116,6 @@ func runStatusCommand(args []string, stdout io.Writer) int {
 	fmt.Fprintf(tw, "Duration:\t%s\n", formatDuration(record.DurationMs))
 	fmt.Fprintf(tw, "Started:\t%s\n", dashIfEmpty(record.StartedAt))
 	fmt.Fprintf(tw, "Truncated:\t%t\n", record.Truncated)
-	fmt.Fprintf(tw, "Salt:\t%s\n", dashIfEmpty(record.Salt))
 	fmt.Fprintf(tw, "ArtifactDir:\t%s\n", dashIfEmpty(record.ArtifactDir))
 	_ = tw.Flush()
 	return 0
@@ -201,7 +200,6 @@ func runResultCommand(args []string, stdout io.Writer) int {
 				writeCompactJSON(stdout, map[string]any{
 					"error":       "dispatch_running",
 					"dispatch_id": resolved.DispatchID,
-					"trace_token": resolved.TraceToken,
 					"session_id":  liveStatus.SessionID,
 					"state":       liveStatus.State,
 				})
@@ -226,7 +224,6 @@ func runResultCommand(args []string, stdout io.Writer) int {
 		if jsonOutput {
 			writeCompactJSON(stdout, map[string]any{
 				"dispatch_id":  dispatchID,
-				"trace_token":  resolved.TraceToken,
 				"artifact_dir": artifactDir,
 				"artifacts":    artifacts,
 			})
@@ -267,7 +264,6 @@ func runResultCommand(args []string, stdout io.Writer) int {
 	if jsonOutput {
 		result := map[string]any{
 			"dispatch_id": dispatchID,
-			"trace_token": resolved.TraceToken,
 			"response":    response,
 		}
 		enrichResultStatus(result, record, dispatchID)
@@ -330,11 +326,10 @@ func isValidDispatchStatus(status string) bool {
 
 func writeRecordTable(w io.Writer, records []dispatch.DispatchRecord) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSALT\tSTATUS\tENGINE\tMODEL\tDURATION\tCWD")
+	fmt.Fprintln(tw, "ID\tSTATUS\tENGINE\tMODEL\tDURATION\tCWD")
 	for _, record := range records {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			shortDispatchID(record.ID),
-			dashIfEmpty(record.Salt),
 			dashIfEmpty(record.Status),
 			dashIfEmpty(record.Engine),
 			dashIfEmpty(record.Model),
@@ -501,7 +496,6 @@ func runInspectCommand(args []string, stdout io.Writer) int {
 	if jsonOutput {
 		result := map[string]any{
 			"dispatch_id":  dispatchID,
-			"trace_token":  firstNonEmptyString(record.TraceToken, resolved.TraceToken),
 			"session_id":   firstNonEmptyString(record.SessionID, sessionIDFromArtifacts(artifactDir)),
 			"record":       record,
 			"response":     response,
@@ -526,7 +520,6 @@ func runInspectCommand(args []string, stdout io.Writer) int {
 	fmt.Fprintf(tw, "Ended:\t%s\n", dashIfEmpty(record.EndedAt))
 	fmt.Fprintf(tw, "Duration:\t%s\n", formatDuration(record.DurationMs))
 	fmt.Fprintf(tw, "Truncated:\t%t\n", record.Truncated)
-	fmt.Fprintf(tw, "Salt:\t%s\n", dashIfEmpty(record.Salt))
 	fmt.Fprintf(tw, "Cwd:\t%s\n", dashIfEmpty(record.Cwd))
 	fmt.Fprintf(tw, "ArtifactDir:\t%s\n", dashIfEmpty(artifactDir))
 	_ = tw.Flush()
@@ -598,7 +591,6 @@ func showResult(dispatchID string, record *dispatch.DispatchRecord, jsonOutput, 
 		if jsonOutput {
 			writeCompactJSON(stdout, map[string]any{
 				"dispatch_id":  dispatchID,
-				"trace_token":  record.TraceToken,
 				"session_id":   record.SessionID,
 				"artifact_dir": artifactDir,
 				"artifacts":    artifacts,
@@ -627,7 +619,6 @@ func showResult(dispatchID string, record *dispatch.DispatchRecord, jsonOutput, 
 	if jsonOutput {
 		result := map[string]any{
 			"dispatch_id": dispatchID,
-			"trace_token": record.TraceToken,
 			"session_id":  record.SessionID,
 			"response":    response,
 		}

@@ -30,20 +30,17 @@ func TestRecoverDispatch_ValidDir(t *testing.T) {
 	artifactDir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID:  dispatchID,
-		Salt:        "salt",
-		TraceToken:  "AGENT_MUX_GO_" + dispatchID,
 		Engine:      "codex",
 		Model:       "gpt-5.4",
-		Role:        "worker",
 		Cwd:         "/tmp",
 		ArtifactDir: artifactDir,
 		Prompt:      "recover test",
 	}
 
-	if err := dispatch.WriteDispatchMeta(artifactDir, spec); err != nil {
+	if err := dispatch.WriteDispatchMeta(artifactDir, spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
 		t.Fatalf("WriteDispatchMeta: %v", err)
 	}
-	if err := dispatch.WritePersistentMeta(spec); err != nil {
+	if err := dispatch.WritePersistentMeta(spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
 		t.Fatalf("WritePersistentMeta: %v", err)
 	}
 	artifactPath := filepath.Join(artifactDir, "notes.txt")
@@ -69,14 +66,12 @@ func TestRecoverDispatch_ValidDir(t *testing.T) {
 	}
 }
 
-func TestRegisterDispatchSpecPersistsTraceability(t *testing.T) {
+func TestRegisterDispatchSpecPersistsMetadata(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	artifactDir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID:  "traceable-dispatch",
-		Salt:        "coral-fox-nine",
-		TraceToken:  "AGENT_MUX_GO_traceable-dispatch",
 		ArtifactDir: artifactDir,
 		Engine:      "codex",
 		Model:       "gpt-5.4",
@@ -90,12 +85,6 @@ func TestRegisterDispatchSpecPersistsTraceability(t *testing.T) {
 	meta, err := dispatch.ReadPersistentMeta(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("ReadPersistentMeta: %v", err)
-	}
-	if meta.DispatchSalt != spec.Salt {
-		t.Fatalf("dispatch_salt = %q, want %q", meta.DispatchSalt, spec.Salt)
-	}
-	if meta.TraceToken != spec.TraceToken {
-		t.Fatalf("trace_token = %q, want %q", meta.TraceToken, spec.TraceToken)
 	}
 	if meta.ArtifactDir != artifactDir {
 		t.Fatalf("artifact_dir = %q, want %q", meta.ArtifactDir, artifactDir)
@@ -133,8 +122,6 @@ func TestResolveControlRecordUsesDispatchDirMeta(t *testing.T) {
 	dispatchID := "control-ref"
 	spec := &types.DispatchSpec{
 		DispatchID:  dispatchID,
-		Salt:        "quick-newt-zero",
-		TraceToken:  "AGENT_MUX_GO_control-ref",
 		ArtifactDir: t.TempDir(),
 		Engine:      "codex",
 		Model:       "gpt-5.4",
@@ -150,9 +137,6 @@ func TestResolveControlRecordUsesDispatchDirMeta(t *testing.T) {
 	}
 	if record.DispatchID != dispatchID {
 		t.Fatalf("dispatch_id = %q, want %q", record.DispatchID, dispatchID)
-	}
-	if record.TraceToken != spec.TraceToken {
-		t.Fatalf("trace_token = %q, want %q", record.TraceToken, spec.TraceToken)
 	}
 }
 

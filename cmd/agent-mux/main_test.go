@@ -234,7 +234,6 @@ func TestListCommandOutputsFilteredTable(t *testing.T) {
 	first := testStoreRecord("01KMT4E7BBNN1KQEC8MYJRW5H5", "completed")
 	second := testStoreRecord("01KMT4E7CDDD1KQEC8MYJRW9Z9", "failed")
 	third := testStoreRecord("01KMT4E7DFFF1KQEC8MYJRW2A2", "completed")
-	third.Salt = "fair-ant-nine"
 
 	writeStoreRecord(t, first, "first result", true)
 	writeStoreRecord(t, second, "", true)
@@ -322,8 +321,6 @@ func TestStatusCommandOutputsRecordSummary(t *testing.T) {
 		record.StartedAt,
 		"Truncated:",
 		"true",
-		"Salt:",
-		record.Salt,
 		"ArtifactDir:",
 		record.ArtifactDir,
 	} {
@@ -424,11 +421,8 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	if preview.DispatchSpec.Engine != "codex" {
 		t.Fatalf("dispatch_spec.engine = %q, want codex", preview.DispatchSpec.Engine)
 	}
-	if preview.DispatchSpec.Profile != "planner" {
-		t.Fatalf("dispatch_spec.profile = %q, want planner", preview.DispatchSpec.Profile)
-	}
-	if preview.DispatchSpec.TraceToken != "AGENT_MUX_GO_"+preview.DispatchSpec.DispatchID {
-		t.Fatalf("trace_token = %q, want %q", preview.DispatchSpec.TraceToken, "AGENT_MUX_GO_"+preview.DispatchSpec.DispatchID)
+	if preview.ResultMetadata.Profile != "planner" {
+		t.Fatalf("result_metadata.profile = %q, want planner", preview.ResultMetadata.Profile)
 	}
 	if preview.Control.ControlRecord != recovery.ControlRecordPath(preview.DispatchSpec.DispatchID) {
 		t.Fatalf("control_record = %q, want %q", preview.Control.ControlRecord, recovery.ControlRecordPath(preview.DispatchSpec.DispatchID))
@@ -436,14 +430,14 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	if preview.Control.ArtifactDir != artifactDir {
 		t.Fatalf("control.artifact_dir = %q, want %q", preview.Control.ArtifactDir, artifactDir)
 	}
-	if preview.DispatchSpec.ResponseMaxChars != 128000 {
-		t.Fatalf("dispatch_spec.response_max_chars = %d, want 128000", preview.DispatchSpec.ResponseMaxChars)
+	if preview.ResultMetadata.ResponseMaxChars != 128000 {
+		t.Fatalf("result_metadata.response_max_chars = %d, want 128000", preview.ResultMetadata.ResponseMaxChars)
 	}
-	if len(preview.PromptPreamble) != 3 {
-		t.Fatalf("prompt_preamble len = %d, want 3 (%v)", len(preview.PromptPreamble), preview.PromptPreamble)
+	if len(preview.PromptPreamble) != 1 {
+		t.Fatalf("prompt_preamble len = %d, want 1 (%v)", len(preview.PromptPreamble), preview.PromptPreamble)
 	}
-	if preview.PromptPreamble[0] != "Trace token: "+preview.DispatchSpec.TraceToken {
-		t.Fatalf("prompt_preamble[0] = %q, want trace token line", preview.PromptPreamble[0])
+	if preview.PromptPreamble[0] != "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR." {
+		t.Fatalf("prompt_preamble[0] = %q, want artifact preamble", preview.PromptPreamble[0])
 	}
 	if preview.Prompt.Excerpt != prompt {
 		t.Fatalf("prompt.excerpt = %q, want %q", preview.Prompt.Excerpt, prompt)
@@ -459,15 +453,12 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	}
 
 	raw := decodeJSONMap(t, stdout.Bytes())
-	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	resultMetadata, ok := raw["result_metadata"].(map[string]any)
 	if !ok {
-		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
 	}
-	if got := dispatchSpec["profile"]; got != "planner" {
-		t.Fatalf("dispatch_spec.profile = %#v, want planner", got)
-	}
-	if _, ok := dispatchSpec["coordinator"]; ok {
-		t.Fatalf("dispatch_spec should omit legacy coordinator key, got %v", dispatchSpec["coordinator"])
+	if got := resultMetadata["profile"]; got != "planner" {
+		t.Fatalf("result_metadata.profile = %#v, want planner", got)
 	}
 }
 
@@ -681,11 +672,11 @@ system_prompt_file = "prompts/lifter-claude.md"
 	}
 
 	preview := decodePreviewResult(t, stdout.Bytes())
-	if preview.DispatchSpec.Role != "lifter" {
-		t.Fatalf("role = %q, want %q", preview.DispatchSpec.Role, "lifter")
+	if preview.ResultMetadata.Role != "lifter" {
+		t.Fatalf("role = %q, want %q", preview.ResultMetadata.Role, "lifter")
 	}
-	if preview.DispatchSpec.Variant != "claude" {
-		t.Fatalf("variant = %q, want %q", preview.DispatchSpec.Variant, "claude")
+	if preview.ResultMetadata.Variant != "claude" {
+		t.Fatalf("variant = %q, want %q", preview.ResultMetadata.Variant, "claude")
 	}
 	if preview.DispatchSpec.Engine != "claude" {
 		t.Fatalf("engine = %q, want %q", preview.DispatchSpec.Engine, "claude")
@@ -696,7 +687,7 @@ system_prompt_file = "prompts/lifter-claude.md"
 	if preview.DispatchSpec.TimeoutSec != 900 {
 		t.Fatalf("timeout_sec = %d, want %d", preview.DispatchSpec.TimeoutSec, 900)
 	}
-	if got := preview.DispatchSpec.Skills; len(got) != 3 || got[0] != "cli-skill" || got[1] != "variant-skill" || got[2] != "role-skill" {
+	if got := preview.ResultMetadata.Skills; len(got) != 3 || got[0] != "cli-skill" || got[1] != "variant-skill" || got[2] != "role-skill" {
 		t.Fatalf("skills = %#v, want CLI > variant > role", got)
 	}
 
@@ -778,9 +769,6 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 	if spec.MaxDepth != 2 {
 		t.Fatalf("max_depth = %d, want 2", spec.MaxDepth)
 	}
-	if !spec.AllowSubdispatch {
-		t.Fatal("allow_subdispatch = false, want true")
-	}
 	if !spec.FullAccess {
 		t.Fatal("full_access = false, want true")
 	}
@@ -831,8 +819,8 @@ func TestBuildDispatchSpecPrefersProfileFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildDispatchSpecE: %v", err)
 	}
-	if spec.Profile != "planner" {
-		t.Fatalf("profile = %q, want %q", spec.Profile, "planner")
+	if spec.DispatchAnnotations.Profile != "planner" {
+		t.Fatalf("profile = %q, want %q", spec.DispatchAnnotations.Profile, "planner")
 	}
 }
 
@@ -1142,8 +1130,8 @@ func TestRepeatableSkillFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildDispatchSpecE: %v", err)
 	}
-	if len(spec.Skills) != 2 || spec.Skills[0] != "a" || spec.Skills[1] != "b" {
-		t.Fatalf("skills = %#v, want []string{\"a\", \"b\"}", spec.Skills)
+	if len(spec.DispatchAnnotations.Skills) != 2 || spec.DispatchAnnotations.Skills[0] != "a" || spec.DispatchAnnotations.Skills[1] != "b" {
+		t.Fatalf("skills = %#v, want []string{\"a\", \"b\"}", spec.DispatchAnnotations.Skills)
 	}
 }
 
@@ -1174,17 +1162,16 @@ func TestStdinMode(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	input := types.DispatchSpec{
-		DispatchID:       "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-		Engine:           "codex",
-		Effort:           "high",
-		Prompt:           "from stdin",
-		Cwd:              "/tmp/project",
-		ArtifactDir:      filepath.Join(t.TempDir(), "artifacts") + "/",
-		MaxDepth:         2,
-		AllowSubdispatch: true,
-		GraceSec:         60,
-		FullAccess:       true,
-		TimeoutSec:       5,
+		DispatchID:  "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		Engine:      "codex",
+		Effort:      "high",
+		Prompt:      "from stdin",
+		Cwd:         "/tmp/project",
+		ArtifactDir: filepath.Join(t.TempDir(), "artifacts") + "/",
+		MaxDepth:    2,
+		GraceSec:    60,
+		FullAccess:  true,
+		TimeoutSec:  5,
 	}
 
 	data, err := json.Marshal(input)
@@ -1382,9 +1369,6 @@ func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
 	if spec.ArtifactDir != filepath.ToSlash(defaultArtifactDir)+"/" {
 		t.Fatalf("artifact_dir = %q, want default path", spec.ArtifactDir)
 	}
-	if !spec.AllowSubdispatch {
-		t.Fatal("allow_subdispatch = false, want true")
-	}
 	if !spec.FullAccess {
 		t.Fatal("full_access = false, want true")
 	}
@@ -1399,9 +1383,6 @@ func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndAllowedZero(t *testing.
 		t.Fatalf("decodeStdinDispatchSpec: %v", err)
 	}
 
-	if spec.AllowSubdispatch {
-		t.Fatal("allow_subdispatch = true, want false")
-	}
 	if spec.FullAccess {
 		t.Fatal("full_access = true, want false")
 	}
@@ -1850,9 +1831,8 @@ func TestRunPrependsContextFilePreamble(t *testing.T) {
 	}
 
 	meta := readDispatchMeta(t, artifactDir)
-	wantPrompt := contextFilePromptPreamble + "\n" + prompt
-	if meta.PromptHash != promptHash(wantPrompt) {
-		t.Fatalf("prompt_hash = %q, want %q", meta.PromptHash, promptHash(wantPrompt))
+	if meta.PromptHash != promptHash(prompt) {
+		t.Fatalf("prompt_hash = %q, want %q", meta.PromptHash, promptHash(prompt))
 	}
 }
 
@@ -1996,14 +1976,9 @@ func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response str
 
 	spec := &types.DispatchSpec{
 		DispatchID:  record.ID,
-		Salt:        record.Salt,
-		TraceToken:  record.TraceToken,
 		Engine:      record.Engine,
 		Model:       record.Model,
 		Effort:      record.Effort,
-		Role:        record.Role,
-		Variant:     record.Variant,
-		Profile:     record.Profile,
 		Cwd:         record.Cwd,
 		ArtifactDir: record.ArtifactDir,
 		TimeoutSec:  record.TimeoutSec,
@@ -2012,10 +1987,11 @@ func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response str
 	if err := os.MkdirAll(record.ArtifactDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(artifactDir): %v", err)
 	}
-	if err := dispatch.WriteDispatchMeta(record.ArtifactDir, spec); err != nil {
+	annotations := types.DispatchAnnotations{Role: record.Role, Variant: record.Variant, Profile: record.Profile}
+	if err := dispatch.WriteDispatchMeta(record.ArtifactDir, spec, annotations); err != nil {
 		t.Fatalf("WriteDispatchMeta: %v", err)
 	}
-	if err := dispatch.WritePersistentMeta(spec); err != nil {
+	if err := dispatch.WritePersistentMeta(spec, annotations); err != nil {
 		t.Fatalf("WritePersistentMeta: %v", err)
 	}
 	if record.SessionID != "" {
@@ -2028,21 +2004,21 @@ func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response str
 			SchemaVersion:     1,
 			Status:            types.DispatchStatus(record.Status),
 			DispatchID:        record.ID,
-			DispatchSalt:      record.Salt,
-			TraceToken:        record.TraceToken,
 			Response:          response,
 			ResponseTruncated: record.Truncated,
 			Metadata: &types.DispatchMetadata{
 				Engine:    record.Engine,
 				Model:     record.Model,
 				Role:      record.Role,
+				Variant:   record.Variant,
+				Profile:   record.Profile,
 				SessionID: record.SessionID,
 				Tokens:    &types.TokenUsage{},
 			},
 			Activity:   &types.DispatchActivity{},
 			DurationMS: record.DurationMs,
 		}
-		if err := dispatch.WritePersistentResult(spec, result, response, record.StartedAt, record.EndedAt); err != nil {
+		if err := dispatch.WritePersistentResult(spec, annotations, result, response, record.StartedAt, record.EndedAt); err != nil {
 			t.Fatalf("WritePersistentResult: %v", err)
 		}
 	}
@@ -2056,8 +2032,6 @@ func testStoreRecord(id, status string) dispatch.DispatchRecord {
 
 	return dispatch.DispatchRecord{
 		ID:            id,
-		Salt:          "quick-newt-zero",
-		TraceToken:    "AGENT_MUX_GO_" + id,
 		Status:        status,
 		Engine:        "codex",
 		Model:         "gpt-5.4",
@@ -2087,18 +2061,19 @@ type previewResultForTest struct {
 	SchemaVersion int    `json:"schema_version"`
 	Kind          string `json:"kind"`
 	DispatchSpec  struct {
-		DispatchID       string   `json:"dispatch_id"`
-		Engine           string   `json:"engine"`
-		Model            string   `json:"model"`
-		Effort           string   `json:"effort"`
+		DispatchID string `json:"dispatch_id"`
+		Engine     string `json:"engine"`
+		Model      string `json:"model"`
+		Effort     string `json:"effort"`
+		TimeoutSec int    `json:"timeout_sec"`
+	} `json:"dispatch_spec"`
+	ResultMetadata struct {
 		Role             string   `json:"role"`
 		Variant          string   `json:"variant"`
 		Profile          string   `json:"profile"`
-		TraceToken       string   `json:"trace_token"`
-		TimeoutSec       int      `json:"timeout_sec"`
 		ResponseMaxChars int      `json:"response_max_chars"`
 		Skills           []string `json:"skills"`
-	} `json:"dispatch_spec"`
+	} `json:"result_metadata"`
 	Prompt struct {
 		Excerpt           string `json:"excerpt"`
 		Chars             int    `json:"chars"`
@@ -2142,8 +2117,6 @@ func prepareSteerDispatchFixture(t *testing.T, stdinPipeReady bool) (string, str
 	artifactDir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID:  dispatchID,
-		Salt:        "test-salt",
-		TraceToken:  "trace-token",
 		Engine:      "codex",
 		Model:       "gpt-5.4",
 		Prompt:      "steer test",
@@ -2153,7 +2126,7 @@ func prepareSteerDispatchFixture(t *testing.T, stdinPipeReady bool) (string, str
 	if err := dispatch.EnsureArtifactDir(artifactDir); err != nil {
 		t.Fatalf("EnsureArtifactDir: %v", err)
 	}
-	if err := dispatch.WriteDispatchMeta(artifactDir, spec); err != nil {
+	if err := dispatch.WriteDispatchMeta(artifactDir, spec, types.DispatchAnnotations{}); err != nil {
 		t.Fatalf("WriteDispatchMeta: %v", err)
 	}
 	if err := dispatch.WriteStatusJSON(artifactDir, dispatch.LiveStatus{
@@ -2392,11 +2365,11 @@ func TestRoleSkillsMergedWithCLISkills(t *testing.T) {
 	}
 
 	raw := decodeJSONMap(t, stdout.Bytes())
-	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	resultMetadata, ok := raw["result_metadata"].(map[string]any)
 	if !ok {
-		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
 	}
-	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
 	want := []string{"web-search", "pratchett-read"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("skills = %#v, want %#v", got, want)
@@ -2427,11 +2400,11 @@ func TestRoleSkillsRoleOnly(t *testing.T) {
 	}
 
 	raw := decodeJSONMap(t, stdout.Bytes())
-	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	resultMetadata, ok := raw["result_metadata"].(map[string]any)
 	if !ok {
-		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
 	}
-	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
 	want := []string{"pratchett-read", "web-search"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("skills = %#v, want %#v", got, want)
@@ -2462,11 +2435,11 @@ func TestRoleSkillsEmpty(t *testing.T) {
 	}
 
 	raw := decodeJSONMap(t, stdout.Bytes())
-	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	resultMetadata, ok := raw["result_metadata"].(map[string]any)
 	if !ok {
-		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
 	}
-	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
 	want := []string{"web-search"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("skills = %#v, want %#v", got, want)
@@ -2497,11 +2470,11 @@ func TestRoleSkillsDedup(t *testing.T) {
 	}
 
 	raw := decodeJSONMap(t, stdout.Bytes())
-	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	resultMetadata, ok := raw["result_metadata"].(map[string]any)
 	if !ok {
-		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
 	}
-	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
 	want := []string{"web-search"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("skills = %#v, want %#v", got, want)
@@ -2536,11 +2509,11 @@ func TestRoleSkillsStdinMerge(t *testing.T) {
 	}
 
 	raw := decodeJSONMap(t, stdout.Bytes())
-	dispatchSpec, ok := raw["dispatch_spec"].(map[string]any)
+	resultMetadata, ok := raw["result_metadata"].(map[string]any)
 	if !ok {
-		t.Fatalf("dispatch_spec = %#v, want object", raw["dispatch_spec"])
+		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
 	}
-	got := stringSliceFromJSONValue(t, dispatchSpec["skills"])
+	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
 	want := []string{"web-search", "pratchett-read"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("skills = %#v, want %#v", got, want)
@@ -2566,8 +2539,8 @@ func TestPreviewStdinPreservesExplicitZeroResponseMaxChars(t *testing.T) {
 	}
 
 	preview := decodePreviewResult(t, stdout.Bytes())
-	if preview.DispatchSpec.ResponseMaxChars != 0 {
-		t.Fatalf("dispatch_spec.response_max_chars = %d, want 0", preview.DispatchSpec.ResponseMaxChars)
+	if preview.ResultMetadata.ResponseMaxChars != 0 {
+		t.Fatalf("result_metadata.response_max_chars = %d, want 0", preview.ResultMetadata.ResponseMaxChars)
 	}
 }
 

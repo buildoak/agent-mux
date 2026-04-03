@@ -32,6 +32,7 @@ type LoopEngine struct {
 	verbose     bool
 	streamMode  event.StreamMode
 	hookEval    *hooks.Evaluator
+	annotations types.DispatchAnnotations
 }
 
 type runHandle struct {
@@ -125,6 +126,10 @@ func NewLoopEngine(adapter types.HarnessAdapter, eventWriter io.Writer, hookEval
 	}
 }
 
+func (e *LoopEngine) SetAnnotations(annotations types.DispatchAnnotations) {
+	e.annotations = annotations
+}
+
 func (e *LoopEngine) SetVerbose(v bool) {
 	e.verbose = v
 }
@@ -135,24 +140,22 @@ func (e *LoopEngine) SetStreamMode(m event.StreamMode) {
 
 func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*types.DispatchResult, error) {
 	startTime := time.Now()
-	dispatch.EnsureTraceability(spec)
 	if spec.MaxDepth > 0 && spec.Depth >= spec.MaxDepth {
-		metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}}
-		return buildFailureResult(spec, metadata, startTime, nil, "max_depth_exceeded", fmt.Sprintf("Max dispatch depth %d reached. Complete work directly.", spec.MaxDepth), ""), nil
+		metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: e.annotations.Role, Variant: e.annotations.Variant, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: &types.TokenUsage{}}
+		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "max_depth_exceeded", fmt.Sprintf("Max dispatch depth %d reached. Complete work directly.", spec.MaxDepth), ""), nil
 	}
 	dispatchSpec := *spec
-	dispatch.EnsureTraceability(&dispatchSpec)
 	dispatchSpec.Prompt = dispatch.WithPromptPreamble(dispatchSpec.Prompt, &dispatchSpec)
 
-	metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}}
+	metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: e.annotations.Role, Variant: e.annotations.Variant, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: &types.TokenUsage{}}
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
-		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."), nil
+		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."), nil
 	}
-	if err := dispatch.WriteDispatchMeta(spec.ArtifactDir, spec); err != nil {
-		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write dispatch metadata in %q: %v", spec.ArtifactDir, err), "Ensure the artifact directory is writable."), nil
+	if err := dispatch.WriteDispatchMeta(spec.ArtifactDir, spec, e.annotations); err != nil {
+		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write dispatch metadata in %q: %v", spec.ArtifactDir, err), "Ensure the artifact directory is writable."), nil
 	}
-	if err := dispatch.WritePersistentMeta(spec); err != nil {
-		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write persistent dispatch metadata for %q: %v", spec.DispatchID, err), "Ensure ~/.agent-mux/dispatches is writable."), nil
+	if err := dispatch.WritePersistentMeta(spec, e.annotations); err != nil {
+		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write persistent dispatch metadata for %q: %v", spec.DispatchID, err), "Ensure ~/.agent-mux/dispatches is writable."), nil
 	}
 	inboxCreateErr := inbox.CreateInbox(spec.ArtifactDir)
 	if inboxCreateErr != nil {
@@ -161,9 +164,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		}
 	}
 	eventLogPath := filepath.Join(spec.ArtifactDir, "events.jsonl")
-	emitter, err := event.NewEmitter(spec.DispatchID, spec.Salt, spec.TraceToken, e.eventWriter, eventLogPath)
+	emitter, err := event.NewEmitter(spec.DispatchID, e.eventWriter, eventLogPath)
 	if err != nil {
-		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create event log %q: %v", eventLogPath, err), "Ensure the artifact directory is writable."), nil
+		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Create event log %q: %v", eventLogPath, err), "Ensure the artifact directory is writable."), nil
 	}
 	defer emitter.Close()
 	emitter.SetStreamMode(e.streamMode)
@@ -179,7 +182,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	if _, ok := e.adapter.(*adapter.CodexAdapter); ok {
 		if badVal, valid := adapter.ValidateCodexSandbox(&dispatchSpec); !valid {
 			return buildFailureResult(
-				spec, metadata, startTime, emitter,
+				spec, e.annotations, metadata, startTime, emitter,
 				"invalid_args",
 				fmt.Sprintf("Invalid sandbox value %q for codex engine.", badVal),
 				"Valid sandbox values: danger-full-access, workspace-write, read-only. Example: agent-mux -e codex --sandbox workspace-write --cwd /repo \"<prompt>\".",
@@ -190,7 +193,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	binary := e.adapter.Binary()
 	if _, err := exec.LookPath(binary); err != nil {
 		return buildFailureResult(
-			spec, metadata, startTime, emitter,
+			spec, e.annotations, metadata, startTime, emitter,
 			"binary_not_found",
 			fmt.Sprintf("Binary %q not found on PATH.", binary),
 			fmt.Sprintf("Install %s: see the engine documentation for installation instructions.", binary),
@@ -198,15 +201,13 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	}
 	env := append(os.Environ(),
 		fmt.Sprintf("AGENT_MUX_DISPATCH_ID=%s", spec.DispatchID),
-		fmt.Sprintf("AGENT_MUX_TRACE_TOKEN=%s", spec.TraceToken),
-		fmt.Sprintf("AGENT_MUX_SALT=%s", spec.Salt),
 		fmt.Sprintf("AGENT_MUX_ARTIFACT_DIR=%s", spec.ArtifactDir),
 		fmt.Sprintf("AGENT_MUX_DEPTH=%d", spec.Depth),
 	)
 	adapterEnv, err := e.adapter.EnvVars(&dispatchSpec)
 	if err != nil {
 		return buildFailureResult(
-			spec, metadata, startTime, emitter,
+			spec, e.annotations, metadata, startTime, emitter,
 			"artifact_dir_unwritable",
 			fmt.Sprintf("Set up %s adapter environment: %v", binary, err),
 			"Ensure the artifact directory is writable before retrying.",
@@ -710,7 +711,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		stdinPipeReady = true
 	} else if !errors.Is(err, fifo.ErrUnsupported) {
 		return buildFailureResult(
-			spec, metadata, startTime, emitter,
+			spec, e.annotations, metadata, startTime, emitter,
 			"startup_failed",
 			fmt.Sprintf("start stdin fifo bridge: %v", err),
 			"Check that the artifact directory is writable and supports FIFOs.",
@@ -721,7 +722,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	if err != nil {
 		closeSoftBridge()
 		return buildFailureResult(
-			spec, metadata, startTime, emitter,
+			spec, e.annotations, metadata, startTime, emitter,
 			"startup_failed",
 			err.Error(),
 			"Check that the binary is installed and accessible.",
@@ -756,9 +757,6 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		case procErr = <-currentRun.procDone:
 			drainCurrentSignals(currentGen)
 			if deliverSoftSteer() {
-				continue
-			}
-			if restartRun(true) {
 				continue
 			}
 			if forceBuildResult {
@@ -911,55 +909,55 @@ buildResult:
 	if tokens == nil {
 		tokens = &types.TokenUsage{}
 	}
-	metadata = &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: tokens, Turns: turns}
+	metadata = &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: e.annotations.Role, Variant: e.annotations.Variant, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: tokens, Turns: turns}
 	metadata.SessionID = sid
 
 	switch state {
 	case "timed_out":
-		return finalizeTimedOut(spec, emitter, response, act, metadata, durationMS), nil
+		return finalizeTimedOut(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
 
 	case "failed":
 		if dispatchErr != nil {
-			return finalizeFailed(spec, emitter, response, act, metadata, durationMS, dispatchErr), nil
+			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
 		}
-		return finalizeFailed(spec, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc.ExitCode(), currentStderr.String(), false)), nil
+		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc.ExitCode(), currentStderr.String(), false)), nil
 
 	case "interrupted":
-		return finalizeFailed(spec, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError("interrupted", "Dispatch interrupted by caller cancellation.", "")), nil
+		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError("interrupted", "Dispatch interrupted by caller cancellation.", "")), nil
 
 	default:
 		if dispatchErr != nil {
-			return finalizeFailed(spec, emitter, response, act, metadata, durationMS, dispatchErr), nil
+			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
 		}
 		if parseErrorCount > 0 && missingFinalResponse(response, haveFinalResponse) {
-			return finalizeFailed(spec, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError(
+			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError(
 				"parse_error",
 				fmt.Sprintf("Harness output contained %d parse error(s) and no final response could be trusted.", parseErrorCount),
 				"",
 			)), nil
 		}
 		if softTimedOut {
-			return finalizeCompleted(spec, emitter, response, act, metadata, durationMS), nil
+			return finalizeCompleted(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
 		}
 
 		if streamScanErr != nil && procErr == nil {
-			return finalizeFailed(spec, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError("output_parse_error", fmt.Sprintf("Read harness event stream: %v", streamScanErr), "")), nil
+			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError("output_parse_error", fmt.Sprintf("Read harness event stream: %v", streamScanErr), "")), nil
 		}
 
 		if procErr != nil {
-			return finalizeFailed(spec, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc.ExitCode(), currentStderr.String(), true)), nil
+			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc.ExitCode(), currentStderr.String(), true)), nil
 		}
-		return finalizeCompleted(spec, emitter, response, act, metadata, durationMS), nil
+		return finalizeCompleted(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
 	}
 }
 
-func buildFailureResult(spec *types.DispatchSpec, metadata *types.DispatchMetadata, startTime time.Time, emitter *event.Emitter, code, message, suggestion string) *types.DispatchResult {
+func buildFailureResult(spec *types.DispatchSpec, annotations types.DispatchAnnotations, metadata *types.DispatchMetadata, startTime time.Time, emitter *event.Emitter, code, message, suggestion string) *types.DispatchResult {
 	durationMS := time.Since(startTime).Milliseconds()
 	if emitter != nil {
 		_ = emitter.EmitDispatchEnd("failed", durationMS)
 	}
-	result := dispatch.BuildFailedResult(spec, "", dispatch.NewDispatchError(code, message, suggestion), emptyActivity(), metadata, durationMS)
-	persistDispatchRecord(spec, result, "", emitter)
+	result := dispatch.BuildFailedResult(spec, annotations.ResponseMaxChars, "", dispatch.NewDispatchError(code, message, suggestion), emptyActivity(), metadata, durationMS)
+	persistDispatchRecord(spec, annotations, result, "", emitter)
 	return result
 }
 
@@ -967,7 +965,7 @@ func emptyActivity() *types.DispatchActivity {
 	return &types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}}
 }
 
-func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, attemptedState string, err error, priorErr *types.DispatchError, response string) *types.DispatchResult {
+func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, annotations types.DispatchAnnotations, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, attemptedState string, err error, priorErr *types.DispatchError, response string) *types.DispatchResult {
 	message := fmt.Sprintf("Persist %s dispatch metadata in %q: %v", attemptedState, spec.ArtifactDir, err)
 	if priorErr != nil && strings.TrimSpace(priorErr.Message) != "" {
 		message += fmt.Sprintf(" Original dispatch error: %s", priorErr.Message)
@@ -976,18 +974,18 @@ func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, activity *typ
 	dispatchErr.PartialArtifacts = dispatch.ScanArtifacts(spec.ArtifactDir)
 	// FM-9: Preserve accumulated partial response so callers can see what
 	// the worker accomplished even when the meta write fails.
-	return dispatch.BuildFailedResult(spec, response, dispatchErr, activity, metadata, durationMS)
+	return dispatch.BuildFailedResult(spec, annotations.ResponseMaxChars, response, dispatchErr, activity, metadata, durationMS)
 }
 
-func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS)
+func finalizeCompleted(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := dispatch.BuildCompletedResult(spec, annotations.ResponseMaxChars, response, activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", result.Artifacts); err != nil {
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
 		}
-		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "completed", err, nil, response)
+		failureResult := buildTerminalMetaWriteFailureResult(spec, annotations, activity, metadata, durationMS, "completed", err, nil, response)
 		// FM-15: Write status.json AFTER persistDispatchRecord.
-		persistDispatchRecord(spec, failureResult, response, emitter)
+		persistDispatchRecord(spec, annotations, failureResult, response, emitter)
 		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 			State:          "failed",
 			ElapsedS:       int(durationMS / 1000),
@@ -1001,7 +999,7 @@ func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, respons
 	}
 	// FM-15: Write status.json AFTER persistDispatchRecord so pollers
 	// never see "completed" before the store record exists.
-	persistDispatchRecord(spec, result, response, emitter)
+	persistDispatchRecord(spec, annotations, result, response, emitter)
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 		State:          "completed",
 		ElapsedS:       int(durationMS / 1000),
@@ -1018,15 +1016,15 @@ func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, respons
 	return result
 }
 
-func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := dispatch.BuildTimedOutResult(spec, response, fmt.Sprintf("Soft timeout at %ds, hard kill after %ds grace.", spec.TimeoutSec, spec.GraceSec), activity, metadata, durationMS)
+func finalizeTimedOut(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := dispatch.BuildTimedOutResult(spec, annotations.ResponseMaxChars, response, fmt.Sprintf("Soft timeout at %ds, hard kill after %ds grace.", spec.TimeoutSec, spec.GraceSec), activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "timed_out", result.Artifacts); err != nil {
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
 		}
-		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "timed_out", err, nil, response)
+		failureResult := buildTerminalMetaWriteFailureResult(spec, annotations, activity, metadata, durationMS, "timed_out", err, nil, response)
 		// FM-15: Write status.json AFTER persistDispatchRecord.
-		persistDispatchRecord(spec, failureResult, response, emitter)
+		persistDispatchRecord(spec, annotations, failureResult, response, emitter)
 		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 			State:          "failed",
 			ElapsedS:       int(durationMS / 1000),
@@ -1039,7 +1037,7 @@ func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response
 		return failureResult
 	}
 	// FM-15: Write status.json AFTER persistDispatchRecord.
-	persistDispatchRecord(spec, result, response, emitter)
+	persistDispatchRecord(spec, annotations, result, response, emitter)
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 		State:          "timed_out",
 		ElapsedS:       int(durationMS / 1000),
@@ -1056,16 +1054,16 @@ func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response
 	return result
 }
 
-func finalizeFailed(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, dispErr *types.DispatchError) *types.DispatchResult {
+func finalizeFailed(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, dispErr *types.DispatchError) *types.DispatchResult {
 	// FM-9: Pass accumulated response to BuildFailedResult so partial work is preserved.
-	result := dispatch.BuildFailedResult(spec, response, dispErr, activity, metadata, durationMS)
+	result := dispatch.BuildFailedResult(spec, annotations.ResponseMaxChars, response, dispErr, activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "failed", result.Artifacts); err != nil {
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
 		}
-		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "failed", err, dispErr, response)
+		failureResult := buildTerminalMetaWriteFailureResult(spec, annotations, activity, metadata, durationMS, "failed", err, dispErr, response)
 		// FM-15: Write status.json AFTER persistDispatchRecord.
-		persistDispatchRecord(spec, failureResult, response, emitter)
+		persistDispatchRecord(spec, annotations, failureResult, response, emitter)
 		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 			State:          "failed",
 			ElapsedS:       int(durationMS / 1000),
@@ -1079,7 +1077,7 @@ func finalizeFailed(spec *types.DispatchSpec, emitter *event.Emitter, response s
 	}
 	dispErr.PartialArtifacts = result.Artifacts
 	// FM-15: Write status.json AFTER persistDispatchRecord.
-	persistDispatchRecord(spec, result, response, emitter)
+	persistDispatchRecord(spec, annotations, result, response, emitter)
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 		State:          "failed",
 		ElapsedS:       int(durationMS / 1000),
@@ -1103,13 +1101,13 @@ func emitResponseTruncated(emitter *event.Emitter, result *types.DispatchResult)
 	_ = emitter.EmitResponseTruncated(*result.FullOutputPath)
 }
 
-func persistDispatchRecord(spec *types.DispatchSpec, result *types.DispatchResult, responseText string, emitter *event.Emitter) {
+func persistDispatchRecord(spec *types.DispatchSpec, annotations types.DispatchAnnotations, result *types.DispatchResult, responseText string, emitter *event.Emitter) {
 	if spec == nil || result == nil {
 		return
 	}
 
 	startedAt, endedAt := dispatchWindow(spec.ArtifactDir, result.DurationMS)
-	if err := dispatch.WritePersistentResult(spec, result, responseText, startedAt, endedAt); err != nil {
+	if err := dispatch.WritePersistentResult(spec, annotations, result, responseText, startedAt, endedAt); err != nil {
 		if emitter != nil {
 			_ = emitter.Emit(event.Event{
 				Type:      "warning",

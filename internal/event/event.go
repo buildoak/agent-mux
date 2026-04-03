@@ -25,49 +25,42 @@ const (
 )
 
 type Event struct {
-	SchemaVersion  int      `json:"schema_version"`
-	Type           string   `json:"type"`
-	DispatchID     string   `json:"dispatch_id,omitempty"`
-	Salt           string   `json:"salt,omitempty"`
-	TraceToken     string   `json:"trace_token,omitempty"`
-	Timestamp      string   `json:"ts"`
-	Engine         string   `json:"engine,omitempty"`
-	Model          string   `json:"model,omitempty"`
-	Effort         string   `json:"effort,omitempty"`
-	TimeoutSec     int      `json:"timeout_sec,omitempty"`
-	GraceSec       int      `json:"grace_sec,omitempty"`
-	Cwd            string   `json:"cwd,omitempty"`
-	Skills         []string `json:"skills,omitempty"`
-	ElapsedS       int      `json:"elapsed_s,omitempty"`
-	IntervalS      int      `json:"interval_s,omitempty"`
-	LastActivity   string   `json:"last_activity,omitempty"`
-	Tool           string   `json:"tool,omitempty"`
-	Args           string   `json:"args,omitempty"`
-	DurationMS     int64    `json:"duration_ms,omitempty"`
-	Path           string   `json:"path,omitempty"`
-	Command        string   `json:"command,omitempty"`
-	Message        string   `json:"message,omitempty"`
-	Status         string   `json:"status,omitempty"`
-	SilenceSeconds int      `json:"silence_seconds,omitempty"`
-	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
-	ErrorCode      string   `json:"error_code,omitempty"`
-	FullOutputPath string   `json:"full_output_path,omitempty"`
+	SchemaVersion  int    `json:"schema_version"`
+	Type           string `json:"type"`
+	DispatchID     string `json:"dispatch_id,omitempty"`
+	Timestamp      string `json:"ts"`
+	Engine         string `json:"engine,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	TimeoutSec     int    `json:"timeout_sec,omitempty"`
+	GraceSec       int    `json:"grace_sec,omitempty"`
+	Cwd            string `json:"cwd,omitempty"`
+	ElapsedS       int    `json:"elapsed_s,omitempty"`
+	IntervalS      int    `json:"interval_s,omitempty"`
+	LastActivity   string `json:"last_activity,omitempty"`
+	Tool           string `json:"tool,omitempty"`
+	Args           string `json:"args,omitempty"`
+	DurationMS     int64  `json:"duration_ms,omitempty"`
+	Path           string `json:"path,omitempty"`
+	Command        string `json:"command,omitempty"`
+	Message        string `json:"message,omitempty"`
+	Status         string `json:"status,omitempty"`
+	SilenceSeconds int    `json:"silence_seconds,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	ErrorCode      string `json:"error_code,omitempty"`
+	FullOutputPath string `json:"full_output_path,omitempty"`
 }
 type Emitter struct {
 	mu          sync.Mutex
 	dispatchID  string
-	salt        string
-	traceToken  string
 	eventWriter io.Writer
 	eventLog    *os.File // append-only events.jsonl
 	streamMode  StreamMode
 }
 
-func NewEmitter(dispatchID, salt, traceToken string, eventWriter io.Writer, eventLogPath string) (*Emitter, error) {
+func NewEmitter(dispatchID string, eventWriter io.Writer, eventLogPath string) (*Emitter, error) {
 	e := &Emitter{
 		dispatchID:  dispatchID,
-		salt:        salt,
-		traceToken:  traceToken,
 		eventWriter: eventWriter,
 	}
 
@@ -117,8 +110,6 @@ func (e *Emitter) shouldEmitToStderr(eventType string) bool {
 func (e *Emitter) Emit(evt Event) error {
 	evt.SchemaVersion = SchemaVersion
 	evt.DispatchID = e.dispatchID
-	evt.Salt = e.salt
-	evt.TraceToken = e.traceToken
 	evt.Timestamp = time.Now().UTC().Format(time.RFC3339)
 
 	data, err := json.Marshal(evt)
@@ -156,7 +147,6 @@ func (e *Emitter) EmitDispatchStart(spec *types.DispatchSpec) error {
 		TimeoutSec: spec.TimeoutSec,
 		GraceSec:   spec.GraceSec,
 		Cwd:        spec.Cwd,
-		Skills:     append([]string(nil), spec.Skills...),
 	})
 }
 func (e *Emitter) EmitDispatchEnd(status string, durationMS int64) error {

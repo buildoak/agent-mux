@@ -12,7 +12,6 @@ import (
 type dispatchRefResolution struct {
 	InputRef    string
 	DispatchID  string
-	TraceToken  string
 	ArtifactDir string
 	Record      *dispatch.DispatchRecord
 }
@@ -36,7 +35,6 @@ func resolveDispatchReference(ref string) (*dispatchRefResolution, error) {
 	if record != nil {
 		resolved.Record = record
 		resolved.DispatchID = strings.TrimSpace(record.ID)
-		resolved.TraceToken = strings.TrimSpace(record.TraceToken)
 		resolved.ArtifactDir = strings.TrimSpace(record.ArtifactDir)
 	}
 	if controlRecord != nil {
@@ -44,7 +42,6 @@ func resolveDispatchReference(ref string) (*dispatchRefResolution, error) {
 			return nil, fmt.Errorf("reference %q resolved to conflicting dispatch IDs %q and %q", ref, resolved.DispatchID, controlRecord.DispatchID)
 		}
 		resolved.DispatchID = firstNonEmptyString(resolved.DispatchID, controlRecord.DispatchID)
-		resolved.TraceToken = firstNonEmptyString(resolved.TraceToken, controlRecord.TraceToken)
 		resolved.ArtifactDir = firstNonEmptyString(controlRecord.ArtifactDir, resolved.ArtifactDir)
 	}
 	if resolved.DispatchID == "" && record == nil && controlRecord == nil {
@@ -60,9 +57,6 @@ func resolveDispatchReference(ref string) (*dispatchRefResolution, error) {
 		if artifactDir, err := recovery.ResolveArtifactDir(resolved.DispatchID); err == nil {
 			resolved.ArtifactDir = artifactDir
 		}
-	}
-	if resolved.TraceToken == "" && record != nil {
-		resolved.TraceToken = strings.TrimSpace(record.TraceToken)
 	}
 	return resolved, nil
 }
