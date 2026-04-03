@@ -6,40 +6,40 @@ The core invariant is artifact-first: the artifact directory exists before the h
 
 ## Artifact Directory Layout
 
-Every dispatch gets an artifact directory at `/tmp/agent-mux/<dispatch_id>/`. Override with `--artifact-dir`.
+Every dispatch gets an artifact directory. The default root is resolved by `sanitize.SecureArtifactRoot()` (commonly a subdirectory under the user home or `/tmp/agent-mux/`). Override with `--artifact-dir`.
 
 ```
-/tmp/agent-mux/<dispatch_id>/
-  _dispatch_meta.json    # dispatch metadata (engine, model, status, timestamps)
+<artifact_dir>/
+  status.json            # live dispatch state (state, elapsed_s, last_activity, tool counts)
+  host.pid               # PID of the dispatching process (async only)
   events.jsonl           # one JSON object per harness event
-  full_output.md         # full streamed output text
+  full_output.md         # full streamed output text (fallback for legacy dispatches)
   inbox.md               # pending signal messages
   <worker artifacts>     # files written by the harness
 ```
 
-`_dispatch_meta.json` is written at dispatch start and updated on terminal state. `events.jsonl` is appended throughout the run. `full_output.md` accumulates the worker's streamed text. `inbox.md` holds pending steering messages.
+`events.jsonl` is appended throughout the run. `full_output.md` accumulates the worker's streamed text when a result cannot be stored in the durable store. `inbox.md` holds pending steering messages.
 
-## Control Records
+## Durable Persistence
 
-Control records live at `/tmp/agent-mux/control/<url-escaped-dispatch-id>.json`:
+All dispatches write durable records under `~/.agent-mux/dispatches/<dispatch_id>/`:
 
-```json
-{
-  "dispatch_id": "01JQXYZ...",
-  "artifact_dir": "/absolute/path/to/artifact/dir",
-  "dispatch_salt": "coral-fox-nine",
-  "trace_token": "AGENT_MUX_GO_01JQXYZ..."
-}
+```
+~/.agent-mux/dispatches/<dispatch_id>/
+  meta.json     # dispatch metadata (engine, model, role, cwd, artifact_dir, started_at)
+  result.json   # full DispatchResult once the run completes
 ```
 
-Written atomically via tmp file plus rename. The `artifact_dir` field is resolved to an absolute path at registration time. This indirection allows `--signal` and `--recover` to find the correct artifact directory even when `--artifact-dir` was customized.
+`meta.json` is written at dispatch start and updated with the session ID once the harness establishes one. `result.json` is written atomically (tmp file + fsync + rename) when the dispatch reaches a terminal state. Completion is defined by the presence of `result.json` — `wait` polls for this file.
+
+`agent-mux list` reads all `~/.agent-mux/dispatches/` subdirectories, building records from both `meta.json` (for in-flight dispatches) and `result.json` (for completed ones).
 
 ## Recovery Flow
 
-`--recover <dispatch_id>` continues a previous dispatch:
+`--recover <dispatch_id>` continues a previous dispatch using the `recover` key:
 
-1. **ResolveArtifactDir** — reads the control record to find the artifact directory. Falls back to the legacy default path if no control record exists.
-2. **RecoverDispatch** — reads `_dispatch_meta.json` and scans artifacts to reconstruct dispatch state.
+1. **ResolveArtifactDir** — reads `meta.json` from `~/.agent-mux/dispatches/<dispatch_id>/` to find the artifact directory. Falls back to the default artifact path if no durable record exists, then the legacy `/tmp/agent-mux/<dispatch_id>/` path.
+2. **RecoverDispatch** — reads `dispatch_meta.json` from the artifact directory (or synthesizes from `meta.json`) and scans artifacts to reconstruct dispatch state.
 3. **BuildRecoveryPrompt** — constructs a continuation prompt containing: dispatch ID, engine, model, previous terminal status, artifact file paths, and original prompt hash.
 4. **Re-dispatch** — the recovery prompt replaces `spec.Prompt` and dispatch runs through the normal path.
 

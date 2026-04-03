@@ -8,7 +8,7 @@
 - Gemini prompting
 - Context-loading tools
 - Recovery and signal phrasing
-- Pipeline step authoring
+- Sequential dispatch patterns
 
 ---
 
@@ -120,7 +120,7 @@ Output:
 For read-only work, use `--permission-mode=plan` or the appropriate role.
 
 If the job is implementation at its core, plan in Claude and hand the coding
-to Codex via a second dispatch or a pipeline.
+to Codex via a second dispatch.
 
 ---
 
@@ -149,11 +149,6 @@ Keep the answer to 5 bullets max.
 
 Keep Gemini prompts narrower than Claude prompts. Treat as a contrast probe.
 
-### Important limitation
-
-Gemini variants are reasoning-only on this machine. No file reads, no
-commands, no tool calls. All context must be embedded in the prompt.
-
 ---
 
 ## Context-Loading Tools
@@ -169,7 +164,7 @@ Keeps prompts short and composable.
 
 ### --context-file (JSON: "context_file")
 
-Use when the coordinator already wrote a large brief to disk. v2 injects a
+Use when the coordinator already wrote a large brief to disk. agent-mux injects a
 preamble telling the worker to read `$AGENT_MUX_CONTEXT` before starting.
 
 Good uses: bulky handoff notes, long specs, structured research dumps.
@@ -193,7 +188,7 @@ persona text in the coordinator body, dynamic task details in the prompt.
 
 ### Recovery
 
-`--recover` / `continues_dispatch_id` already builds a continuation prompt
+`--recover` / `"recover"` JSON key already builds a continuation prompt
 listing old artifacts. Your extra prompt should be the delta, not a re-brief.
 
 Good:
@@ -222,34 +217,75 @@ Bad:
 - Contradictory instructions
 - Giant specs that should have been written to disk
 
+### Steer
+
+`steer redirect` is the stronger form of signal -- it prefixes the message
+with `[REDIRECT]` and attempts stdin FIFO injection (Codex) before falling
+back to inbox. Use it when the worker needs to change course mid-flight.
+
+`steer nudge` is gentler -- default message is "Please wrap up your current
+work and provide a final summary."
+
 ---
 
-## Pipeline Step Authoring
+## Sequential Dispatch Patterns
 
-### Good pipeline patterns
+For multi-step work, use explicit dispatch/wait/result sequences. Each step
+is a separate `--stdin` dispatch with the coordinator reading results between steps.
 
-1. `architect` step produces a plan
-2. `lifter` step implements
-3. `auditor` step verifies
+### Pattern: Scout then Implement
 
-### Fan-out guidance
+```bash
+# Step 1: Scout for context
+printf '{"role":"scout","prompt":"Find all auth-related files and their dependencies","cwd":"/repo"}' \
+  | agent-mux --stdin --async
 
-Use `parallel > 1` only when workers are independent:
-- Separate files or modules
-- Separate review slices
-- Independent research threads
+# Wait for scout to finish
+agent-mux wait <scout_dispatch_id>
 
-If you provide `worker_prompts`, the list length must match `parallel`.
+# Read scout result
+SCOUT_RESULT=$(agent-mux result <scout_dispatch_id>)
 
-### Handoff mode selection
+# Step 2: Implement with scout context
+printf '{"role":"lifter","prompt":"Implement retry logic. Context from scout:\n%s","cwd":"/repo"}' "$SCOUT_RESULT" \
+  | agent-mux --stdin --async
+```
 
-| Mode | When to use |
-|------|-------------|
-| `summary_and_refs` | Default; works for most pipelines |
-| `refs_only` | Next worker only needs file paths |
-| `full_concat` | Rare; loads full output into next step (expensive) |
+### Pattern: Implement then Audit
 
-### Key rule
+```bash
+# Step 1: Implement
+printf '{"role":"lifter","prompt":"Add rate limiting to API endpoints","cwd":"/repo"}' \
+  | agent-mux --stdin
 
-The next step should receive the minimum context that still lets it succeed.
-`full_concat` is the expensive option. Prefer `summary_and_refs`.
+# Check result
+agent-mux result <impl_id> --json | jq -r '.status'
+
+# Step 2: Audit the changes
+printf '{"role":"auditor","prompt":"Review the rate limiting implementation for edge cases","cwd":"/repo"}' \
+  | agent-mux --stdin
+```
+
+### Pattern: Fan-out with Multiple Workers
+
+```bash
+# Dispatch N parallel workers
+for module in auth billing payments; do
+  printf '{"role":"grunt","prompt":"Scan %s module for security issues","cwd":"/repo"}' "$module" \
+    | agent-mux --stdin --async
+done
+
+# Wait and collect results
+for id in $DISPATCH_IDS; do
+  agent-mux wait "$id"
+  agent-mux result "$id"
+done
+```
+
+### Key Rules
+
+- Each dispatch is independent -- no implicit state sharing between steps
+- Use `--async` for parallel work, synchronous for sequential chains
+- The coordinator reads results and constructs the next prompt explicitly
+- Write large context to disk and use `--context-file` instead of inlining
+- Use `session_id` from result metadata as the durable join key across dispatches

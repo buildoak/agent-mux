@@ -1,6 +1,6 @@
 # Lifecycle
 
-Lifecycle subcommands provide post-dispatch introspection and management. They read control records and artifact directories created during dispatch — no running process required.
+Lifecycle subcommands provide post-dispatch introspection and management. They read durable records from `~/.agent-mux/dispatches/<id>/` and artifact directories created during dispatch — no running process required.
 
 All lifecycle subcommands output human-readable tables by default. Pass `--json` for structured JSON output. Errors follow the standard envelope: `{"kind":"error","error":{...}}`.
 
@@ -74,7 +74,7 @@ Deep view of a dispatch. Accepts full ID or unique prefix.
 
 Shows all record fields: ID, Status, Engine, Model, Role, Variant, Started, Ended, Duration, Truncated, Cwd, ArtifactDir. Also includes artifact listing and full response text.
 
-JSON mode adds `meta` from `dispatch_meta.json` when present.
+JSON mode adds `meta` from `~/.agent-mux/dispatches/<id>/meta.json` when present.
 
 Example:
 
@@ -82,9 +82,40 @@ Example:
 agent-mux inspect 01JARQ8X
 ```
 
+## Wait
+
+```bash
+agent-mux wait [--json] [--poll <duration>] [--config <path>] [--cwd <dir>] <dispatch_id>
+```
+
+Blocks until an async dispatch reaches a terminal state. Polls `~/.agent-mux/dispatches/<id>/result.json` on each interval. Completion is defined by the presence of `result.json`, not by `status.json` state alone.
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--poll` | `60s` | Status poll interval (e.g. `5s`, `1m`) |
+| `--json` | off | Emit JSON result when done |
+| `--config` | standard | Config resolution for `poll_interval` fallback |
+| `--cwd` | current dir | Working directory for config lookup |
+
+Poll interval precedence: CLI `--poll` > `[async].poll_interval` in config.toml > hardcoded `60s`.
+
+On each tick `wait` emits a status line to stderr:
+
+```
+[<elapsed_s>s] running | <N> tools | <N> files changed
+```
+
+`wait` exits with code `1` and emits an error if the dispatch is orphaned (host PID dead, no `result.json`) or timed out before `result.json` appeared. On success it prints the response text (or JSON with `--json`) and exits `0`.
+
+Example:
+
+```bash
+agent-mux wait --poll 10s --json 01JARQ8X
+```
+
 ## Cross-References
 
 - [Dispatch](./dispatch.md) for the DispatchResult contract
-- [Recovery](./recovery.md) for artifact directory layout and control records
-- [Async](./async.md) for `wait` and background dispatch collection
+- [Recovery](./recovery.md) for artifact directory layout and durable persistence
+- [Async](./async.md) for `--async` dispatch and status.json semantics
 - [CLI Reference](./cli-reference.md) for the complete flag table

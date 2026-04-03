@@ -4,15 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
+### Removed
 
-- **Dispatch-layer response budget restored** — terminal results now enforce a uniform `128000` character cap from `spec.ResponseMaxChars` across completed, timed-out, and failed dispatches. Oversized bodies spill to `full_output.md`, keep `full_output=null`, set `response_truncated=true`, and preserve `handoff_summary` from the full response.
-- **Pipeline artifact preservation on truncated dispatches** — pipeline workers now materialize `output.md` from spilled full output when present, so handoff stays short while on-disk worker output remains complete.
-- **Scout oversized-output guardrail** — scout prompt now routes broad findings to `$AGENT_MUX_ARTIFACT_DIR/scout-findings.md` before the dispatch-layer spill fallback engages.
+- **Pipeline system** — `internal/pipeline/` and all pipeline orchestration removed. The `-P=` flag, `PipelineResult`, `PipelineStep`, and `config.toml` `[pipelines]` block no longer exist. Multi-step coordination is the caller's responsibility via chained individual dispatches.
+- **Response truncation** — `response_max_chars`, `--response-max-chars` CLI flag, `TruncateResponse`, `ResponseTruncated` semantics, and `full_output.md` spill path removed. The `response_truncated` and `full_output_path` fields remain in `DispatchResult` for schema compatibility but are never set to non-default values.
+- **`dispatch_salt` and `trace_token`** — removed from `DispatchSpec`, output contract, and all persistence paths. Dispatch identity is `dispatch_id` (ULID) only.
+- **`gc` subcommand** — garbage-collect command removed. Dispatch records under `~/.agent-mux/dispatches/` must be cleaned up manually.
+- **`--coordinator` flag** — removed. Coordinator/profile loading via `.claude/agents/<name>.md` frontmatter no longer supported.
+- **`allow_subdispatch` / `--no-subdispatch` / `--salt`** — removed flags with no replacement.
+- **`DispatchError.Suggestion`** — removed from `DispatchError` struct. Callers should use `hint` and `example` fields directly.
+- **`_dispatch_meta.json` in artifact dir** — replaced by file-based persistence. Dispatch metadata is now written to `~/.agent-mux/dispatches/<dispatch_id>/meta.json` and `~/.agent-mux/dispatches/<dispatch_id>/result.json`.
+- **SQLite/JSONL dispatch store** — removed. File-based persistence under `~/.agent-mux/dispatches/<id>/` is the sole store. `list`, `status`, `result`, `inspect` read from this directory tree.
 
 ### Changed
 
-- **Default response budget** — `[defaults].response_max_chars` now defaults to `128000`. Explicit CLI or stdin `response_max_chars=0` still disables capping.
+- **`DispatchSpec` reduced to 15 fields** — `DispatchID`, `Engine`, `Model`, `Effort`, `Prompt`, `SystemPrompt`, `Cwd`, `ArtifactDir`, `ContextFile`, `TimeoutSec`, `GraceSec`, `MaxDepth`, `Depth`, `FullAccess`, `EngineOpts`. Salt, trace_token, pipeline, coordinator, and subdispatch fields removed.
+- **File-based persistence** — each dispatch writes two files on completion: `~/.agent-mux/dispatches/<id>/meta.json` (written at dispatch start) and `~/.agent-mux/dispatches/<id>/result.json` (written at dispatch end). `list`, `status`, `result`, and `inspect` derive their data from these files.
+- **`preview` command includes `result_metadata`** — `agent-mux preview` stdout now includes a `result_metadata` object describing where `meta.json` and `result.json` will be written for the prospective dispatch.
 
 ## [3.2.2] - 2026-03-31
 

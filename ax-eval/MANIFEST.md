@@ -68,10 +68,10 @@ Be precise. Name every field you see.
 {pretty-printed result JSON}
 ```
 
-**Checklist (10 items):**
+**Checklist (9 items):**
 - [ ] Correctly identifies `schema_version` as 1
 - [ ] Correctly identifies `status` as "completed" and explains its meaning
-- [ ] Identifies and explains `dispatch_id`, `dispatch_salt`, `trace_token` as distinct fields
+- [ ] Identifies and explains `dispatch_id` as the canonical dispatch identity (ULID)
 - [ ] Explains that `response` contains the worker's answer text
 - [ ] Identifies the `activity` object with its four arrays (`files_changed`, `files_read`, `commands_run`, `tool_calls`)
 - [ ] Identifies the `metadata` object and explains `engine`, `model`, `tokens`, `turns`
@@ -100,7 +100,7 @@ You are given the output-contract documentation for agent-mux and a real dispatc
 Your task:
 1. Parse every top-level field in the result JSON.
 2. Identify that the status is "failed" and explain what that means.
-3. Parse the error object: identify code, message, suggestion, hint, example, retryable fields.
+3. Parse the error object: identify code, message, hint, example, retryable fields.
 4. Based on the error.retryable field, state whether this error can be retried.
 5. Based on error.hint and error.example, suggest what the caller should do next.
 6. Confirm the metadata and activity objects are present even on failure.
@@ -118,7 +118,7 @@ Be precise. Name every field you see.
 - [ ] Identifies that `status` is "failed"
 - [ ] Parses the error object and identifies the error code
 - [ ] Explains what the error code means per the error code table
-- [ ] Identifies `hint` and `example` fields in the error object
+- [ ] Identifies `hint` and `example` fields in the error object (note: `suggestion` field no longer exists)
 - [ ] States whether the error is retryable based on the `retryable` field
 - [ ] Suggests a corrective action derived from `hint`/`example`
 - [ ] Does NOT hallucinate error codes or field meanings
@@ -139,56 +139,25 @@ You are given the output-contract documentation for agent-mux.
 Answer these specific questions precisely:
 
 1. What is the difference between "response" and "handoff_summary"?
-2. What is the difference between "dispatch_id" and "trace_token"?
-3. What does "dispatch_salt" look like and what is it for?
-4. When is "full_output_path" set vs null?
-5. What three values can "status" take and what does each mean?
-6. What is the difference between "partial" and "recoverable"?
-7. In the error object, what is the difference between "hint", "example", and "suggestion"?
+2. What is "dispatch_id" and what format does it use?
+3. Where are dispatch results persisted on disk after a dispatch completes?
+4. What three values can "status" take and what does each mean?
+5. What is the difference between "partial" and "recoverable"?
+6. In the error object, what is the difference between "hint" and "example"?
 
 ## Output Contract Documentation
 {output-contract.md content}
 ```
 
-**Checklist (7 items):**
+**Checklist (6 items):**
 - [ ] `response` is the full worker response text; `handoff_summary` is extracted from `## Summary`/`## Handoff` headers or is a shortened version. They are NOT the same field
-- [ ] `dispatch_id` is a ULID; `trace_token` is `AGENT_MUX_GO_` + dispatch_id. Related but distinct
-- [ ] `dispatch_salt` is `adjective-noun-digit` format (e.g. "mint-ant-five") for human-greppable identification
-- [ ] `full_output_path` is set when response was truncated due to `response_max_chars`; null otherwise
+- [ ] `dispatch_id` is a ULID — the sole canonical dispatch identity. No `trace_token` or `dispatch_salt` fields exist
+- [ ] Persistence: `meta.json` written to `~/.agent-mux/dispatches/<dispatch_id>/meta.json` at start; `result.json` written at end. No `_dispatch_meta.json` in the artifact dir
 - [ ] `status` values: `completed` (clean exit), `timed_out` (timeout), `failed` (validation/startup/adapter error)
 - [ ] `partial` and `recoverable` appear on `timed_out` runs; partial means work is incomplete, recoverable means it can be resumed
-- [ ] `hint` is guidance text, `example` is a corrective command example, `suggestion` is the backward-compat concatenation of hint + " " + example
+- [ ] `hint` is guidance text; `example` is a corrective command example. No `suggestion` field exists
 
 ---
-
-### L0.4 — Pipeline result vs dispatch result
-
-**Setup:** No live dispatch needed. Documentation-only test.
-
-**Materials:** `references/output-contract.md`.
-
-**Prompt to agent:**
-```
-You are given the output-contract documentation for agent-mux.
-
-A coordinator dispatches work in two ways: single dispatch and pipeline. Answer:
-
-1. What top-level key distinguishes a PipelineResult from a DispatchResult?
-2. What are the three possible pipeline status values and how do they differ from dispatch status values?
-3. In a pipeline, what does each worker result contain? List the fields.
-4. What is `handoff_mode` and what values can it take?
-5. If you call `agent-mux -P=build -C=/repo "task"`, should you parse the result as a DispatchResult or PipelineResult?
-
-## Output Contract Documentation
-{output-contract.md content}
-```
-
-**Checklist (5 items):**
-- [ ] Identifies `pipeline_id` and `steps` as distinguishing keys (PipelineResult has `pipeline_id` + `steps[]`; DispatchResult has `dispatch_id` + `response`)
-- [ ] Pipeline statuses: `completed` (no failures), `partial` (some failed but each step had at least one success), `failed` (a step had zero successes)
-- [ ] Worker result fields: `worker_index`, `dispatch_id`, `status`, `summary`, `artifact_dir`, `output_file`, `duration_ms` (plus `error_code`/`error_msg` on failure)
-- [ ] `handoff_mode` controls how output flows between steps: `summary_and_refs`, `full_concat`, `refs_only`
-- [ ] `-P=build` returns a PipelineResult, NOT a DispatchResult
 
 ---
 
@@ -221,7 +190,6 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 {
   "code": "engine_not_found",
   "message": "Unknown engine name.",
-  "suggestion": "agent-mux only supports the built-in engines codex, claude, and gemini. Retry with a valid engine. Example: agent-mux -e codex --cwd /repo \"<prompt>\".",
   "hint": "agent-mux only supports the built-in engines codex, claude, and gemini.",
   "example": "Retry with a valid engine. Example: agent-mux -e codex --cwd /repo \"<prompt>\".",
   "retryable": true
@@ -246,7 +214,6 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 {
   "code": "model_not_found",
   "message": "Unknown model for engine.",
-  "suggestion": "The selected model is not available for the current engine. Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
   "hint": "The selected model is not available for the current engine.",
   "example": "Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
   "retryable": true
@@ -271,7 +238,6 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 {
   "code": "invalid_args",
   "message": "Invalid dispatch arguments.",
-  "suggestion": "The dispatch request is missing required fields or contains invalid flag combinations. Provide a valid engine, prompt, and working directory. Example: agent-mux -e codex --cwd /repo \"Fix failing test\".",
   "hint": "The dispatch request is missing required fields or contains invalid flag combinations.",
   "example": "Provide a valid engine, prompt, and working directory. Example: agent-mux -e codex --cwd /repo \"Fix failing test\".",
   "retryable": true
@@ -295,7 +261,6 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 {
   "code": "frozen_killed",
   "message": "Worker killed after prolonged silence.",
-  "suggestion": "Worker was killed after prolonged silence - likely stuck in a hanging tool call. Partial work was preserved in the artifact directory. Retry with a narrower task: agent-mux -R=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
   "hint": "Worker was killed after prolonged silence - likely stuck in a hanging tool call. Partial work was preserved in the artifact directory.",
   "example": "Retry with a narrower task: agent-mux -R=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
   "retryable": true
@@ -320,7 +285,6 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 {
   "code": "config_error",
   "message": "Configuration is invalid.",
-  "suggestion": "agent-mux could not load or validate the referenced config, role, or control path. Fix the config file or role name, then retry. Example: agent-mux -R lifter --config /path/to/agent-mux.yaml --cwd /repo \"<prompt>\".",
   "hint": "agent-mux could not load or validate the referenced config, role, or control path.",
   "example": "Fix the config file or role name, then retry. Example: agent-mux -R lifter --config /path/to/agent-mux.yaml --cwd /repo \"<prompt>\".",
   "retryable": true
@@ -344,7 +308,6 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 {
   "code": "max_depth_exceeded",
   "message": "Max dispatch depth reached.",
-  "suggestion": "This task tried to spawn more nested dispatches than the configured safety limit allows. Complete the work in the current agent, or raise the depth limit only if the nesting is intentional.",
   "hint": "This task tried to spawn more nested dispatches than the configured safety limit allows.",
   "example": "Complete the work in the current agent, or raise the depth limit only if the nesting is intentional.",
   "retryable": false
@@ -368,7 +331,6 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 {
   "code": "startup_failed",
   "message": "Harness process failed to start.",
-  "suggestion": "The harness process failed before a working session started. Check the harness install and arguments, then retry. Example: verify the engine binary runs directly from the same shell.",
   "hint": "The harness process failed before a working session started.",
   "example": "Check the harness install and arguments, then retry. Example: verify the engine binary runs directly from the same shell.",
   "retryable": true
@@ -422,7 +384,7 @@ Each step should use --async, wait for completion, and check the result before p
 
 **Checklist (11 items):**
 - [ ] Uses `--async` for each dispatch
-- [ ] Uses `agent-mux wait --poll <duration> <id>` to wait (NOT polling `steer status` in a loop)
+- [ ] Uses `agent-mux wait --poll <duration> <id>` to wait (NOT polling `status` in a loop)
 - [ ] Uses `agent-mux result <id> --json` to collect results
 - [ ] Uses `--cwd` or `-C=` to set working directory
 - [ ] Uses valid engines (`codex`, `claude`, or `gemini`)
@@ -529,7 +491,7 @@ Now complete this task:
 You are a coordinator agent with access to agent-mux. A worker is running a long analysis task that you dispatched 5 minutes ago. You realize the scope needs to be narrowed.
 
 Using agent-mux, show the exact commands to:
-1. Check if the worker is still running.
+1. Check if the worker is still running (use `agent-mux status <id>`).
 2. Redirect the worker to a narrower scope.
 3. Wait for the updated result.
 4. If redirect fails, abort and redispatch with the new scope.
@@ -538,13 +500,13 @@ The dispatch ID is "01KMY3ABC".
 ```
 
 **Checklist (8 items):**
-- [ ] Uses `agent-mux steer 01KMY3ABC status` for the live check (NOT a loop)
+- [ ] Uses `agent-mux status 01KMY3ABC` for the live check (canonical; NOT `steer status`, NOT a loop)
 - [ ] Uses `agent-mux steer 01KMY3ABC redirect "<message>"` with a specific redirect message
 - [ ] Uses `agent-mux wait --poll <duration> 01KMY3ABC` to wait after redirect
 - [ ] Has a fallback using `agent-mux steer 01KMY3ABC abort` if redirect fails
 - [ ] Abort fallback includes a redispatch with narrower scope
 - [ ] Redirects stderr (`2>/dev/null`) on all commands
-- [ ] Does NOT poll `steer status` in a loop (uses `wait` instead)
+- [ ] Does NOT poll status in a loop (uses `wait` instead)
 - [ ] Steer commands have correct syntax (subcommand before arguments)
 
 ---

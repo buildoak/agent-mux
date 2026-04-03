@@ -23,8 +23,7 @@ For operational usage patterns, see the other docs. This page is the lookup tabl
 | `--skill` | | string[] | `[]` | Repeatable; loads SKILL.md |
 | `--skip-skills` | | bool | `false` | Skip skill injection (keep role engine/model/effort) |
 | `--context-file` | | string | — | Large context file; injects read preamble |
-| `--profile` | | string | — | Coordinator persona from agents/ |
-| `--coordinator` | | string | — | Legacy alias for `--profile` |
+| `--profile` | | string | — | Coordinator persona from agents/ (`coordinator` is accepted as an alias in `--stdin` JSON input only) |
 | `--config` | | string | — | Explicit config path (overrides default lookup) |
 | `--artifact-dir` | | string | auto | Override artifact directory |
 | `--full` | `-f` | bool | `true` | Full access mode |
@@ -51,6 +50,7 @@ For operational usage patterns, see the other docs. This page is the lookup tabl
 | `--recover` | | string | — | Dispatch ID to continue from |
 | `--signal` | | string | — | Dispatch ID to send a message to |
 | `--stdin` | | bool | `false` | Read DispatchSpec JSON from stdin |
+| `--async` | | bool | `false` | Fire-and-forget; emits `async_started` ack and returns immediately |
 
 ### Output Flags
 
@@ -68,9 +68,11 @@ Defaults when field is absent from JSON:
 | --- | --- |
 | `dispatch_id` | Generated ULID |
 | `cwd` | `os.Getwd()` |
-| `artifact_dir` | `/tmp/agent-mux/<dispatch_id>/` |
+| `artifact_dir` | `<sanitize.SecureArtifactRoot()>/<dispatch_id>/` (typically under `~/.agent-mux/` or `/tmp/agent-mux/`) |
 | `full_access` | `true` |
 | `grace_sec` | `60` |
+
+The `coordinator` key is accepted as an alias for `profile` in stdin JSON. Decoding fails if both keys are present with different values.
 
 Supported dispatch flags still apply in `--stdin` mode as explicit overrides for the decoded JSON fields.
 
@@ -135,6 +137,18 @@ agent-mux preview [flags] <prompt>
 ```
 
 Prints the fully resolved `DispatchSpec` as JSON without executing. Useful for verifying that config, roles, skills, and prompt composition resolved correctly before committing to a dispatch.
+
+The preview JSON includes:
+
+| Top-level key | Contents |
+| --- | --- |
+| `dispatch_spec` | Resolved engine, model, effort, cwd, artifact_dir, timeout, depth values |
+| `result_metadata` | role, variant, profile, skills that were resolved |
+| `prompt` | Excerpt of the composed prompt (first 280 runes), total chars, system_prompt_chars |
+| `control` | control_record path and artifact_dir |
+| `prompt_preamble` | Any preamble lines injected before the user prompt |
+| `warnings` | Non-fatal resolution warnings |
+| `confirmation_required` | Whether the dispatch would have required TTY confirmation |
 
 ## Mode Detection
 

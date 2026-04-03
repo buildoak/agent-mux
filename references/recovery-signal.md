@@ -3,9 +3,10 @@
 ## Contents
 
 - Artifact directory layout
+- Persistent dispatch records
 - Recovery workflow
 - Signal workflow
-- Control records
+- Steer workflow
 - Inbox mechanics
 - Supervisor and liveness
 
@@ -13,7 +14,7 @@
 
 ## Artifact Directory Layout
 
-Every dispatch gets an artifact directory. Default location:
+Every dispatch gets a runtime artifact directory. Default location:
 
 ```
 /tmp/agent-mux-<uid>/<dispatch_id>/
@@ -26,25 +27,87 @@ Contents:
 
 | File | Purpose |
 |------|---------|
-| `_dispatch_meta.json` | Dispatch metadata (ID, salt, engine, model, status, timestamps) |
+| `meta.json` | Dispatch metadata (ID, session_id, engine, model, status, timestamps) |
+| `status.json` | Live status (state, elapsed, tools, files changed) -- updated during execution |
 | `events.jsonl` | NDJSON event log (mirrored from stderr) |
-| `inbox.md` | Coordinator mailbox for signal injection |
+| `inbox.md` | Coordinator mailbox for signal/steer injection |
+| `host.pid` | PID of the host process (async dispatches) |
+| `control.json` | Steering control file (written by `steer abort`/`steer extend`) |
 | `full_output.md` | Full response when truncation occurred |
 | (worker files) | Any files the worker created as artifacts |
 
-### Pipeline Artifacts
+---
 
-Pipeline dispatches create a nested structure:
+## Persistent Dispatch Records
+
+Source: `internal/dispatch/persistence.go`.
+
+Dispatch records are stored as JSON files under `~/.agent-mux/dispatches/<dispatch_id>/`:
 
 ```
-/tmp/agent-mux-<uid>/<dispatch_id>/pipeline/
-  step-0/worker-0/
-    _dispatch_meta.json
-    events.jsonl
-    output.md
-  step-1/worker-0/
-    ...
+~/.agent-mux/dispatches/<dispatch_id>/
+  meta.json       # PersistentDispatchMeta -- written at dispatch start
+  result.json     # PersistentDispatchResult -- written at dispatch end
 ```
+
+### meta.json shape
+
+Source: `dispatch.PersistentDispatchMeta` struct.
+
+```json
+{
+  "dispatch_id": "01KM...",
+  "session_id": "thread_...",
+  "engine": "codex",
+  "model": "gpt-5.4",
+  "effort": "high",
+  "role": "lifter",
+  "variant": "",
+  "profile": "",
+  "cwd": "/repo",
+  "artifact_dir": "/tmp/agent-mux-501/01KM...",
+  "started_at": "2026-03-28T10:00:00Z",
+  "timeout_sec": 1800
+}
+```
+
+### result.json shape
+
+Source: `dispatch.PersistentDispatchResult` struct (embeds `types.DispatchResult`).
+
+```json
+{
+  "schema_version": 1,
+  "status": "completed",
+  "dispatch_id": "01KM...",
+  "response": "Worker response text...",
+  "response_truncated": false,
+  "handoff_summary": "...",
+  "artifacts": [],
+  "activity": { "files_changed": [], "files_read": [], "commands_run": [], "tool_calls": [] },
+  "metadata": { "engine": "codex", "model": "gpt-5.4", "tokens": {...}, "session_id": "thread_..." },
+  "duration_ms": 84231,
+  "started_at": "2026-03-28T10:00:00Z",
+  "ended_at": "2026-03-28T10:01:24Z",
+  "artifact_dir": "/tmp/agent-mux-501/01KM...",
+  "cwd": "/repo",
+  "engine": "codex",
+  "model": "gpt-5.4",
+  "role": "lifter",
+  "effort": "high",
+  "session_id": "thread_...",
+  "response_chars": 1250,
+  "timeout_sec": 1800
+}
+```
+
+### Resolution order for dispatch references
+
+All lifecycle commands (`status`, `result`, `inspect`, `wait`, `steer`, `--signal`) resolve dispatch IDs through:
+
+1. `~/.agent-mux/dispatches/<id>/` (persistent meta.json + result.json)
+2. Prefix match against all dispatch IDs (unique prefix required)
+3. Artifact directory fallback via `recovery.ResolveArtifactDir`
 
 ---
 
@@ -52,15 +115,21 @@ Pipeline dispatches create a nested structure:
 
 Recovery continues a timed-out or interrupted dispatch.
 
+Source: `internal/recovery/recovery.go` -- `RecoverDispatch()`, `BuildRecoveryPrompt()`.
+
 ### How It Works
 
-1. Caller provides `continues_dispatch_id` (JSON) or `--recover` (CLI)
-2. v2 resolves the artifact directory via control record, then legacy fallback
-3. v2 reads `_dispatch_meta.json` and scans for artifact files
-4. v2 builds a continuation prompt that includes:
+1. Caller provides `recover` JSON key or `--recover` CLI flag with a dispatch ID
+2. agent-mux resolves the artifact directory:
+   - First from `~/.agent-mux/dispatches/<id>/meta.json` (`artifact_dir` field)
+   - Then default artifact root (`/tmp/agent-mux-<uid>/<id>/`)
+   - Then legacy root (`/tmp/agent-mux/<id>/`)
+3. Reads `meta.json` from artifact dir and scans for artifact files
+4. Builds a continuation prompt that includes:
    - Original dispatch ID, engine, model
    - Previous status
    - List of existing artifacts
+   - Original prompt hash
    - Caller's new prompt (as additional instruction)
 
 ### JSON Invocation
@@ -68,21 +137,21 @@ Recovery continues a timed-out or interrupted dispatch.
 ```json
 {
   "engine": "codex",
-  "continues_dispatch_id": "01KM...",
+  "recover": "01KM...",
   "prompt": "Continue by finishing the remaining test cases",
   "cwd": "/repo"
 }
 ```
 
-### When to Use Recovery
+### CLI Invocation
 
-- A prior dispatch timed out after writing useful artifacts
-- A dispatch was interrupted (SIGINT/SIGTERM) mid-work
-- You want to continue from where the worker left off
+```bash
+agent-mux --recover=01KM... -E codex "Continue by finishing the remaining test cases"
+```
 
 ### Recovery Prompt Structure
 
-v2 auto-generates:
+Auto-generated by `BuildRecoveryPrompt`:
 
 ```
 You are continuing a previous dispatch (ID: 01KM...).
@@ -92,12 +161,18 @@ Artifacts from previous run:
 - /tmp/agent-mux-501/01KM.../src/parser.go
 - /tmp/agent-mux-501/01KM.../notes.md
 
-(Original prompt hash: sha256:... — re-read artifacts for context.)
+(Original prompt hash: sha256:... -- re-read artifacts for context.)
 
 Please continue from where the previous run left off.
 
 [Your additional prompt here]
 ```
+
+### When to Use Recovery
+
+- A prior dispatch timed out after writing useful artifacts
+- A dispatch was interrupted (SIGINT/SIGTERM) mid-work
+- You want to continue from where the worker left off
 
 ### Tips
 
@@ -109,17 +184,17 @@ Please continue from where the previous run left off.
 
 ## Signal Workflow
 
-Signals send steering messages to a running dispatch.
+Signals send steering messages to a running dispatch via the inbox.
 
 ### How It Works
 
 1. Caller provides dispatch ID and a message
-2. v2 resolves the artifact directory via control record
-3. v2 appends the message to `inbox.md` (atomic append with flock)
-4. v2 returns a JSON acknowledgement
+2. agent-mux resolves the artifact directory via persistent dispatch records
+3. Appends the message to `inbox.md` (atomic append with flock)
+4. Returns a JSON acknowledgement
 5. The running dispatch checks inbox at event boundaries
-6. If the harness has a resumable session/thread ID, v2 gracefully stops the
-   current process and resumes with the inbox message injected
+6. If the harness has a resumable session/thread ID, agent-mux gracefully stops
+   the current process and resumes with the inbox message injected
 
 ### CLI Invocation
 
@@ -141,36 +216,48 @@ agent-mux --signal=01KM... "Focus on auth paths; skip tests"
 ### Important Caveats
 
 - **Ack != delivery.** The ack confirms the inbox write succeeded. Actual
-  injection happens later, at an event boundary, when the harness has emitted
-  a resumable session/thread ID.
+  injection happens later, at an event boundary.
 - **Not instant.** If the harness hasn't emitted a session ID yet, the inbox
   message waits until one is available.
 - **Keep signals short.** They become a resumed turn inside the harness.
-  Crisp steering commands, not multi-paragraph redesigns.
 
 ---
 
-## Control Records
+## Steer Workflow
 
-Control records map dispatch IDs to artifact directories.
+The `steer` subcommand provides richer control over running dispatches than `--signal`.
 
-Location: `/tmp/agent-mux-<uid>/control/<dispatch_id>.json`
-(or `$XDG_RUNTIME_DIR/agent-mux/control/` if XDG is set)
+Source: `cmd/agent-mux/steer.go`.
+
+### Actions
+
+| Action | Effect |
+|--------|--------|
+| `abort` | SIGTERM to host PID (async), or write `control.json` abort flag (foreground) |
+| `nudge` | Deliver a message via stdin FIFO (Codex) or inbox file |
+| `redirect` | Deliver redirect instructions via stdin FIFO or inbox (prefixed with `[REDIRECT]`) |
+| `extend` | Write `extend_kill_seconds` to `control.json` for watchdog to read |
+
+### Delivery Mechanisms
+
+For `nudge` and `redirect`, delivery is attempted in priority order:
+
+1. **stdin FIFO** (Codex only): if `status.json` shows `stdin_pipe_ready=true` and host process is alive, injects directly via named pipe at `<artifact_dir>/stdin.fifo`
+2. **inbox file**: fallback -- writes to `<artifact_dir>/inbox.md`
+
+### control.json shape
+
+Source: `ControlFile` struct in `steer.go`.
 
 ```json
 {
-  "dispatch_id": "01KM...",
-  "artifact_dir": "/tmp/agent-mux-501/01KM...",
-  "dispatch_salt": "mint-ant-five",
-  "trace_token": "AGENT_MUX_GO_01KM..."
+  "abort": true,
+  "extend_kill_seconds": 0,
+  "updated_at": "2026-03-28T10:01:00Z"
 }
 ```
 
-Resolution order for `--recover` and `--signal`:
-
-1. Control record at `/tmp/agent-mux-<uid>/control/<id>.json`
-2. Legacy default directory at `/tmp/agent-mux-<uid>/<id>/`
-3. Error if neither found
+Read by the watchdog on each tick during dispatch execution.
 
 ---
 
@@ -194,12 +281,12 @@ The inbox is a file-based message queue at `<artifact_dir>/inbox.md`.
 ### Check Protocol
 
 - `HasMessages()` is a fast-path stat check (file size > 0)
-- No locking — used for non-blocking polling at event boundaries
+- No locking -- used for non-blocking polling at event boundaries
 
 ### Lifecycle
 
 1. `CreateInbox()` at dispatch start (idempotent)
-2. `WriteInbox()` from `--signal` callers
+2. `WriteInbox()` from `--signal` callers or `steer nudge/redirect`
 3. LoopEngine checks `HasMessages()` at each event boundary
 4. On inbox content: `ReadInbox()` returns messages, clears file
 5. Messages are injected via harness-native resume protocol
@@ -223,11 +310,10 @@ Monitors harness event stream for silence:
 | Threshold | Action |
 |-----------|--------|
 | `silence_warn_seconds` (default 90s) | Emit `frozen_warning` event |
-| `silence_kill_seconds` (default 180s) | Kill harness, return `frozen_tool_call` error |
+| `silence_kill_seconds` (default 180s) | Kill harness, return `frozen_killed` error |
 
 The liveness watchdog runs as a goroutine that tracks time since last event.
-Legitimate long operations (Rust builds, large installs) can trigger false
-warnings — the kill threshold should be set high enough to accommodate these.
+Also reads `control.json` on each tick for abort/extend signals.
 
 ### Heartbeat
 

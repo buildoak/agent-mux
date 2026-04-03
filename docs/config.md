@@ -238,7 +238,6 @@ Meaning:
 | Variant map entries | Add new variants; deep-merge name collisions |
 | Variant scalar fields | Last explicit definition wins |
 | `roles.<name>.variants.<v>.skills` | Replace the whole list when explicitly defined |
-| `pipelines.<name>` | Replace the entire pipeline entry |
 Practical consequences:
 - lists do not all behave the same
 - `[models]`, `[hooks]`, and `[skills].search_paths` are additive
@@ -248,8 +247,10 @@ Practical consequences:
 Profiles are loaded by `LoadProfile(name, cwd)` and return:
 - `CoordinatorSpec` from markdown frontmatter plus body
 - optional companion `*Config` from `<name>.toml`
+
+The `coordinator` key is accepted as a stdin JSON alias for `profile`. If both keys appear in the same JSON object with different values, decoding fails. The `--coordinator` CLI flag does not exist; use `--profile`.
 ### Search Order
-For `--profile=name` or `--coordinator=name`, agent-mux searches `name.md` in:
+For `--profile=name`, agent-mux searches `name.md` in:
 1. `<cwd>/.claude/agents/`
 2. `<cwd>/agents/`
 3. `<cwd>/.agent-mux/agents/`
@@ -269,8 +270,6 @@ If `name.toml` exists beside the matched profile file, it is loaded as a normal 
 - sets `SourceDir` for roles it defines
 - runs the same explicit timeout validation
 At dispatch assembly time it is merged after the main config load and before role resolution.
-### `ExtraFields`
-Any frontmatter keys outside the recognized set are preserved in `CoordinatorSpec.ExtraFields`. The binary stores them but does not interpret them during config resolution.
 
 ## Skill Injection
 `LoadSkills()` runs only when the resolved dispatch includes skills and `SkipSkills` is false.

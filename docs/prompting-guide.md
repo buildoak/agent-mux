@@ -115,7 +115,7 @@ Output:
 
 For read-only work, use `--permission-mode=plan` or an appropriate role.
 
-If the job is implementation at its core, plan in Claude and hand the coding to Codex via a second dispatch or a pipeline.
+If the job is implementation at its core, plan in Claude and hand the coding to Codex via a second dispatch.
 
 ## Gemini Prompting
 
@@ -208,39 +208,58 @@ Bad:
 - Contradictory instructions
 - Giant specs that should have been written to disk
 
-## Pipeline Step Prompting
+## Sequential Dispatch Patterns
 
-### Good pipeline patterns
+Multi-step work is expressed as a sequence of dispatches connected by the coordinator — not by pipelines. The coordinator reads each result and decides what to dispatch next.
 
-1. `architect` step produces a plan
-2. `lifter` step implements from the plan
-3. `auditor` step verifies the implementation
+### The plan-then-implement pattern
 
-### Fan-out guidance
+1. **Scout/architect dispatch** (Claude, read-only) — produces a plan or analysis
+2. **Coordinator reads** the result via `agent-mux result <id>`
+3. **Lifter dispatch** (Codex) — implements from the plan; the plan is injected via `--context-file` or inlined into the prompt
+4. **Auditor dispatch** (Claude or Gemini) — verifies the implementation
 
-Use `parallel > 1` only when workers are independent:
+Each dispatch is independent: one `DispatchSpec`, one `DispatchResult`. Handoff context is explicit — the coordinator decides what to pass and how.
 
-- Separate files or modules
-- Separate review slices
-- Independent research threads
+### Async sequential pattern
 
-When `worker_prompts` is set, the list length must match `parallel`.
+For long steps, use `--async` and `wait`:
 
-### Handoff mode selection
+```bash
+# Fire the planning step
+ID=$(agent-mux --async --engine claude --role architect -C /repo "Produce a migration plan" \
+  | jq -r .dispatch_id)
 
-| Mode | When to use |
-| --- | --- |
-| `summary_and_refs` | Default; works for most pipelines |
-| `refs_only` | Next worker only needs file paths |
-| `full_concat` | Rare; loads full output into the next step (expensive) |
+# Wait for it
+agent-mux wait "$ID" --poll 30s
 
-The next step should receive the minimum context that still lets it succeed. `full_concat` is the expensive option. Default to `summary_and_refs`.
+# Read the result and dispatch the next step
+PLAN=$(agent-mux result "$ID")
+agent-mux --engine codex --role lifter --context-file <(echo "$PLAN") -C /repo "Implement the plan"
+```
+
+### Fan-out pattern
+
+Dispatch independent workers in parallel; collect results after all complete:
+
+```bash
+ID1=$(agent-mux --async --engine codex -C /repo "Audit src/auth/" | jq -r .dispatch_id)
+ID2=$(agent-mux --async --engine codex -C /repo "Audit src/payments/" | jq -r .dispatch_id)
+
+agent-mux wait "$ID1"
+agent-mux wait "$ID2"
+
+agent-mux result "$ID1"
+agent-mux result "$ID2"
+```
+
+Use fan-out only when workers are truly independent (separate files, separate review slices, independent research threads). Dependent work must be sequential.
 
 ## Cross-References
 
 - [Dispatch](./dispatch.md) for prompt composition order and DispatchSpec fields
 - [Engines](./engines.md) for per-engine system prompt handling
 - [Config](./config.md) for skill injection and profile loading
-- [Pipelines](./pipelines.md) for pipeline step TOML and handoff modes
+- [Async](./async.md) for `--async` dispatch, `wait`, and `result`
 - [Steering](./steering.md) for signal delivery mechanics
 - [Recovery](./recovery.md) for recovery continuation prompts

@@ -12,7 +12,7 @@
 | Role resolution | partial | role-dispatch (verifies completion, not system prompt delivery) | System prompt silently dropped |
 | Variant resolution | **no** | — | Variant override silently ignored |
 | Profile resolution | **no** | — | Profile engine/model/timeout overrides broken |
-| response_max_chars truncation | yes | response-truncation | — |
+| response_max_chars truncation | REMOVED | — | `--response-max-chars` flag no longer exists; truncation removed by design |
 | --stdin JSON dispatch | **no** | — | Entire programmatic dispatch path broken |
 | --preview dry-run | **no** | — | Coordinators can't preview before dispatch |
 | **Worker Interaction** | | | |
@@ -24,8 +24,9 @@
 | System prompt via --system-prompt-file | **no** | — | CLI system prompt path broken |
 | **Output Handling** | | | |
 | Response capture | yes | all completion cases | — |
-| Artifact dir creation + _dispatch_meta.json | **no** | — | Metadata silently missing |
-| full_output.md fallback (via result cmd) | yes | response-truncation | — |
+| Artifact dir creation + meta.json (persistence) | partial | artifact-dir-metadata | Checks `~/.agent-mux/dispatches/<id>/meta.json` for dispatch_id, engine, model, started_at |
+| result.json (persistence) | **no** | — | `~/.agent-mux/dispatches/<id>/result.json` not yet asserted |
+| full_output.md fallback (via result cmd) | **no** | — | response-truncation case removed; no replacement yet. scout-role-completion now tests only role completion, not spill behavior |
 | handoff_summary extraction | **no** | — | Pipeline handoffs get garbage |
 | Output contract schema fields | **no** | — | Callers get wrong JSON shape |
 | **Event System** | | | |
@@ -98,24 +99,21 @@
 - `statusIs("completed")`
 - Parse dispatch_start event from stderr: assert `model == "gpt-5.4-mini"`
 
-### M4: `response-truncation`
-**Tests:** response_max_chars truncates response, writes full_output.md, sets response_truncated=true
-**Prompt:** `"Write exactly 500 words about the Go programming language. Do not stop early."`
-**EngineOpts:** `response_max_chars: 200`
-**Evaluators:**
-- `statusIs("completed")`
-- Parse raw stdout: assert `response_truncated == true`
-- Parse raw stdout: assert `full_output_path` is non-empty string
-- Assert file at `full_output_path` exists and len > 200
+### M4: `response-truncation` — REMOVED
+**Status:** Removed. `--response-max-chars` flag and truncation logic no longer exist in the codebase (removed in 3.1.0). The case was asserting presence of truncation; the correct behavior is that truncation does not happen. No replacement case added yet.
 
 ### M5: `artifact-dir-metadata`
-**Tests:** _dispatch_meta.json written with correct fields, events.jsonl exists, status.json written
+**Tests:** `meta.json` written under `~/.agent-mux/dispatches/<id>/`, events.jsonl exists, status.json written
 **Prompt:** `"Create a file called proof.txt containing 'exists'"`
 **Evaluators:**
 - `statusIs("completed")`
-- Read `_dispatch_meta.json` from artifact dir: assert `dispatch_id`, `engine`, `model`, `started_at`, `ended_at`, `status == "completed"` all present
+- Derive `dispatch_id` from result JSON; read `~/.agent-mux/dispatches/<id>/meta.json`: assert `dispatch_id`, `engine`, `model`, `started_at` all present
 - Assert `events.jsonl` exists in artifact dir
 - Assert `status.json` exists with `state == "completed"`
+
+**Missing cases (noted for future coverage):**
+- `result.json` persistence: assert `~/.agent-mux/dispatches/<id>/result.json` exists and contains correct status/response fields
+- `preview result_metadata`: assert `agent-mux preview` stdout includes `result_metadata` shape with `dispatch_id`, `artifact_dir`
 
 ### M6: `stdin-json-dispatch`
 **Tests:** --stdin mode accepts JSON dispatch spec and completes
@@ -184,7 +182,7 @@
 | **P0** | M5: artifact-dir-metadata | Catches metadata write failures silently breaking recovery + inspect | Low |
 | **P0** | M8: lifecycle-list-status-inspect | First test of the entire lifecycle query path agents rely on | Med |
 | **P1** | M2: role-system-prompt-delivery | Catches role system prompt silently dropped — breaks all role-based dispatch | Low |
-| **P1** | M4: response-truncation | Catches truncation + full_output.md path — breaks large response handling | Low |
+| **P1** | M4: response-truncation | REMOVED — truncation feature removed from codebase | — |
 | **P1** | M12: async-host-pid-status-json | Catches async observability failures — orphan detection depends on this | Med |
 | **P1** | M6: stdin-json-dispatch | Catches the entire programmatic dispatch path (every coordinator uses this) | Low |
 | **P2** | M3: variant-resolution | Catches variant override silently ignored | Low |

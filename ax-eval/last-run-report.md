@@ -5,6 +5,11 @@ status: complete
 evaluator: claude-opus-4-6
 ---
 
+> **Historical report — pre-foundation-cleanup. Cases and expectations below are outdated.**
+> Pipeline system, response truncation, dispatch_salt, trace_token, gc subcommand, and _dispatch_meta.json
+> have all been removed since this run. L0.3 field questions and L0.4 (pipeline vs dispatch) no longer apply.
+> L1 error JSONs no longer include a `suggestion` field. Do not use this report as a baseline for current runs.
+
 **AX Health: 95.6%**
 
 ## L0 -- Contract Comprehension -- avg 93.3%

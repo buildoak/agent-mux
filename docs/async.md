@@ -21,12 +21,13 @@ The calling process exits after printing the ack. The worker continues in the sa
   "schema_version": 1,
   "kind": "async_started",
   "dispatch_id": "01JQXYZ...",
-  "salt": "coral-fox-nine",
-  "artifact_dir": "/tmp/agent-mux/01JQXYZ..."
+  "artifact_dir": "/path/to/artifact/dir/01JQXYZ..."
 }
 ```
 
 The `dispatch_id` is the handle for all subsequent operations: `wait`, `result`, `status`, `inspect`, `steer`.
+
+The `artifact_dir` is guaranteed to exist and contain `host.pid` and `status.json` before the ack is emitted. Consumers can begin polling immediately after receiving the ack.
 
 ## Collecting Results
 
@@ -62,17 +63,23 @@ Falls back to `full_output.md` in the artifact directory for truncated or legacy
 
 ## status.json
 
-The artifact directory contains a `status.json` file updated on each event boundary. This is the observability path for programmatic callers that do not want to parse the event stream.
+The artifact directory contains a `status.json` file updated throughout the run. This is the primary observability path for programmatic callers that do not want to parse the event stream.
 
 Fields:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `state` | string | `running`, `completed`, `failed` |
+| `state` | string | `running`, `completed`, `failed`, `timed_out`, `orphaned` |
 | `elapsed_s` | int | Seconds since dispatch start |
 | `last_activity` | string | Description of the most recent activity |
-| `tool_count` | int | Number of tool calls observed |
-| `files_changed_count` | int | Number of file writes observed |
+| `tools_used` | int | Number of tool calls observed |
+| `files_changed` | int | Number of file writes observed |
+| `dispatch_id` | string | Dispatch identifier |
+| `session_id` | string | Harness session ID when established |
+
+`orphaned` state is set by `agent-mux status` when the host PID recorded in `host.pid` is no longer alive but the dispatch was never marked terminal.
+
+Completion is defined by `result.json` appearing under `~/.agent-mux/dispatches/<dispatch_id>/`, not by `status.json` alone. `agent-mux wait` polls for `result.json` on each interval tick.
 
 ## Streaming Protocol v2
 
@@ -95,8 +102,6 @@ All 13+ event types carry a common envelope:
   "schema_version": 1,
   "type": "<event_type>",
   "dispatch_id": "<ulid>",
-  "salt": "<adj-noun-digit>",
-  "trace_token": "AGENT_MUX_GO_<dispatch_id>",
   "ts": "2026-03-28T10:00:00Z"
 }
 ```

@@ -123,7 +123,7 @@ You are the judge. For each scenario:
 
 **Evaluation guidelines:**
 - Be strict on syntax. `--sandbox none` is not a valid flag — that's a fail.
-- Be strict on anti-patterns. Polling `steer status` in a loop instead of using `wait` is a critical failure.
+- Be strict on anti-patterns. Polling `status <id>` in a loop instead of using `wait` is a critical failure. `steer status` is a deprecated alias; the canonical command is `agent-mux status <id>`.
 - Be lenient on style. Different valid approaches to the same task are all acceptable.
 - Hallucinations are automatic fails for the affected checklist items.
 

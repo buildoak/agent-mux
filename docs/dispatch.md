@@ -62,7 +62,7 @@ type DispatchSpec struct {
 }
 ```
 
-`Profile` uses custom JSON marshal and unmarshal behavior. The wire key is `profile`; `coordinator` is accepted as an alias on input; and decoding fails if both are present with different values.
+In stdin JSON input, `coordinator` is accepted as an alias for `profile`. Decoding fails if both keys are present with different values.
 
 ### Field Reference
 
@@ -155,7 +155,8 @@ type DispatchResult struct {
 | --- | --- | --- | --- |
 | `Code` | `code` | `string` | Stable error code such as `config_error`, `startup_failed`, or `timed_out`-adjacent failure codes. |
 | `Message` | `message` | `string` | Human-readable failure summary. |
-| `Suggestion` | `suggestion` | `string` | Immediate retry or remediation guidance for the caller. |
+| `Hint` | `hint` | `string` | Immediate retry or remediation guidance for the caller. |
+| `Example` | `example` | `string` | Example command or value illustrating the correct usage. |
 | `Retryable` | `retryable` | `bool` | Indicates whether the failure should usually be retried. |
 | `PartialArtifacts` | `partial_artifacts` | `[]string` | Artifact paths preserved even though the run failed or timed out. |
 
@@ -206,13 +207,12 @@ agent-mux preview --engine codex --cwd . "Explain what you would change"
 | `agent-mux [flags] <prompt>` | dispatch |
 | `agent-mux dispatch [flags] <prompt>` | dispatch |
 | `agent-mux preview [flags] <prompt>` | preview |
-| `agent-mux --pipeline <name> [flags] <prompt>` | pipeline |
 | `agent-mux --recover <dispatch_id> [flags] <prompt>` | recover |
 | `agent-mux --signal <dispatch_id> <message>` | signal |
 | `agent-mux --stdin` | stdin |
+| `agent-mux --async [flags] <prompt>` | async dispatch |
 | `agent-mux config [subcommand] [flags]` | config |
-| `agent-mux list`, `status`, `result`, `inspect`, `gc` | lifecycle |
-| `agent-mux --async [flags] <prompt>` or `agent-mux wait <dispatch_id>` | async |
+| `agent-mux list`, `status`, `result`, `inspect`, `wait` | lifecycle |
 | `agent-mux steer <dispatch_id> <action> [args]` | steer |
 | `agent-mux -- help` | dispatch literal prompt `help` |
 

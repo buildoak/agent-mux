@@ -1,6 +1,6 @@
 # ax-eval
 ax-eval is the behavioral test framework for agent-mux. It dispatches the real binary against a controlled fixture repository, evaluates outcomes with deterministic checks and optional LLM judging, and writes JSON reports for regression tracking.
-It exists to answer a system-level question unit tests cannot: when agent-mux runs a worker, streams events, stores artifacts, exposes lifecycle commands, or hands work across async and pipeline boundaries, does the whole path behave the way supervising agents actually depend on?
+It exists to answer a system-level question unit tests cannot: when agent-mux runs a worker, streams events, stores artifacts, exposes lifecycle commands, or hands work across async and recovery boundaries, does the whole path behave the way supervising agents actually depend on?
 See also [Architecture](./architecture.md) for the runtime model ax-eval is exercising.
 
 ## Architecture Overview
@@ -46,7 +46,7 @@ V1 cases cover broad behavior:
 - liveness and freeze handling
 - error handling
 - streaming, async dispatch, steering
-- role and pipeline dispatch
+- role dispatch
 V2 cases focus on caller-facing contracts:
 - stdout schema validation
 - role system prompt delivery
@@ -81,7 +81,7 @@ This is enough to test file reads/writes, shell command execution, cross-languag
 `dispatchAsyncSteer(...)` starts async dispatch, waits `DelayBeforeSteer`, runs `agent-mux steer <dispatch_id> <action> [message]`, then collects with `result --json`, or `status --json` after abort.
 Current steering actions covered by cases are `nudge`, `abort`, and `redirect`. `extend` is explicitly left as a TODO because a reliable timing-based integration test has not been built.
 ### CLI Mode
-`dispatchWithFlags(...)` covers features that cannot be expressed purely through `--stdin`, including `--skill`, `--recover`, `--context-file`, lifecycle subcommands, config introspection, preview and gc subcommands, and pipeline dispatch via CLI flags.
+`dispatchWithFlags(...)` covers features that cannot be expressed purely through `--stdin`, including `--skill`, `--recover`, `--context-file`, lifecycle subcommands, config introspection, and preview subcommands.
 
 ## Evaluation Phases and Waves
 ax-eval is split between the main case registry and several focused test files.
@@ -97,10 +97,10 @@ This file covers features that need explicit CLI flows or multi-step setup:
 ### `lifecycle_test.go`
 `TestLifecycleListStatusInspect` exercises the post-dispatch query path: dispatch a real job, parse its `dispatch_id`, verify `list -json` includes it, verify `status <id> -json` reports a completed state, and verify `inspect <id> -json` exposes `dispatch_id`, `response`, and `artifact_dir`.
 ### `wave2_test.go`
-Wave 2 adds transport and async observability coverage through `TestStdinJsonDispatch`, `TestAsyncHostPidStatusJson`, and `TestPipeline2StepHandoff`. This is the file that checks the raw `--stdin` path, immediate async host metadata such as `host.pid` and `status.json`, and a concrete two-step pipeline handoff.
+Wave 2 adds transport and async observability coverage through `TestStdinJsonDispatch` and `TestAsyncHostPidStatusJson`. This is the file that checks the raw `--stdin` path and immediate async host metadata such as `host.pid` and `status.json`.
 ### `wave3_test.go`
-Wave 3 covers operator-facing surfaces and newer pipeline/config contracts through `TestPreviewDryRun`, `TestGcDryRun`, `TestConfigIntrospection`, `TestSkillScriptsOnPath`, `TestPipelineRefsOnly`, and `TestPipelineFanout`.
-Some wave-3 tests deliberately call `t.Skip(...)` when the command or schema is not implemented yet. That means the file documents intended contract coverage as well as current enforcement.
+Wave 3 covers operator-facing surfaces and config contracts through `TestPreviewDryRun`, `TestConfigIntrospection`, and `TestSkillScriptsOnPath`.
+Some wave-3 tests deliberately call `t.Skip(...)` when the contract is not yet enforced. That means the file documents intended coverage as well as current enforcement.
 
 ## The Judge
 `judge.go` implements a strict LLM-as-judge pattern.
@@ -190,7 +190,7 @@ It recommends PRs run deterministic subsets only, nightly runs execute the full 
 Example from `CI.md`:
 ```bash
 go test -tags axeval -timeout 300s \
-  -run 'TestAxEval/(error|streaming|async|pipeline|signal)' \
+  -run 'TestAxEval/(error|streaming|async|signal)' \
   ./tests/axeval/
 ```
 Treat that example as policy guidance, not a generated index. The actual runnable subtests are defined by the case names in `cases.go` and `cases_v2.go`, plus the focused tests in the wave files.
@@ -198,10 +198,10 @@ Treat that example as policy guidance, not a generated index. The actual runnabl
 ## V2 Additions
 V2 is the contract-focused layer added on top of the original behavior suite. The major difference from V1 is that V2 asserts structured caller-facing outputs instead of only checking broad behavior.
 Implemented V2 coverage currently includes:
-- `output-contract-schema`: validates stdout fields such as `schema_version`, `dispatch_id`, `dispatch_salt`, `trace_token`, `activity`, `metadata`, and `duration_ms`
+- `output-contract-schema`: validates stdout fields such as `schema_version`, `dispatch_id`, `activity`, `metadata`, and `duration_ms`
 - `role-system-prompt-delivery`: verifies that a role-provided system prompt actually reaches the worker
 - `variant-resolution`: checks whether the chosen variant is reflected in `dispatch_start` metadata
-- `artifact-dir-metadata`: validates `_dispatch_meta.json`, `events.jsonl`, and `status.json`
+- `artifact-dir-metadata`: validates `events.jsonl` and `status.json` in the artifact directory, and `meta.json` under `~/.agent-mux/dispatches/<id>/`
 - `handoff-summary-extraction`: probes the `handoff_summary` field
 The code also makes clear that V2 is still partly aspirational:
 - `response-truncation` is skipped because that contract is currently disabled in result assembly

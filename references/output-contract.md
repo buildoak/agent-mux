@@ -3,18 +3,22 @@
 ## Contents
 
 - Single dispatch JSON
-- Pipeline JSON
+- Preview output
+- Async ack
+- Live status (status.json)
 - Control-path responses
 - stderr event stream
+- Lifecycle subcommand JSON
 - Error codes
 
 ---
 
-All dispatch and pipeline results use `schema_version: 1`. Control-path
-responses (`--signal`, `--version`) are simpler and do not include
-`schema_version`.
+All dispatch results use `schema_version: 1`. Control-path responses
+(`--signal`, `--version`) are simpler and do not include `schema_version`.
 
 ## Single Dispatch JSON
+
+Source of truth: `types.DispatchResult` in `internal/types/types.go`.
 
 Normal dispatch writes one JSON object to `stdout`:
 
@@ -23,8 +27,6 @@ Normal dispatch writes one JSON object to `stdout`:
   "schema_version": 1,
   "status": "completed",
   "dispatch_id": "01KM...",
-  "dispatch_salt": "mint-ant-five",
-  "trace_token": "AGENT_MUX_GO_01KM...",
   "response": "Worker response text",
   "response_truncated": false,
   "full_output": null,
@@ -45,6 +47,9 @@ Normal dispatch writes one JSON object to `stdout`:
     "engine": "codex",
     "model": "gpt-5.4",
     "role": "lifter",
+    "variant": "",
+    "profile": "",
+    "skills": ["agent-mux"],
     "tokens": {
       "input": 1234,
       "output": 567,
@@ -54,9 +59,7 @@ Normal dispatch writes one JSON object to `stdout`:
     },
     "turns": 3,
     "cost_usd": 0,
-    "session_id": "thread_...",
-    "pipeline_id": "",
-    "parent_dispatch_id": ""
+    "session_id": "thread_..."
   },
   "duration_ms": 84231
 }
@@ -72,16 +75,16 @@ Normal dispatch writes one JSON object to `stdout`:
 
 ### Top-Level Fields
 
+Source: `types.DispatchResult` struct tags.
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `schema_version` | int | Always `1` |
 | `status` | string | `completed`, `timed_out`, `failed` |
 | `dispatch_id` | string | ULID for this run |
-| `dispatch_salt` | string | Human-greppable `adjective-noun-digit` salt |
-| `trace_token` | string | `AGENT_MUX_GO_<dispatch_id>` |
-| `response` | string | Final response text, capped to `response_max_chars` when configured |
-| `response_truncated` | bool | True when `response` was shortened and the full body was spilled to disk |
-| `full_output` | string/null | Always `null`; not a recovery channel |
+| `response` | string | Final response text |
+| `response_truncated` | bool | True when response was shortened and full body spilled to disk |
+| `full_output` | string/null | Always `null` |
 | `full_output_path` | string/null | Path to `full_output.md` when `response_truncated=true` (omitted when null) |
 | `handoff_summary` | string | Extracted from `## Summary`/`## Handoff` or shortened response |
 | `artifacts` | string[] | Files under artifact dir (excludes internal files) |
@@ -95,19 +98,33 @@ Normal dispatch writes one JSON object to `stdout`:
 
 ### Error Object
 
-Present only when `status` is `failed`:
+Source: `types.DispatchError` struct.
+
+Present when `status` is `failed`:
 
 ```json
 {
-  "code": "engine_not_found",
-  "message": "Engine \"bogus\" not found.",
-  "suggestion": "Valid engines: [codex, claude, gemini]",
+  "code": "binary_not_found",
+  "message": "Binary \"codex\" not found on PATH.",
+  "hint": "Install codex: see the engine documentation for installation instructions.",
+  "example": "",
   "retryable": true,
   "partial_artifacts": []
 }
 ```
 
+| Field | Type | Notes |
+|-------|------|-------|
+| `code` | string | Machine-readable error code |
+| `message` | string | Human-readable error description |
+| `hint` | string | Guidance on how to fix the error |
+| `example` | string | Example of correct usage (may be empty) |
+| `retryable` | bool | Whether the error is transient |
+| `partial_artifacts` | string[] | Artifact paths from partial work (may be empty) |
+
 ### Activity Object
+
+Source: `types.DispatchActivity` struct.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -118,110 +135,134 @@ Present only when `status` is `failed`:
 
 ### Metadata Object
 
+Source: `types.DispatchMetadata` struct.
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `engine` | string | Requested engine |
 | `model` | string | Requested model (can be empty if harness default used) |
 | `role` | string | Role name if dispatched via role |
+| `variant` | string | Variant name if dispatched via variant |
+| `profile` | string | Profile name if dispatched via profile |
+| `skills` | string[] | Injected skill names |
 | `tokens` | object | Best-effort token accounting |
 | `turns` | int | Best-effort turn count |
 | `cost_usd` | float | Currently zero-filled |
 | `session_id` | string | Harness session/thread ID when available |
-| `pipeline_id` | string | Set for pipeline workers |
-| `parent_dispatch_id` | string | Set for pipeline workers |
 
 ### Tokens Object
+
+Source: `types.TokenUsage` struct.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `input` | int | Input tokens |
 | `output` | int | Output tokens |
 | `reasoning` | int | Reasoning tokens (Codex) |
-| `cache_read` | int | Cache read tokens |
-| `cache_write` | int | Cache write tokens |
+| `cache_read` | int | Cache read tokens (Claude) |
+| `cache_write` | int | Cache write tokens (Claude) |
 
 ---
 
-## Pipeline JSON
+## Preview Output
 
-`--pipeline/-P` returns a `PipelineResult` object, NOT a dispatch result.
+`agent-mux preview` returns a `previewResult` without executing the dispatch.
+
+Source: `previewResult` struct in `main.go`.
 
 ```json
 {
   "schema_version": 1,
-  "pipeline_id": "01KM...",
-  "status": "completed",
-  "steps": [
-    {
-      "step_name": "plan",
-      "step_index": 0,
-      "pipeline_id": "01KM...",
-      "handoff_mode": "summary_and_refs",
-      "workers": [
-        {
-          "worker_index": 0,
-          "dispatch_id": "01KM...",
-          "status": "completed",
-          "summary": "Designed the migration plan.",
-          "artifact_dir": "/tmp/agent-mux/.../pipeline/step-0/worker-0",
-          "output_file": "/tmp/agent-mux/.../pipeline/step-0/worker-0/output.md",
-          "duration_ms": 45000
-        }
-      ],
-      "handoff_text": "=== Output from step ...",
-      "succeeded": 1,
-      "failed": 0,
-      "total_ms": 45000
-    }
-  ],
-  "final_step": { "..." },
-  "duration_ms": 120000
+  "kind": "preview",
+  "dispatch_spec": {
+    "dispatch_id": "01KM...",
+    "engine": "codex",
+    "model": "gpt-5.4",
+    "effort": "high",
+    "cwd": "/repo",
+    "artifact_dir": "/tmp/agent-mux-501/01KM.../",
+    "timeout_sec": 1800,
+    "grace_sec": 60,
+    "max_depth": 2,
+    "depth": 0,
+    "full_access": true
+  },
+  "result_metadata": {
+    "role": "lifter",
+    "variant": "",
+    "profile": "",
+    "skills": ["agent-mux"]
+  },
+  "prompt": {
+    "excerpt": "Implement retries in ... client.ts",
+    "chars": 245,
+    "truncated": false,
+    "system_prompt_chars": 0
+  },
+  "control": {
+    "control_record": "~/.agent-mux/dispatches/01KM.../meta.json",
+    "artifact_dir": "/tmp/agent-mux-501/01KM.../"
+  },
+  "prompt_preamble": [],
+  "warnings": [],
+  "confirmation_required": false
 }
 ```
 
-### Pipeline Status
+---
 
-| `status` | Meaning |
-|----------|---------|
-| `completed` | No worker failures in any step |
-| `partial` | Some workers failed but each step had at least one success/timeout |
-| `failed` | A step had zero successful workers; pipeline stopped |
+## Async Ack
 
-### Worker Status
+When `--async` is set, the dispatch emits an async acknowledgement to stdout and then runs the worker in the background.
 
-| `status` | Meaning |
-|----------|---------|
-| `completed` | Worker finished cleanly |
-| `timed_out` | Worker timed out (counts as success for pipeline progression) |
-| `failed` | Worker failed |
+Source: `runAsyncDispatch` in `async.go`.
 
-### Step Output Object
+```json
+{
+  "schema_version": 1,
+  "kind": "async_started",
+  "dispatch_id": "01KM...",
+  "artifact_dir": "/tmp/agent-mux-501/01KM.../"
+}
+```
+
+After this ack, `host.pid` and `status.json` are guaranteed on-disk. Use `ax status`, `ax wait`, or `ax result` to track the dispatch.
+
+---
+
+## Live Status (status.json)
+
+Source: `dispatch.LiveStatus` struct in `internal/dispatch/status.go`.
+
+Written atomically to `<artifact_dir>/status.json` during dispatch execution and read by `ax status` and `ax wait`.
+
+```json
+{
+  "state": "running",
+  "elapsed_s": 42,
+  "last_activity": "tool_call: Bash",
+  "tools_used": 7,
+  "files_changed": 3,
+  "stdin_pipe_ready": true,
+  "ts": "2026-03-28T10:00:42Z",
+  "dispatch_id": "01KM...",
+  "session_id": "thread_..."
+}
+```
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `step_name` | string | From pipeline config |
-| `step_index` | int | Zero-based step position |
-| `pipeline_id` | string | Pipeline run identifier |
-| `handoff_mode` | string | `summary_and_refs`, `full_concat`, `refs_only` |
-| `workers` | array | Worker results for this step |
-| `handoff_text` | string | Rendered handoff for next step |
-| `succeeded` | int | Workers that completed or timed out |
-| `failed` | int | Workers that failed |
-| `total_ms` | int | Step wall-clock time |
+| `state` | string | `running`, `initializing`, `completed`, `failed`, `timed_out`, `orphaned` |
+| `elapsed_s` | int | Seconds since dispatch start |
+| `last_activity` | string | Description of last observed activity |
+| `tools_used` | int | Count of tool calls observed |
+| `files_changed` | int | Count of files written |
+| `stdin_pipe_ready` | bool | Whether stdin FIFO is available for steering (omitted when false) |
+| `ts` | string | RFC3339 timestamp of this status write |
+| `dispatch_id` | string | Dispatch identifier (omitted if empty) |
+| `session_id` | string | Harness session/thread ID (omitted if empty) |
 
-### Worker Result Object
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `worker_index` | int | Position in fan-out |
-| `dispatch_id` | string | ULID for this worker |
-| `status` | string | `completed`, `timed_out`, `failed` |
-| `summary` | string | Handoff summary (max 2000 chars) |
-| `artifact_dir` | string | Worker artifact directory |
-| `output_file` | string | Path to `output.md` (empty on failure). Pipeline always points here even when dispatch spill also created `full_output.md`. |
-| `error_code` | string | Error code on failure |
-| `error_msg` | string | Error message on failure |
-| `duration_ms` | int | Worker duration |
+The `orphaned` state is set by `ax status` when `host.pid` exists but the process is dead.
 
 ---
 
@@ -239,7 +280,7 @@ Success:
 }
 ```
 
-Failure: structured JSON on stdout with non-zero exit:
+Failure:
 ```json
 {
   "status": "error",
@@ -248,7 +289,8 @@ Failure: structured JSON on stdout with non-zero exit:
   "error": {
     "code": "invalid_input",
     "message": "invalid dispatch_id: ...",
-    "suggestion": "Provide a dispatch ID without path separators or traversal segments.",
+    "hint": "Provide a dispatch ID without path separators or traversal segments.",
+    "example": "",
     "retryable": true,
     "partial_artifacts": []
   }
@@ -257,62 +299,54 @@ Failure: structured JSON on stdout with non-zero exit:
 
 ### --version
 
-JSON on stdout:
 ```json
-{"version":"agent-mux v2.0.0-dev"}
+{"version":"agent-mux v3.2.0"}
 ```
 
-### -o=text
+### Steer responses
 
-For normal dispatches only. Prints human-readable summary:
-
-```
-Status: completed
-Engine: codex
-Model: gpt-5.4
-Tokens: input=1234 output=567
-Duration: 84231ms
-
---- Response ---
-Worker response text
+All steer actions return:
+```json
+{
+  "action": "abort",
+  "dispatch_id": "01KM...",
+  "mechanism": "sigterm",
+  "pid": 12345,
+  "delivered": true
+}
 ```
 
-Pipeline mode ignores `-o=text` and always outputs JSON.
+Mechanisms: `sigterm` (async PID kill), `control_file` (control.json), `stdin_fifo` (Codex stdin pipe), `inbox` (inbox file).
 
 ---
 
 ## Lifecycle Subcommand JSON
 
-Lifecycle subcommands (`list`, `status`, `result`, `inspect`, `gc`) default to
-human-readable tables. Pass `--json` for machine-parseable output.
+Lifecycle subcommands (`list`, `status`, `result`, `inspect`, `wait`) default to human-readable tables. Pass `--json` for machine-parseable output.
 
 ### list --json
 
-NDJSON — one `DispatchRecord` per line:
+NDJSON -- one `DispatchRecord` per line:
+
+Source: `dispatch.DispatchRecord` struct in `internal/dispatch/persistence.go`.
 
 ```json
-{"id":"01KM...","salt":"mint-ant-five","status":"completed","engine":"codex","model":"gpt-5.4","role":"lifter","started":"2026-03-28T10:00:00Z","ended":"2026-03-28T10:01:24Z","duration_ms":84231,"cwd":"/repo","truncated":false,"artifact_dir":"/tmp/agent-mux-501/01KM..."}
+{"id":"01KM...","session_id":"thread_...","status":"completed","engine":"codex","model":"gpt-5.4","role":"lifter","started":"2026-03-28T10:00:00Z","ended":"2026-03-28T10:01:24Z","duration_ms":84231,"cwd":"/repo","truncated":false,"response_chars":1250,"artifact_dir":"/tmp/agent-mux-501/01KM...","effort":"high","timeout_sec":1800}
 ```
-
-Flags: `--limit N`, `--status completed|failed|timed_out`, `--engine codex|claude|gemini`.
 
 ### status --json
 
-Single JSON object (same `DispatchRecord` shape):
-
-```json
-{"id":"01KM...","salt":"mint-ant-five","status":"completed","engine":"codex","model":"gpt-5.4","role":"lifter","started":"2026-03-28T10:00:00Z","ended":"2026-03-28T10:01:24Z","duration_ms":84231,"cwd":"/repo","truncated":false,"artifact_dir":"/tmp/agent-mux-501/01KM..."}
-```
+For completed dispatches: same `DispatchRecord` shape. For running/live dispatches: `LiveStatus` shape (see above).
 
 ### result --json
 
 ```json
-{"dispatch_id":"01KM...","response":"Worker response text..."}
+{"dispatch_id":"01KM...","response":"Worker response text...","status":"completed","session_id":"thread_..."}
 ```
 
 With `--artifacts`:
 ```json
-{"dispatch_id":"01KM...","artifact_dir":"/tmp/agent-mux-501/01KM...","artifacts":["/tmp/agent-mux-501/01KM.../notes.md"]}
+{"dispatch_id":"01KM...","artifact_dir":"/tmp/agent-mux-501/01KM...","artifacts":["notes.md"]}
 ```
 
 ### inspect --json
@@ -322,7 +356,8 @@ Combines record, response, artifacts, and dispatch meta:
 ```json
 {
   "dispatch_id": "01KM...",
-  "record": {"id":"01KM...","salt":"mint-ant-five","status":"completed","engine":"codex","model":"gpt-5.4",...},
+  "session_id": "thread_...",
+  "record": {"id":"01KM...","status":"completed","engine":"codex","model":"gpt-5.4",...},
   "response": "Worker response text...",
   "artifact_dir": "/tmp/agent-mux-501/01KM...",
   "artifacts": ["notes.md"],
@@ -330,125 +365,76 @@ Combines record, response, artifacts, and dispatch meta:
 }
 ```
 
-### gc
+### wait
 
-Always JSON output:
-
-```json
-{"kind":"gc","removed":3,"kept":17,"cutoff":"2026-03-21T10:00:00Z"}
+Emits periodic status lines to stderr during polling:
+```
+[42s] running | 7 tools | 3 files changed
 ```
 
-With `--dry-run`:
-```json
-{"kind":"gc_dry_run","would_remove":3,"dispatches":[{"id":"01KM...","started":"...","engine":"codex","status":"completed"}]}
-```
+On completion, emits the result to stdout (same as `result --json` when `--json` is set).
 
 ### config
 
-`config` always emits JSON (no `--json` flag). The top-level `_sources` array lists the config files that were merged.
+`config` always emits JSON. The top-level `_sources` array lists the config files that were merged.
 
 ```json
 {
-  "defaults": {"engine":"codex","model":"","effort":"high","sandbox":"danger-full-access","permission_mode":"","response_max_chars":128000,"max_depth":2,"allow_subdispatch":true},
-  "models": {"claude":["claude-opus-4-6","claude-sonnet-4-6"],"codex":["gpt-5.4","gpt-5.4-mini"]},
-  "roles": {"lifter":{"engine":"codex","model":"gpt-5.4","effort":"high","timeout":1800,"skills":[],"variants":{"claude":{...}}}},
-  "pipelines": {"build":{"max_parallel":8,"steps":[{"name":"plan","role":"architect"},{"name":"execute","role":"lifter"},{"name":"review","role":"auditor"}]}},
+  "defaults": {"engine":"codex","model":"","effort":"high","sandbox":"danger-full-access","permission_mode":"","max_depth":2},
+  "models": {"claude":["claude-opus-4-6"],"codex":["gpt-5.4"]},
+  "roles": {"lifter":{"engine":"codex","model":"gpt-5.4","effort":"high","timeout":1800,"skills":[]}},
   "timeout": {"low":120,"medium":600,"high":1800,"xhigh":2700,"grace":60},
   "liveness": {"heartbeat_interval_sec":15,"silence_warn_seconds":90,"silence_kill_seconds":180},
   "hooks": {"deny":[],"warn":[],"event_deny_action":""},
-  "_sources": ["/Users/alice/.agent-mux/config.toml","/repo/.agent-mux/config.toml"]
+  "async": {"poll_interval":""},
+  "_sources": ["/Users/alice/.agent-mux/config.toml"]
 }
 ```
 
-`config --sources` emits a slimmer object:
-
+`config --sources`:
 ```json
-{"kind":"config_sources","sources":["/Users/alice/.agent-mux/config.toml","/repo/.agent-mux/config.toml"]}
+{"kind":"config_sources","sources":["/Users/alice/.agent-mux/config.toml"]}
 ```
 
 ### config roles --json
 
-JSON array — one entry per role, then one entry per variant (variant entries have `"variant"` set):
+JSON array -- one entry per role, then one entry per variant:
 
 ```json
 [
   {"name":"lifter","engine":"codex","model":"gpt-5.4","effort":"high","timeout":1800},
-  {"name":"lifter","engine":"claude","model":"claude-sonnet-4-6","effort":"high","timeout":1800,"variant":"claude"},
-  {"name":"lifter","engine":"codex","model":"gpt-5.4-mini","effort":"medium","timeout":900,"variant":"mini"},
-  {"name":"scout","engine":"codex","model":"gpt-5.4-mini","effort":"low","timeout":180}
+  {"name":"lifter","engine":"claude","model":"claude-sonnet-4-6","effort":"high","timeout":1800,"variant":"claude"}
 ]
 ```
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `name` | string | Role name |
-| `engine` | string | Resolved engine |
-| `model` | string | Resolved model |
-| `effort` | string | Effort tier |
-| `timeout` | int | Timeout in seconds (0 = not set) |
-| `variant` | string | Variant name; omitted for base role entries |
-
-### config pipelines --json
-
-JSON array — one entry per pipeline:
-
-```json
-[
-  {"name":"build","steps":3},
-  {"name":"research","steps":3},
-  {"name":"tenx","steps":2}
-]
-```
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `name` | string | Pipeline name |
-| `steps` | int | Number of steps defined |
 
 ### config models --json
 
-JSON object — engine name to model list:
-
+JSON object -- engine name to model list:
 ```json
-{
-  "claude": ["claude-opus-4-6","claude-sonnet-4-6"],
-  "codex": ["gpt-5.4","gpt-5.4-mini","gpt-5.3-codex-spark","gpt-5.2-codex"],
-  "gemini": ["gemini-3-flash-preview","gemini-3.1-pro-preview","gemini-2.5-pro","gemini-2.5-flash"]
-}
+{"claude":["claude-opus-4-6","claude-sonnet-4-6"],"codex":["gpt-5.4","gpt-5.4-mini"]}
 ```
 
 ### config skills --json
 
 JSON array of skill discovery results:
-
 ```json
-[
-  {"name":"gaal","path":"/home/user/.claude/skills/gaal/SKILL.md","source":"search_path (~/.claude/skills)"},
-  {"name":"pratchett-read","path":"/home/user/repo/.claude/skills/pratchett-read/SKILL.md","source":"cwd (.claude/skills)"}
-]
+[{"name":"gaal","path":"/home/user/.claude/skills/gaal/SKILL.md","source":"search_path (~/.claude/skills)"}]
 ```
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `name` | string | Skill name (directory name) |
-| `path` | string | Absolute path to SKILL.md |
-| `source` | string | Which search root found it (cwd, configDir, or search_path) |
-
-Deduplicated: if the same skill name appears in multiple roots, only the first match (highest-priority root) is shown.
 
 ### Lifecycle Errors
 
 All lifecycle errors emit:
 ```json
-{"kind":"error","error":{"code":"not_found","message":"no dispatch found for prefix \"01KM\"","suggestion":"","retryable":true,"partial_artifacts":[]}}
+{"kind":"error","error":{"code":"not_found","message":"no dispatch found for prefix \"01KM\"","hint":"","example":"","retryable":true,"partial_artifacts":[]}}
 ```
 
 ---
 
 ## stderr Event Stream
 
-During dispatch, `stderr` carries NDJSON events. Also mirrored to
-`<artifact_dir>/events.jsonl`.
+During dispatch, `stderr` carries NDJSON events (with `--stream`/`-S`). Also mirrored to `<artifact_dir>/events.jsonl`.
+
+Source: `event.Event` struct in `internal/event/event.go`.
 
 Every event includes:
 
@@ -457,15 +443,13 @@ Every event includes:
 | `schema_version` | Always `1` |
 | `type` | Event type string |
 | `dispatch_id` | Dispatch identifier |
-| `salt` | Human-readable salt |
-| `trace_token` | Trace token |
 | `ts` | RFC3339 timestamp |
 
 ### Event Types
 
 | Type | Extra fields | Notes |
 |------|-------------|-------|
-| `dispatch_start` | `engine`, `model`, `effort`, `timeout_sec`, `grace_sec`, `cwd`, `skills` | Emitted at dispatch begin |
+| `dispatch_start` | `engine`, `model`, `effort`, `timeout_sec`, `grace_sec`, `cwd` | Emitted at dispatch begin |
 | `dispatch_end` | `status`, `duration_ms` | Emitted at dispatch end |
 | `heartbeat` | `elapsed_s`, `interval_s`, `last_activity` | Periodic liveness signal |
 | `tool_start` | `tool`, `args` | Harness started a tool call |
@@ -478,7 +462,6 @@ Every event includes:
 | `frozen_warning` | `silence_seconds`, `message` | Extended harness silence |
 | `info` | `error_code` (info code), `message` | Diagnostic info (e.g. `stdin_nudge`) |
 | `error` | `error_code`, `message` | Error during dispatch |
-| `response_truncated` | `full_output_path` | Response exceeded `response_max_chars`, full output written to file |
 | `coordinator_inject` | `message` | Inbox message injected |
 | `warning` | `error_code`, `message` | Non-fatal warning |
 
@@ -525,5 +508,3 @@ Additional codes surface directly from the underlying harness:
 - Codex: `context_length_exceeded`
 - Claude: `result_error`
 - Gemini: `tool_error`
-
-Treat `error.suggestion` as backward-compatible guidance derived from `error.hint` and `error.example`.

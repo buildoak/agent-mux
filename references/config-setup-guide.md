@@ -6,9 +6,10 @@ Practical walkthrough for configuring agent-mux from scratch. For the full TOML 
 
 ```
 .agent-mux/
-  config.toml       # roles, models, pipelines, timeouts, hooks
+  config.toml       # roles, models, timeouts, hooks
+  config.local.toml # machine-local overrides (gitignored)
   prompts/          # system prompt files referenced by roles
-  agents/           # coordinator/profile persona files (.md + optional .toml)
+  agents/           # profile persona files (.md + optional .toml)
 ```
 
 - **Global:** `~/.agent-mux/` -- shared defaults across all projects
@@ -40,10 +41,10 @@ system_prompt_file = "prompts/scout.md"
 Create `.agent-mux/prompts/scout.md` with your role's system prompt, then verify:
 
 ```bash
-printf '{"role":"scout","prompt":"Find all TODOs","cwd":"."}' | agent-mux --stdin --preview
+agent-mux preview -R=scout "Find all TODOs in src/"
 ```
 
-`--preview` resolves config and shows final dispatch parameters without launching a harness.
+The `preview` subcommand resolves config and shows final dispatch parameters without launching a harness.
 
 ---
 
@@ -52,7 +53,12 @@ printf '{"role":"scout","prompt":"Find all TODOs","cwd":"."}' | agent-mux --stdi
 **Resolution order** (later wins):
 
 ```
-hardcoded defaults → ~/.agent-mux/config.toml (global) → <cwd>/.agent-mux/config.toml (project) → --config <path>
+hardcoded defaults
+  > ~/.agent-mux/config.toml (global)
+  > ~/.agent-mux/config.local.toml (global machine-local)
+  > <cwd>/.agent-mux/config.toml (project)
+  > <cwd>/.agent-mux/config.local.toml (project machine-local)
+  > --config <path> (explicit -- skips implicit lookup)
 ```
 
 **Merge rule: defined-wins.** An explicitly set field in a later file overrides the earlier value. An absent field preserves the base. This is per-field, not per-section.
@@ -60,12 +66,12 @@ hardcoded defaults → ~/.agent-mux/config.toml (global) → <cwd>/.agent-mux/co
 | What | Merge behavior |
 |------|---------------|
 | Scalar fields (`engine`, `model`, `timeout`) | Last explicit definition wins |
-| `[models].<engine>`, `skills`, `hooks.deny/warn` | Overlay replaces entire list |
+| `[models].<engine>`, `skills.search_paths`, `hooks.deny/warn` | Union-merged with dedup |
+| `[roles.<name>]` | Deep-merged per field |
 | `[roles.<name>.variants.<v>]` | Additive -- new variants added, collisions deep-merged |
-| `[pipelines.<name>]` | Overlay replaces entire pipeline |
 
 **Global** is for defaults that apply everywhere: engine preferences, model lists, liveness tuning, timeout tiers.
-**Project** is for repo-specific roles, system prompts, skills, pipelines, and hooks.
+**Project** is for repo-specific roles, system prompts, skills, and hooks.
 
 ---
 
@@ -83,7 +89,7 @@ skills = ["web-search", "pratchett-read"]
 system_prompt_file = "prompts/researcher.md"
 ```
 
-`system_prompt_file` is relative to the config directory. `prompts/researcher.md` resolves to `.agent-mux/prompts/researcher.md`.
+`system_prompt_file` is relative to the config directory. `prompts/researcher.md` resolves to `.agent-mux/prompts/researcher.md`. If not in `prompts/`, it falls back to bare filename.
 
 ---
 
@@ -116,33 +122,14 @@ Use variants when task semantics are the same but you want a different engine/mo
 
 ---
 
-## Pipelines
+## Profile/Coordinator Personas
 
-Multi-step dispatch chains defined in TOML.
+Profiles load an orchestrator persona from markdown with YAML frontmatter. Search order for `--profile=reviewer`:
 
-```toml
-[pipelines.review]
-max_parallel = 4
-
-[[pipelines.review.steps]]
-name = "scan"
-role = "scout"
-prompt_template = "Scan {cwd} for security issues"
-
-[[pipelines.review.steps]]
-name = "analyze"
-role = "researcher"
-depends_on = ["scan"]
-prompt_template = "Deep-dive the issues found in the scan step"
-```
-
-`depends_on` creates ordering; independent steps run in parallel up to `max_parallel`. See [pipeline-guide.md](pipeline-guide.md) for fan-out patterns and step field reference.
-
----
-
-## Coordinator/Profile Personas
-
-Profiles load an orchestrator persona from markdown with YAML frontmatter. Search order for `--profile=reviewer`: `<cwd>/.claude/agents/` then `<cwd>/agents/` then `<cwd>/.agent-mux/agents/` then `~/.agent-mux/agents/`.
+1. `<cwd>/.claude/agents/reviewer.md`
+2. `<cwd>/agents/reviewer.md`
+3. `<cwd>/.agent-mux/agents/reviewer.md`
+4. `~/.agent-mux/agents/reviewer.md`
 
 ```markdown
 ---
@@ -156,7 +143,41 @@ skills:
 You are a senior code reviewer. Focus on correctness, edge cases, and test coverage.
 ```
 
-If `reviewer.toml` exists beside `reviewer.md`, it loads as a config overlay -- the coordinator can bring its own roles, pipelines, and hooks. When profile, `system_prompt_file`, and inline `system_prompt` coexist, they compose in order: profile body, then prompt file, then inline text.
+If `reviewer.toml` exists beside `reviewer.md`, it loads as a config overlay -- the profile can bring its own roles and hooks. When profile, `system_prompt_file`, and inline `system_prompt` coexist, they compose in order: role prompt file, then profile body, then inline text.
+
+In `--stdin` mode, `"coordinator"` is a legacy alias for `"profile"`. Both set the same field; providing both with different values is an error.
+
+---
+
+## Skills Configuration
+
+Skills are SKILL.md files discovered by name from search paths.
+
+```toml
+[skills]
+search_paths = [
+  "~/.claude/skills",
+  "~/thinking/pratchett-os/coordinator/.claude/skills",
+]
+```
+
+Search paths from all config layers are union-merged with dedup. Each skill is resolved as `<search_root>/<name>/SKILL.md`. First match wins across all search roots.
+
+Discover available skills:
+
+```bash
+agent-mux config skills           # tabular: NAME, PATH, SOURCE
+agent-mux config skills --json    # JSON array
+```
+
+File-based persistence for dispatch records:
+
+```bash
+agent-mux config                  # full resolved config as JSON
+agent-mux config --sources        # just the loaded config file paths
+agent-mux config roles            # tabular role/variant table
+agent-mux config models           # model lists per engine
+```
 
 ---
 
@@ -168,7 +189,7 @@ Pattern-based deny/warn rules on prompts and harness events.
 [hooks]
 deny = ["DROP TABLE", "vault.sh export"]
 warn = ["rm -rf", "git push --force", "curl", "wget"]
-event_deny_action = "deny"   # "deny" kills dispatch; "warn" injects caution text
+event_deny_action = "kill"   # "kill" kills dispatch; "warn" injects caution text
 ```
 
 **Limitation:** Event-level matching can false-positive during harness orientation (e.g., Codex reading workspace files containing denied patterns). Prompt-level deny is reliable; event-level deny is experimental.
@@ -193,4 +214,4 @@ One source of truth, globally available. Repo changes are immediately live.
 model = "gpt-5.4-mini"   # cost control for this project
 ```
 
-**Sharing roles across a team:** Check `.agent-mux/` into the repo. Team members get the same roles, prompts, and pipelines on clone. Global config holds personal preferences; project config holds shared definitions.
+**Sharing roles across a team:** Check `.agent-mux/` into the repo. Team members get the same roles, prompts, and skill paths on clone. Global config holds personal preferences; project config holds shared definitions.

@@ -1,17 +1,17 @@
 # GSD Coordinator Reference
 
-The GSD (Get Shit Done) coordinator is a multi-step task coordinator that orchestrates agent-mux workers for complex pipelines. It receives a task from a parent thread, decomposes it into steps, dispatches workers via agent-mux, verifies output, and returns a clean summary.
+The GSD (Get Shit Done) coordinator is a multi-step task coordinator that orchestrates agent-mux workers for complex tasks. It receives a task from a parent thread, decomposes it into steps, dispatches workers via agent-mux, verifies output, and returns a clean summary.
 
 ## When to Use GSD
 
 - Task has 3+ dependent steps
-- Multi-model pipeline needed (e.g., Codex implements, Claude reviews)
+- Multi-model work needed (e.g., Codex implements, Claude reviews)
 - Research synthesis requiring fan-out across sources
 - Complex audit or analysis requiring file artifacts
 
 Do NOT use for: single-step tasks, quick lookups, conversational responses. A single `agent-mux` dispatch is sufficient for those.
 
-## How GSD Works with agent-mux v2
+## How GSD Works with agent-mux
 
 GSD coordinators dispatch all work through agent-mux using JSON `--stdin`. The coordinator itself is an LLM (typically Opus) that reads its spec, plans steps, and executes them sequentially or in parallel.
 
@@ -23,15 +23,39 @@ Every worker dispatch uses a role from `config.toml`. The coordinator selects th
 printf '{"role":"lifter","prompt":"Implement retries in src/http/client.ts","cwd":"/repo"}' | agent-mux --stdin
 ```
 
-### Pipeline templates
+### Async dispatch with wait/result
 
-For common multi-step patterns, dispatch a named pipeline instead of individual workers:
+For parallel or long-running work, use `--async` and poll with `wait`/`result`:
 
 ```bash
-printf '{"pipeline":"build","prompt":"Redesign the auth flow","cwd":"/repo"}' | agent-mux --stdin
+# Dispatch async
+printf '{"role":"lifter","prompt":"Implement retries","cwd":"/repo"}' | agent-mux --stdin --async
+# Returns: {"schema_version":1,"kind":"async_started","dispatch_id":"01KM...","artifact_dir":"..."}
+
+# Wait for completion (emits status to stderr)
+agent-mux wait 01KM...
+
+# Read the result
+agent-mux result 01KM... --json
 ```
 
-Three built-in pipelines: `build` (architect -> lifter -> auditor), `research` (scout fan-out -> researcher -> architect synthesis), `tenx` (grunt fan-out -> auditor merge).
+### Sequential multi-step dispatch
+
+For dependent steps, dispatch synchronously and chain results:
+
+```bash
+# Step 1: Scout
+SCOUT=$(printf '{"role":"scout","prompt":"Find all auth files","cwd":"/repo"}' | agent-mux --stdin)
+SCOUT_RESPONSE=$(echo "$SCOUT" | jq -r '.response')
+
+# Step 2: Implement (uses scout output)
+printf '{"role":"lifter","prompt":"Implement auth refactor. Context:\n%s","cwd":"/repo"}' "$SCOUT_RESPONSE" \
+  | agent-mux --stdin
+
+# Step 3: Audit
+printf '{"role":"auditor","prompt":"Review the auth refactor for regressions","cwd":"/repo"}' \
+  | agent-mux --stdin
+```
 
 ## Orchestration Patterns
 
@@ -47,15 +71,39 @@ Different engines, different blind spots, high confidence.
 
 ### Fan-Out
 
-Spawn N parallel workers on independent subtasks using `grunt` or `batch` roles. Workers return inline by default. Over 200 lines, workers write to `_workbench/YYYY-MM-DD-{engine}-{topic}.md`. Coordinator synthesizes all returns into one output.
+Spawn N parallel workers on independent subtasks using `grunt` or `batch` roles with `--async`. Workers return inline by default. Over 200 lines, workers write to `_workbench/YYYY-MM-DD-{engine}-{topic}.md`. Coordinator collects results via `ax wait` and `ax result`, then synthesizes all returns into one output.
 
-### Handoff Modes (between pipeline steps)
+```bash
+# Dispatch parallel workers
+for topic in "auth" "billing" "search"; do
+  printf '{"role":"grunt","prompt":"Scan %s module","cwd":"/repo"}' "$topic" \
+    | agent-mux --stdin --async
+done
 
-| Mode | Content passed to next step |
-|------|----------------------------|
-| `summary_and_refs` | Summary + path to `output.md` + artifact dir (default) |
-| `full_concat` | Full content of `output.md` |
-| `refs_only` | Only `output.md` path and artifact dir |
+# Collect all results
+for id in $IDS; do
+  agent-mux wait "$id"
+  agent-mux result "$id" --json
+done
+```
+
+### Mid-flight Steering
+
+Use `steer` to redirect a running worker without killing it:
+
+```bash
+# Nudge a slow worker to wrap up
+agent-mux steer 01KM... nudge "Focus on the critical path, skip edge cases"
+
+# Redirect a worker that went off track
+agent-mux steer 01KM... redirect "Stop the refactor, just fix the failing test"
+
+# Extend timeout for a worker doing good work
+agent-mux steer 01KM... extend 600
+
+# Abort a stuck worker
+agent-mux steer 01KM... abort
+```
 
 ## Setting Up a GSD Coordinator
 
@@ -104,7 +152,7 @@ Use role-based dispatch for all workers. Match the role to the step:
 
 ### 3. Optional companion TOML
 
-A sibling `.toml` file adds project-specific roles or pipeline overrides:
+A sibling `.toml` file adds project-specific roles:
 
 ```toml
 [roles.project-lifter]
@@ -129,12 +177,13 @@ agent-mux --profile get-shit-done-agent --cwd /path/to/project "task description
 
 Profile resolution searches: `<cwd>/.claude/agents/<name>.md`, then `<cwd>/agents/<name>.md`, then `<cwd>/.agent-mux/agents/<name>.md`, then `~/.agent-mux/agents/<name>.md`.
 
-## Production Reference
+## Durable Join Key
 
-The live v2 GSD coordinator used in pratchett-os is at:
-`coordinator/.claude/agents/get-shit-done-agent.md`
+Use `session_id` from dispatch result metadata as the durable join key for correlating work across dispatches within a GSD run. It is present in both `result --json` output and `inspect --json` output.
 
-It defines 10 role families, escalation ladders, recovery decision trees, verification gates, and a full worker communication protocol. Use it as the reference implementation when building project-specific coordinators.
+```bash
+agent-mux result 01KM... --json | jq -r '.session_id'
+```
 
 ## Output Contract
 
@@ -144,7 +193,7 @@ The GSD coordinator returns to its parent:
 1. **Status:** `done` | `blocked` | `needs-decision`
 2. **Summary:** 3-5 sentences covering what was done, findings, decisions
 3. **Files changed:** absolute paths to artifacts
-4. **Dispatch log:** salt + status per worker dispatched
+4. **Dispatch log:** dispatch_id + status per worker dispatched
 
 ## Key Anti-Patterns
 

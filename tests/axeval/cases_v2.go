@@ -3,6 +3,7 @@
 package axeval
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -139,51 +140,7 @@ func buildCasesV2(cwd string) []TestCase {
 			),
 		},
 		{
-			Name:         "response-truncation",
-			Category:     CatCorrectness,
-			Engine:       "codex",
-			Model:        "gpt-5.4-mini",
-			Effort:       "high",
-			Prompt:       "Write exactly 500 words about the Go programming language. Do not stop early.",
-			CWD:          cwd,
-			TimeoutSec:   120,
-			MaxWallClock: 3 * time.Minute,
-			SkipSkills:   true,
-			ExtraFlags:   []string{"--response-max-chars=200"},
-			Evaluate: compose(
-				statusIs("completed"),
-				func(r Result) Verdict {
-					raw, err := stdoutJSONObject(r)
-					if err != nil {
-						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
-					}
-					if err := requireBoolField(raw, "response_truncated", true); err != nil {
-						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
-					}
-					return Verdict{Pass: true, Score: 1.0, Reason: "response_truncated=true"}
-				},
-				func(r Result) Verdict {
-					raw, err := stdoutJSONObject(r)
-					if err != nil {
-						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
-					}
-					fullOutputPath, err := fullOutputPathFromJSONObject(raw)
-					if err != nil {
-						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
-					}
-					data, readErr := os.ReadFile(fullOutputPath)
-					if readErr != nil {
-						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("read %s: %v", fullOutputPath, readErr)}
-					}
-					if len(data) <= 200 {
-						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("full output len=%d, want > 200", len(data))}
-					}
-					return Verdict{Pass: true, Score: 1.0, Reason: "full output file exists and exceeds 200 chars"}
-				},
-			),
-		},
-		{
-			Name:         "scout-oversized-output-guardrail",
+			Name:         "scout-role-completion",
 			Category:     CatCorrectness,
 			Engine:       "codex",
 			Model:        "gpt-5.4-mini",
@@ -193,7 +150,7 @@ func buildCasesV2(cwd string) []TestCase {
 			TimeoutSec:   120,
 			MaxWallClock: 3 * time.Minute,
 			SkipSkills:   true,
-			ExtraFlags:   []string{"-R=scout", "--response-max-chars=200"},
+			ExtraFlags:   []string{"-R=scout"},
 			Evaluate: compose(
 				statusIs("completed"),
 				func(r Result) Verdict {
@@ -202,14 +159,10 @@ func buildCasesV2(cwd string) []TestCase {
 						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
 					}
 					response, _ := jsonStringField(raw, "response")
-					if len(response) <= 200 {
-						return Verdict{Pass: true, Score: 1.0, Reason: "scout response stayed within cap"}
+					if strings.TrimSpace(response) == "" {
+						return Verdict{Pass: false, Score: 0.0, Reason: "scout response is empty"}
 					}
-					fullOutputPath, pathErr := fullOutputPathFromJSONObject(raw)
-					if pathErr == nil && fullOutputPath != "" {
-						return Verdict{Pass: true, Score: 1.0, Reason: "oversized scout response spilled to full_output.md"}
-					}
-					return Verdict{Pass: false, Score: 0.0, Reason: "scout response exceeded cap without spill path"}
+					return Verdict{Pass: true, Score: 1.0, Reason: "scout role completed with non-empty response"}
 				},
 			),
 		},
@@ -227,19 +180,34 @@ func buildCasesV2(cwd string) []TestCase {
 			Evaluate: compose(
 				statusIs("completed"),
 				func(r Result) Verdict {
-					meta, err := artifactJSONObject(r, "_dispatch_meta.json")
+					// meta.json lives at ~/.agent-mux/dispatches/<dispatch_id>/meta.json
+					raw, err := stdoutJSONObject(r)
 					if err != nil {
 						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
 					}
-					for _, key := range []string{"dispatch_id", "engine", "model", "started_at", "ended_at"} {
+					dispatchID, ok := jsonStringField(raw, "dispatch_id")
+					if !ok || strings.TrimSpace(dispatchID) == "" {
+						return Verdict{Pass: false, Score: 0.0, Reason: "dispatch_id missing from result"}
+					}
+					homeDir, err := os.UserHomeDir()
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("resolve home dir: %v", err)}
+					}
+					metaPath := fmt.Sprintf("%s/.agent-mux/dispatches/%s/meta.json", homeDir, dispatchID)
+					data, err := os.ReadFile(metaPath)
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("read meta.json: %v", err)}
+					}
+					var meta map[string]any
+					if err := json.Unmarshal(data, &meta); err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("parse meta.json: %v", err)}
+					}
+					for _, key := range []string{"dispatch_id", "engine", "model", "started_at"} {
 						if err := requireNonEmptyStringField(meta, key); err != nil {
-							return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("_dispatch_meta.json: %v", err)}
+							return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("meta.json: %v", err)}
 						}
 					}
-					if err := requireExactStringField(meta, "status", "completed"); err != nil {
-						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("_dispatch_meta.json: %v", err)}
-					}
-					return Verdict{Pass: true, Score: 1.0, Reason: "_dispatch_meta.json fields valid"}
+					return Verdict{Pass: true, Score: 1.0, Reason: "meta.json fields valid"}
 				},
 				artifactExists("events.jsonl"),
 				func(r Result) Verdict {

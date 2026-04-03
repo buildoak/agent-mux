@@ -3,59 +3,55 @@
 ## Contents
 
 - CLI flag table
+- Subcommands
 - DispatchSpec JSON fields (--stdin)
-- Flag/JSON field mapping
 - Defaults and precedence
+- Persistence layout
 
 ---
 
 ## CLI Flags
 
-Source of truth: `cmd/agent-mux/main.go` (cliFlags struct).
+Source of truth: `cmd/agent-mux/main.go` — `newFlagSet()` at line 1150, `cliFlags` struct at line 67.
 
-### Common (all engines)
+### Dispatch flags (all engines)
 
 | Flag | Short | Type | Default | Notes |
 |------|-------|------|---------|-------|
 | `--engine` | `-E` | string | from config | `codex`, `claude`, `gemini` |
+| `--role` | `-R` | string | unset | Role name from config.toml |
+| `--variant` | | string | unset | Variant within a role (requires `--role`) |
+| `--profile` | | string | unset | Coordinator persona (loads `.claude/agents/<name>.md`) |
 | `--cwd` | `-C` | string | current dir | Working directory for the harness |
 | `--model` | `-m` | string | from role/config | Model override |
 | `--effort` | `-e` | string | `high` | `low`, `medium`, `high`, `xhigh` |
 | `--timeout` | `-t` | int | effort-mapped | Timeout in seconds |
-| `--role` | `-R` | string | unset | Role name from config.toml |
-| `--variant` | | string | unset | Variant within a role |
 | `--system-prompt` | `-s` | string | unset | Appended system context |
 | `--system-prompt-file` | | string | unset | File loaded as system prompt (resolved from shell cwd) |
 | `--prompt-file` | | string | unset | Prompt from file instead of positional arg |
-| `--context-file` | | string | unset | Large context file; injects read preamble |
+| `--context-file` | | string | unset | Large context file; injects read preamble (`$AGENT_MUX_CONTEXT`) |
 | `--skill` | | string[] | `[]` | Repeatable; loads `<cwd>/.claude/skills/<name>/SKILL.md` |
-| `--profile` | | string | unset | Coordinator persona (loads `.claude/agents/<name>.md`) |
-| `--coordinator` | | string | unset | Legacy alias for `--profile` |
-| `--pipeline` | `-P` | string | unset | Named pipeline from config |
 | `--config` | | string | unset | Explicit config path (overrides default lookup) |
 | `--artifact-dir` | | string | auto | Override artifact directory |
-| `--salt` | | string | auto-generated | Human-readable dispatch salt |
 | `--recover` | | string | unset | Dispatch ID to continue from |
 | `--signal` | | string | unset | Dispatch ID to send a message to |
-| `--output` | `-o` | string | `json` | Output format: `json` or `text` |
-| `--full` | `-f` | bool | `true` | Full access mode |
+| `--full` | `-f` | bool | `true` | Full access mode (Codex sandbox bypass) |
 | `--no-full` | | bool | `false` | Disable full access |
 | `--stdin` | | bool | `false` | Read DispatchSpec JSON from stdin |
 | `--max-depth` | | int | `2` | Maximum recursive dispatch depth |
-| `--response-max-chars` | | int | from config | Truncate response beyond this |
-| `--no-subdispatch` | | bool | `false` | Disable recursive dispatch |
-| `--verbose` | `-v` | bool | `false` | Raw harness lines on stderr |
-| `--yes` | | bool | `false` | Skip TTY confirmation |
 | `--skip-skills` | | bool | `false` | Skip skill injection (keep role engine/model/effort) |
-| `--version` | | bool | | Print version (no short flag) |
-| `--help` | | bool | | Print help |
+| `--yes` | | bool | `false` | Skip TTY confirmation (auto-set when `--stdin`) |
+| `--async` | | bool | `false` | Return immediately with dispatch ID, run worker in background |
+| `--verbose` | `-v` | bool | `false` | Raw harness lines on stderr |
+| `--stream` | `-S` | bool | `false` | Stream all events to stderr |
+| `--version` | | bool | | Print version |
 
 ### Codex-specific
 
 | Flag | Short | Type | Default | Notes |
 |------|-------|------|---------|-------|
 | `--sandbox` | | string | `danger-full-access` | `danger-full-access`, `workspace-write`, `read-only` |
-| `--reasoning` | `-r` | string | `medium` | Codex reasoning effort |
+| `--reasoning` | `-r` | string | `medium` | Codex reasoning effort (`model_reasoning_effort`) |
 | `--add-dir` | | string[] | `[]` | Repeatable additional writable directories |
 
 ### Claude-specific
@@ -67,38 +63,55 @@ Source of truth: `cmd/agent-mux/main.go` (cliFlags struct).
 
 ### Gemini-specific
 
-Gemini reuses `--permission-mode` for its `--approval-mode` flag.
+Gemini reuses `--permission-mode` for its `--approval-mode` flag (default: `yolo`).
 
 ---
 
-## Config Subcommand
+## Subcommands
+
+Source of truth: `cmd/agent-mux/main.go` — `splitCommand()`, `help.go`.
 
 ```
-agent-mux config [flags]
-agent-mux config roles [flags]
-agent-mux config pipelines [flags]
-agent-mux config models [flags]
-agent-mux config skills [flags]
+agent-mux [flags] <prompt>        # dispatch (implicit)
+agent-mux dispatch [flags] <prompt>
+agent-mux preview [flags] <prompt>
+agent-mux help
+
+agent-mux list [--limit N] [--status <filter>] [--engine <filter>] [--json]
+agent-mux status <dispatch_id> [--json]
+agent-mux result <dispatch_id> [--json] [--artifacts] [--no-wait]
+agent-mux inspect <dispatch_id> [--json]
+agent-mux wait [--poll 60s] <dispatch_id> [--json]
+
+agent-mux steer <dispatch_id> abort
+agent-mux steer <dispatch_id> nudge ["message"]
+agent-mux steer <dispatch_id> redirect "<instructions>"
+agent-mux steer <dispatch_id> extend <seconds>
+
+agent-mux config [--sources]
+agent-mux config roles [--json]
+agent-mux config models [--json]
+agent-mux config skills [--json]
+
+agent-mux --signal <dispatch_id> "<message>"
+agent-mux --stdin < spec.json
+agent-mux --version
+agent-mux -- help          # literal prompt escape
 ```
 
-Introspect the fully-resolved, merged configuration. No dispatch is performed.
+### Config subcommands
 
-### Shared flags (all config modes)
+Shared flags for all config modes: `--config`, `--cwd`.
 
-| Flag | Type | Default | Notes |
-|------|------|---------|-------|
-| `--config` | string | unset | Explicit config path (overrides default lookup) |
-| `--cwd` | string | unset | Working directory for project config discovery |
-
-### `config` (root)
+#### `config` (root)
 
 | Flag | Type | Default | Notes |
 |------|------|---------|-------|
 | `--sources` | bool | `false` | Emit only the `config_sources` object (loaded file list) |
 
-Always emits JSON. No `--json` flag. The output includes a top-level `_sources` array.
+Always emits JSON. The output includes a top-level `_sources` array.
 
-### `config roles`
+#### `config roles`
 
 | Flag | Type | Default | Notes |
 |------|------|---------|-------|
@@ -106,23 +119,15 @@ Always emits JSON. No `--json` flag. The output includes a top-level `_sources` 
 
 Default: tabular table of NAME, ENGINE, MODEL, EFFORT, TIMEOUT. Variants shown indented under their parent role.
 
-### `config pipelines`
-
-| Flag | Type | Default | Notes |
-|------|------|---------|-------|
-| `--json` | bool | `false` | Emit JSON array instead of tabular output |
-
-Default: tabular NAME, STEPS.
-
-### `config models`
+#### `config models`
 
 | Flag | Type | Default | Notes |
 |------|------|---------|-------|
 | `--json` | bool | `false` | Emit JSON object instead of plain text |
 
-Default: one line per engine — `<engine>: <model>, <model>, ...`.
+Default: one line per engine -- `<engine>: <model>, <model>, ...`.
 
-### `config skills`
+#### `config skills`
 
 | Flag | Type | Default | Notes |
 |------|------|---------|-------|
@@ -130,84 +135,114 @@ Default: one line per engine — `<engine>: <model>, <model>, ...`.
 
 Default: tabular table of NAME, PATH, SOURCE. Scans cwd, configDir, and `[skills] search_paths`. Deduplicated: first match wins.
 
+### Lifecycle subcommands
+
+#### `list`
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--limit` | int | `20` | Maximum records to print; `0` = all |
+| `--status` | string | unset | Filter: `completed`, `failed`, `timed_out` |
+| `--engine` | string | unset | Filter: `codex`, `claude`, `gemini` |
+| `--json` | bool | `false` | Emit NDJSON (one JSON object per line) |
+
+No positional arguments. Default output is tabular: ID (12 chars), STATUS, ENGINE, MODEL, DURATION, CWD (48 chars). Sorted by start time (newest first).
+
+#### `status <dispatch_id>`
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit full record as JSON |
+
+Accepts full dispatch ID or unique prefix. For completed dispatches shows: Status, Engine/Model, Duration, Started, Truncated, ArtifactDir. For running/live dispatches shows: State, Elapsed, Last Activity, Tools Used, Files Changed, ArtifactDir. Detects orphaned processes via `host.pid`.
+
+#### `result <dispatch_id>`
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit JSON |
+| `--artifacts` | bool | `false` | List artifact directory contents |
+| `--no-wait` | bool | `false` | Return error if dispatch is still running instead of blocking |
+
+Accepts full dispatch ID or unique prefix. Without `--artifacts`, prints stored result text. Falls back to `full_output.md` from artifact dir. If dispatch is still running and `--no-wait` is not set, polls until done.
+
+#### `inspect <dispatch_id>`
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit full inspection payload as JSON |
+
+Full view: record, response, artifacts, and dispatch metadata. JSON mode keys: `dispatch_id`, `session_id`, `record`, `response`, `artifact_dir`, `artifacts`, and optionally `meta`.
+
+#### `wait <dispatch_id>`
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit JSON result when done |
+| `--poll` | string | `60s` or config | Status poll interval (Go duration: `5s`, `1m`) |
+| `--config` | string | unset | Config path for poll interval resolution |
+| `--cwd` | string | unset | Working directory for config discovery |
+
+Poll interval precedence: CLI `--poll` > `[async].poll_interval` from config > 60s default. Emits status lines to stderr during wait. Detects orphaned processes.
+
+### Steer subcommands
+
+| Action | Syntax | Notes |
+|--------|--------|-------|
+| `abort` | `steer <id> abort` | SIGTERM to host PID, or `control.json` for foreground |
+| `nudge` | `steer <id> nudge ["msg"]` | Default: "Please wrap up..." |
+| `redirect` | `steer <id> redirect "<instructions>"` | Instructions required |
+| `extend` | `steer <id> extend <seconds>` | Positive integer required |
+
+Delivery mechanism priority: stdin FIFO (codex only) > inbox file.
+
 ---
 
 ## DispatchSpec JSON Fields (--stdin)
 
-When using `--stdin`, pipe a JSON object with these fields.
+When using `--stdin`, pipe a JSON object. Source of truth: `types.DispatchSpec` in `internal/types/types.go` and `materializeStdinDispatchSpec` in `main.go`.
 
 ### Core fields
 
 | Field | JSON key | Type | Required | Default | Notes |
 |-------|----------|------|----------|---------|-------|
 | Prompt | `prompt` | string | yes | - | The task prompt |
-| Working directory | `cwd` | string | yes | shell cwd | Harness working directory |
-| Role | `role` | string | - | - | Resolves engine/model/effort/timeout |
-| Variant | `variant` | string | - | - | Engine swap within a role |
+| Working directory | `cwd` | string | - | shell cwd | Harness working directory |
 | Engine | `engine` | string | role or this | - | `codex`, `claude`, `gemini` |
 | Model | `model` | string | - | from role/config | Model override |
 | Effort | `effort` | string | - | `high` | `low`, `medium`, `high`, `xhigh` |
 | System prompt | `system_prompt` | string | - | - | Appended system context |
+| Role | `role` | string | - | - | Resolves engine/model/effort/timeout |
+| Variant | `variant` | string | - | - | Engine swap within a role |
+| Profile | `profile` | string | - | - | Coordinator persona name |
 | Skills | `skills` | string[] | - | `[]` | Skill names to inject |
 | Skip skills | `skip_skills` | bool | - | `false` | Skip skill injection |
-| Pipeline | `pipeline` | string | - | - | Named pipeline from config |
-| Profile | `profile` | string | - | - | Coordinator persona name |
 | Context file | `context_file` | string | - | - | Path to large context file |
 
 ### Control fields
 
 | Field | JSON key | Type | Default | Notes |
 |-------|----------|------|---------|-------|
+| Dispatch ID | `dispatch_id` | string | auto ULID | Unique dispatch identifier |
 | Timeout | `timeout_sec` | int | effort-mapped | Override in seconds |
 | Grace period | `grace_sec` | int | 60 | Grace period in seconds |
 | Max depth | `max_depth` | int | 2 | Recursive dispatch limit |
-| Allow subdispatch | `allow_subdispatch` | bool | true | Recursive dispatch toggle |
-| Full access | `full_access` | bool | true | Full filesystem access |
-| Response max chars | `response_max_chars` | int | 128000 | Uniform dispatch response cap; `0` disables capping |
-| Salt | `salt` | string | auto | Human-readable identifier |
-| Dispatch ID | `dispatch_id` | string | auto ULID | Unique dispatch identifier |
+| Depth | `depth` | int | 0 | Current recursion depth |
+| Full access | `full_access` | bool | true | Full filesystem access (Codex sandbox) |
 | Artifact dir | `artifact_dir` | string | auto | Override artifact directory |
+| Engine options | `engine_opts` | map | `{}` | Adapter-specific overrides |
 
-### Recovery and continuation
-
-| Field | JSON key | Type | Notes |
-|-------|----------|------|-------|
-| Continue from | `continues_dispatch_id` | string | Prior dispatch ID for recovery |
-
-### Pipeline-internal (set by pipeline orchestrator, not by callers)
+### Recovery
 
 | Field | JSON key | Type | Notes |
 |-------|----------|------|-------|
-| Pipeline ID | `pipeline_id` | string | Set for steps within a pipeline |
-| Pipeline step | `pipeline_step` | int | Step index within pipeline |
-| Parent dispatch | `parent_dispatch_id` | string | Parent dispatch for pipeline steps |
-| Receives | `receives` | string | Named output from prior step |
-| Pass output as | `pass_output_as` | string | Name for this step's output |
-| Parallel | `parallel` | int | Fan-out count |
-| Handoff mode | `handoff_mode` | string | `summary_and_refs`, `full_concat`, `refs_only` |
-| Depth | `depth` | int | Current recursion depth |
+| Recover from | `recover` | string | Prior dispatch ID for recovery |
 
-### Engine options
+### stdin-only alias
 
-| Field | JSON key | Type | Notes |
-|-------|----------|------|-------|
-| Engine options | `engine_opts` | map | Adapter-specific overrides |
-
----
-
-## Flag/JSON Mapping
-
-In `--stdin` mode, CLI dispatch flags are ignored (a warning is printed if
-both are present). The JSON payload is the sole source of dispatch parameters.
-
-Key differences from CLI mode:
-
-- `full_access` defaults to `true` in stdin mode (unless explicitly set to `false`)
-- `allow_subdispatch` defaults to `true` in stdin mode
-- `handoff_mode` defaults to `summary_and_refs` in stdin mode
-- `grace_sec` defaults to `60` in stdin mode
-- `dispatch_id` is auto-generated as a ULID if not provided
-- `cwd` falls back to the shell's current directory if empty
+| Field | JSON key | Notes |
+|-------|----------|-------|
+| Coordinator | `coordinator` | Legacy alias for `profile` (conflicts = error) |
 
 ---
 
@@ -228,7 +263,7 @@ For `timeout`:
 ```
 Explicit timeout_sec in JSON / CLI --timeout
   > role.timeout from config
-  > profile/coordinator frontmatter timeout
+  > profile frontmatter timeout
   > timeout table for chosen effort level
 ```
 
@@ -239,111 +274,32 @@ Config file loading order (later wins on conflicts):
   > ~/.agent-mux/config.local.toml (global machine-local)
   > <cwd>/.agent-mux/config.toml (project)
   > <cwd>/.agent-mux/config.local.toml (project machine-local)
-  > --config path (explicit overlay — skips implicit lookup above)
-  > coordinator companion .toml (if --profile is set)
+  > --config path (explicit -- skips implicit lookup above)
+  > profile companion .toml (if --profile is set)
 ```
 
 ---
 
-## Lifecycle Subcommands
+## Persistence Layout
 
-Post-dispatch introspection and maintenance. All lifecycle subcommands emit structured JSON errors on failure (`{"kind":"error","error":{...}}`). Dispatch records are stored in the durable JSONL index at `~/.agent-mux/store/`.
-
-### `agent-mux list`
-
-List recent dispatches from the durable store.
+Dispatch records are stored as JSON files under `~/.agent-mux/dispatches/<dispatch_id>/`.
 
 ```
-agent-mux list [--limit N] [--status <filter>] [--engine <filter>] [--json]
+~/.agent-mux/dispatches/<dispatch_id>/
+  meta.json       # PersistentDispatchMeta — written at dispatch start
+  result.json     # PersistentDispatchResult — written at dispatch end
 ```
 
-| Flag | Type | Default | Notes |
-|------|------|---------|-------|
-| `--limit` | int | `20` | Maximum records to print; `0` = all |
-| `--status` | string | unset | Filter by status: `completed`, `failed`, `timed_out` |
-| `--engine` | string | unset | Filter by engine: `codex`, `claude`, `gemini` |
-| `--json` | bool | `false` | Emit NDJSON (one JSON object per line) |
-
-No positional arguments accepted. Default output is a tabular table with columns: ID (truncated to 12 chars), SALT, STATUS, ENGINE, MODEL, DURATION, CWD (truncated to 48 chars). Records are shown in chronological order; `--limit` takes the last N.
-
-### `agent-mux status <dispatch_id>`
-
-Show status details for a single dispatch.
+Runtime artifacts during dispatch:
 
 ```
-agent-mux status [--json] <dispatch_id>
+<artifact_dir>/                  # default: /tmp/agent-mux-<uid>/<dispatch_id>/
+  meta.json                      # DispatchMeta (artifact-local copy)
+  status.json                    # LiveStatus (updated during dispatch)
+  events.jsonl                   # NDJSON event log
+  host.pid                       # PID of host process (async dispatches)
+  control.json                   # Steering control file (written by steer)
+  inbox.md                       # Coordinator mailbox
+  full_output.md                 # Full response when truncation occurred
+  (worker files)                 # Any files the worker created
 ```
-
-| Flag | Type | Default | Notes |
-|------|------|---------|-------|
-| `--json` | bool | `false` | Emit full record as JSON |
-
-Accepts a full dispatch ID or a unique prefix. The prefix is validated via `sanitize.ValidateDispatchID`. Default output shows:
-
-| Field | Description |
-|-------|-------------|
-| Status | `completed`, `failed`, or `timed_out` |
-| Engine/Model | Combined `engine / model` display |
-| Duration | Formatted as `Nms` (< 1s) or `Ns` (>= 1s) |
-| Started | RFC3339 timestamp |
-| Truncated | `true` or `false` |
-| Salt | Human-readable dispatch salt |
-| ArtifactDir | Path to artifact directory |
-
-### `agent-mux result <dispatch_id>`
-
-Retrieve the response text or artifact listing for a dispatch.
-
-```
-agent-mux result [--json] [--artifacts] <dispatch_id>
-```
-
-| Flag | Type | Default | Notes |
-|------|------|---------|-------|
-| `--json` | bool | `false` | Emit JSON |
-| `--artifacts` | bool | `false` | List artifact directory contents instead of result text |
-
-Accepts a full dispatch ID or a unique prefix. When `--artifacts` is set, lists files in the artifact directory (resolved from the dispatch record or via `recovery.ResolveArtifactDir`). Without `--artifacts`, prints the stored result text. Falls back to reading `full_output.md` from the artifact directory when the primary result file is missing (covers truncated dispatches and legacy records).
-
-### `agent-mux inspect <dispatch_id>`
-
-Deep view of a dispatch: full record, response, artifacts, and dispatch metadata.
-
-```
-agent-mux inspect [--json] <dispatch_id>
-```
-
-| Flag | Type | Default | Notes |
-|------|------|---------|-------|
-| `--json` | bool | `false` | Emit full inspection payload as JSON |
-
-Accepts a full dispatch ID or a unique prefix. The dispatch record must exist (no prefix-only fallback). Default output shows all record fields including Role, Variant, Started, Ended, Duration, Truncated, Salt, Cwd, and ArtifactDir. If artifacts exist, they are listed below the record. If a response is stored, it is printed under a `--- Response ---` separator.
-
-JSON mode emits a single object with keys: `dispatch_id`, `record`, `response`, `artifact_dir`, `artifacts`, and optionally `meta` (the `dispatch_meta.json` from the artifact directory, if present).
-
-### `agent-mux gc --older-than <duration>`
-
-Garbage-collect old dispatch records, result files, and artifact directories.
-
-```
-agent-mux gc --older-than <duration> [--dry-run]
-```
-
-| Flag | Type | Default | Notes |
-|------|------|---------|-------|
-| `--older-than` | string | **required** | Duration threshold; format: `Nd` (days) or `Nh` (hours). Examples: `7d`, `24h` |
-| `--dry-run` | bool | `false` | List what would be deleted without deleting |
-
-No positional arguments accepted. `--older-than` is required; omitting it is an error. Duration must be positive. Supported units: `d`/`D` (days), `h`/`H` (hours).
-
-Records with unparseable `started` timestamps are always kept (never deleted).
-
-**What gets cleaned:**
-- JSONL records from `~/.agent-mux/store/dispatches.jsonl`
-- Result files from `~/.agent-mux/store/results/<id>.md`
-- Artifact directories (the full `artifact_dir` path from each record)
-
-**Output (JSON):**
-- Normal: `{"kind":"gc","removed":N,"kept":N,"cutoff":"<RFC3339>"}`
-- Dry run: `{"kind":"gc_dry_run","would_remove":N,"dispatches":[{"id":"...","started":"...","engine":"...","status":"..."},...]}`
-- Nothing to clean: `{"kind":"gc","removed":0,"message":"No dispatches older than <dur> found."}`

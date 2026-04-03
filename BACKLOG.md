@@ -87,9 +87,9 @@ startup_failed) for failed dispatches by scanning events.jsonl. Removed the
 
 ### S-4: 3 weak-assertion ax-eval cases
 **Type:** spec gap | **Priority:** P0 | **Status:** partially resolved
-**Decided:** `coordinator` (2026-03-30)
+**Decided:** `coordinator` (2026-03-30); updated `coordinator` (2026-04-03)
 
-Three ax-eval cases have inadequate assertions:
+Three ax-eval cases had inadequate assertions:
 
 1. **`handoff-summary-extraction`** — scored 1.0 in latest run (2026-03-30).
    `handoff_summary` field is now present in the output contract and
@@ -100,12 +100,12 @@ Three ax-eval cases have inadequate assertions:
    post-fix. Assertions still check stderr events for model confirmation; may
    need hardening if `--stream` is not active during tests.
 
-3. **`response-truncation`** — skipped. The assertion direction is inverted:
-   the case checks `truncation=true` but truncation is disabled by design.
-   **Fix needed: invert the assertion** to confirm truncation does NOT occur.
-   Not a bug fix — assertion logic must be corrected.
+3. **`response-truncation`** — **DELETED** from cases_v2.go (2026-04-03).
+   The case used `--response-max-chars=200` which no longer exists;
+   truncation was removed by design in 3.1.0. The entire case has been
+   removed. No replacement case planned at this time.
 
-**Target:** all three cases at score ≥ 0.7 after fixes.
+**Target:** remaining cases at score ≥ 0.7 after fixes.
 
 ---
 
@@ -175,21 +175,18 @@ approach needed first.
 **Decided:** `rollout-2026-04-03T11-12-57-019d5230-18fd-7a01-927a-3aceb81a153a` (2026-04-03)
 
 `agent-mux` already captures the harness `session_id` inside the engine loop,
-but durable and first-mile surfaces stop at `dispatch_id`, `salt`, and
-`trace_token`. That makes Codex / Claude resume correlation asymmetric: the
-system knows the canonical session identity, but callers cannot retrieve it
-reliably from the normal lifecycle commands.
+but durable surfaces stop at `dispatch_id`. The file-based persistence layer
+writes `meta.json` and `result.json` under `~/.agent-mux/dispatches/<id>/`;
+`session_id` is present in `result.json` (via `PersistentDispatchResult`) but
+is only updated in `meta.json` lazily via `UpdatePersistentMetaSessionID`.
+`trace_token` and `salt` have been removed entirely.
 
 **Intent:**
-- Persist harness `session_id` into `status.json`, `_dispatch_meta.json`, and
-  dispatch store records (`dispatches.jsonl`).
-- Surface `session_id` in `status`, `inspect`, `list --json`, and
-  `result --json`.
-- Accept `trace_token` as a first-class lookup key anywhere a dispatch ref is
-  accepted.
-- Make clear that `salt` is a convenience label, not reliable identity. If a
-  salt lookup is ever offered, it must fail on ambiguity rather than pretend
-  uniqueness.
+- Guarantee `session_id` is surfaced in `status`, `inspect`, `list --json`,
+  and `result --json` for all completed dispatches.
+- Accept `session_id` prefix as a lookup key anywhere a dispatch ref is
+  accepted (alongside the existing `dispatch_id` prefix match).
+- No `salt` or `trace_token` lookup — those fields no longer exist.
 
 **Behavior gate:** after worker start, `agent-mux status --json <dispatch_id>`
 returns `session_id`, and the same `session_id` is visible via `inspect`,
@@ -308,64 +305,35 @@ ambiguity entirely.
 
 ## P2 — Planned
 
-### B-8: Pipeline result assembly returns empty response
-**Type:** bug | **Priority:** P2 | **Status:** open (experimental/deferred)
-**Decided:** `coordinator` (2026-03-30)
+### B-8: Pipeline result assembly returns empty response — REMOVED
+**Type:** bug | **Priority:** P2 | **Status:** REMOVED — pipeline system stripped
+**Decided:** `coordinator` (2026-04-03)
 
-Pipeline dispatches (`-P=name`) sometimes return an empty `response` in the
-final `PipelineResult`. Individual step workers complete successfully and
-produce output, but the pipeline result assembly fails to thread the final
-step's response into the top-level result. This appears to be a race in
-how step results are collected and merged.
-
-**Impact:** Low — pipelines are experimental and GSD-Heavy manually
-orchestrates rather than using the pipeline primitive. Deferred until pipeline
-usage justifies investigation.
+Pipeline system has been removed entirely from the codebase. `internal/pipeline/`
+no longer exists. This bug is no longer applicable. GSD coordinators perform
+multi-step orchestration by chaining individual dispatches manually.
 
 ---
 
-### F-3: Pipeline orchestration enhancements
-**Type:** feature | **Priority:** P2 | **Status:** open (core shipped in 3.0.0)
-**Location:** `internal/pipeline/`
-**Design:** `references/streaming-protocol-v2.md` § "Future: Pipeline Verification Gates" (branching context)
-**Decided:** `acabe588` (2026-03-29)
+### F-3: Pipeline orchestration enhancements — REMOVED
+**Type:** feature | **Priority:** P2 | **Status:** REMOVED — pipeline system stripped
+**Decided:** `coordinator` (2026-04-03)
 
-Core sequential pipelines + within-step fan-out shipped. **Advanced features
-never built** (confirmed via code audit — zero fields for conditions,
-branching, or fan-in in `PipelineStep`):
-
-- **Conditional branching** — skip or reroute based on previous step status
-- **Fan-in aggregation** — merge parallel fan-out results
-- **Pipeline-level timeout** — ceiling on total wall-clock time
+Pipeline system has been removed entirely from the codebase. `internal/pipeline/`
+no longer exists. Conditional branching, fan-in, and pipeline-level timeouts
+are not applicable. Multi-step orchestration is the coordinator's responsibility
+via chained individual dispatches.
 
 ---
 
-### F-10: Pipeline verification gates
-**Type:** feature | **Priority:** P2 | **Status:** open (park alongside F-3) — design documented
-**Location:** `internal/pipeline/`
-**Design:** `references/streaming-protocol-v2.md` § "Future: Pipeline Verification Gates"
-**Decided:** `current` (2026-03-29)
+### F-10: Pipeline verification gates — REMOVED
+**Type:** feature | **Priority:** P2 | **Status:** REMOVED — pipeline system stripped
+**Decided:** `coordinator` (2026-04-03)
 
-Field analysis of GSD-Heavy usage reveals a structural gap in pipelines: they
-are useful for fire-and-forget known sequences but **cannot handle mid-flight
-judgment**. The `build` pipeline exists but GSD-Heavy — the most sophisticated
-user — does not use it. It manually orchestrates because pipelines lack
-verification gates between steps (e.g., `cargo build --release` must succeed
-before the next lifter wave launches). The highest actual pipeline value is
-`tenx` fan-out.
-
-**Root cause:** there is no mechanism to assert that a prior step's side effects
-are correct before proceeding. Adding another LLM auditor step is not the
-answer — it's slow, expensive, and introduces hallucination risk.
-
-**Proposed:** executable verification gates between pipeline steps — a shell
-command that must exit 0 for the step to be considered complete. If the gate
-fails, the pipeline halts with a descriptive error. This is deterministic,
-fast, and closes the gap that forces GSD-Heavy into manual orchestration.
-
-**Relation to F-3:** conditional branching (F-3) and verification gates (F-10)
-are complementary — gates catch failures, branching handles them. Both park at
-P2 until pipeline usage justifies the investment.
+Pipeline system has been removed entirely. Verification gates between pipeline
+steps are moot. If executable verification between dispatch steps is desired,
+it is the coordinator's responsibility to check results before issuing the
+next dispatch.
 
 ---
 
@@ -382,13 +350,13 @@ F-6 (soft steering) — both touch the liveness system.
 
 ---
 
-### F-12: `gc --dry-run` structured output
-**Type:** feature | **Priority:** P2 | **Status:** open
-**Decided:** `coordinator` (2026-03-30) — under discussion, may park if no real usage demand emerges.
+### F-12: `gc --dry-run` structured output — REMOVED
+**Type:** feature | **Priority:** P2 | **Status:** REMOVED — gc subcommand stripped
+**Decided:** `coordinator` (2026-04-03)
 
-`gc --dry-run` currently prints human-readable text. Machine consumers need
-structured JSON output (list of paths that would be deleted + size recovered)
-to build safe cleanup UIs or integrate with other tooling.
+The `gc` subcommand has been removed from the codebase. Structured dry-run
+output is no longer applicable. Dispatch cleanup, if needed, must be done
+by manually removing entries from `~/.agent-mux/dispatches/`.
 
 ---
 
