@@ -34,7 +34,6 @@ import (
 
 const version = "agent-mux v3.2.0"
 const contextFilePromptPreamble = "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting."
-const unsetResponseMaxChars = -1
 
 type cliCommand string
 
@@ -66,13 +65,13 @@ func (s *stringSlice) Set(value string) error {
 }
 
 type cliFlags struct {
-	engine, role, variant, profile, cwd, model, effort, systemPrompt, systemPromptFile   string
-	contextFile, artifactDir, salt, config, promptFile, recover                          string
-	signal                                                                               string
-	permissionMode, sandbox, reasoning                                                   string
-	timeout, maxDepth, responseMaxChars, maxTurns                                        int
-	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes, stream, async bool
-	skills, addDirs                                                                      stringSlice
+	engine, role, variant, profile, cwd, model, effort, systemPrompt, systemPromptFile string
+	contextFile, artifactDir, config, promptFile, recover                              string
+	signal                                                                             string
+	permissionMode, sandbox, reasoning                                                 string
+	timeout, maxDepth, maxTurns                                                        int
+	full, noFull, skipSkills, stdin, version, verbose, yes, stream, async              bool
+	skills, addDirs                                                                    stringSlice
 }
 
 type previewResult struct {
@@ -103,11 +102,10 @@ type previewDispatchSpec struct {
 }
 
 type previewResultMeta struct {
-	Role             string   `json:"role,omitempty"`
-	Variant          string   `json:"variant,omitempty"`
-	Profile          string   `json:"profile,omitempty"`
-	Skills           []string `json:"skills,omitempty"`
-	ResponseMaxChars int      `json:"response_max_chars,omitempty"`
+	Role    string   `json:"role,omitempty"`
+	Variant string   `json:"variant,omitempty"`
+	Profile string   `json:"profile,omitempty"`
+	Skills  []string `json:"skills,omitempty"`
 }
 
 type dispatchRequest struct {
@@ -384,10 +382,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if spec.MaxDepth == 0 {
 		spec.MaxDepth = cfg.Defaults.MaxDepth
 	}
-	if req.DispatchAnnotations.ResponseMaxChars < 0 {
-		req.DispatchAnnotations.ResponseMaxChars = cfg.Defaults.ResponseMaxChars
-	}
-
 	if spec.TimeoutSec == 0 {
 		spec.TimeoutSec = config.TimeoutForEffort(cfg, spec.Effort)
 	}
@@ -707,7 +701,6 @@ func buildFailedResult(spec *types.DispatchSpec, code, msg, suggestion string) *
 	}
 	return dispatch.BuildFailedResult(
 		spec,
-		unsetResponseMaxChars,
 		"",
 		dispatch.NewDispatchError(code, msg, suggestion),
 		&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
@@ -902,14 +895,13 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 	}
 
 	var aux struct {
-		Role             string   `json:"role"`
-		Variant          string   `json:"variant"`
-		Profile          string   `json:"profile"`
-		Coordinator      string   `json:"coordinator"`
-		Skills           []string `json:"skills"`
-		SkipSkills       bool     `json:"skip_skills"`
-		Recover          string   `json:"recover"`
-		ResponseMaxChars int      `json:"response_max_chars"`
+		Role        string   `json:"role"`
+		Variant     string   `json:"variant"`
+		Profile     string   `json:"profile"`
+		Coordinator string   `json:"coordinator"`
+		Skills      []string `json:"skills"`
+		SkipSkills  bool     `json:"skip_skills"`
+		Recover     string   `json:"recover"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return fmt.Errorf("decode stdin dispatch metadata: %w", err)
@@ -923,10 +915,6 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 	req.DispatchAnnotations.Profile = strings.TrimSpace(profile)
 	req.SkipSkills = aux.SkipSkills
 	req.RecoverDispatchID = strings.TrimSpace(aux.Recover)
-	req.DispatchAnnotations.ResponseMaxChars = unsetResponseMaxChars
-	if jsonFieldSet(fields, "response_max_chars") {
-		req.DispatchAnnotations.ResponseMaxChars = aux.ResponseMaxChars
-	}
 	if req.DispatchAnnotations.Profile != "" {
 		if err := sanitize.ValidateBasename(req.DispatchAnnotations.Profile); err != nil {
 			return newInputValidationError("profile", req.DispatchAnnotations.Profile, err)
@@ -1041,11 +1029,10 @@ func buildPreviewResult(req *dispatchRequest, confirmationRequired bool) preview
 		Kind:          "preview",
 		DispatchSpec:  previewDispatchSpecFrom(spec),
 		ResultMetadata: previewResultMeta{
-			Role:             req.DispatchAnnotations.Role,
-			Variant:          req.DispatchAnnotations.Variant,
-			Profile:          req.DispatchAnnotations.Profile,
-			Skills:           append([]string(nil), req.DispatchAnnotations.Skills...),
-			ResponseMaxChars: req.DispatchAnnotations.ResponseMaxChars,
+			Role:    req.DispatchAnnotations.Role,
+			Variant: req.DispatchAnnotations.Variant,
+			Profile: req.DispatchAnnotations.Profile,
+			Skills:  append([]string(nil), req.DispatchAnnotations.Skills...),
 		},
 		Prompt: previewPromptFrom(spec),
 		Control: previewControl{
@@ -1121,7 +1108,6 @@ func previewExcerpt(text string, maxRunes int) (string, bool) {
 func buildCancelledResult(spec *types.DispatchSpec) *types.DispatchResult {
 	return dispatch.BuildFailedResult(
 		spec,
-		unsetResponseMaxChars,
 		"",
 		dispatch.NewDispatchError("cancelled", "Dispatch cancelled at confirmation prompt before launch.", "Re-run with --yes to skip preview and confirmation."),
 		&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
@@ -1163,12 +1149,11 @@ func isTerminalStream(stream any) bool {
 
 func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	flags := &cliFlags{
-		effort:           "",
-		full:             true,
-		maxDepth:         2,
-		responseMaxChars: unsetResponseMaxChars,
-		sandbox:          "danger-full-access",
-		reasoning:        "medium",
+		effort:    "",
+		full:      true,
+		maxDepth:  2,
+		sandbox:   "danger-full-access",
+		reasoning: "medium",
 	}
 
 	fs := flag.NewFlagSet("agent-mux", flag.ContinueOnError)
@@ -1190,17 +1175,14 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	fs.StringVar(&flags.artifactDir, "artifact-dir", "", "Artifact directory")
 	fs.StringVar(&flags.recover, "recover", "", "Previous dispatch ID to continue")
 	fs.StringVar(&flags.signal, "signal", "", "Dispatch ID to send signal to")
-	fs.StringVar(&flags.salt, "salt", "", "Dispatch salt")
 	fs.StringVar(&flags.config, "config", "", "Config path")
 	bindBool(fs, &flags.full, "Full access mode", flags.full, "full", "f")
 	fs.BoolVar(&flags.noFull, "no-full", false, "Disable full access mode")
 	fs.StringVar(&flags.promptFile, "prompt-file", "", "Prompt file")
 	fs.IntVar(&flags.maxDepth, "max-depth", flags.maxDepth, "Maximum recursive depth")
-	fs.BoolVar(&flags.noSubdispatch, "no-subdispatch", false, "Disable recursive dispatch")
 	fs.StringVar(&flags.permissionMode, "permission-mode", "", "Permission mode")
 	fs.BoolVar(&flags.stdin, "stdin", false, "Read DispatchSpec JSON from stdin")
 	fs.BoolVar(&flags.yes, "yes", false, "Skip interactive confirmation for TTY dispatches")
-	fs.IntVar(&flags.responseMaxChars, "response-max-chars", flags.responseMaxChars, "Maximum response characters")
 	fs.BoolVar(&flags.skipSkills, "skip-skills", false, "Skip skill injection")
 	fs.BoolVar(&flags.version, "version", false, "Show version")
 	fs.StringVar(&flags.sandbox, "sandbox", flags.sandbox, "Sandbox mode")
@@ -1302,11 +1284,10 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*dispatchRequest, error)
 	return &dispatchRequest{
 		DispatchSpec: spec,
 		DispatchAnnotations: types.DispatchAnnotations{
-			Role:             flags.role,
-			Variant:          flags.variant,
-			Profile:          flags.profile,
-			Skills:           append([]string(nil), flags.skills...),
-			ResponseMaxChars: flags.responseMaxChars,
+			Role:    flags.role,
+			Variant: flags.variant,
+			Profile: flags.profile,
+			Skills:  append([]string(nil), flags.skills...),
 		},
 		SkipSkills:        flags.skipSkills,
 		RecoverDispatchID: flags.recover,
@@ -1362,12 +1343,10 @@ func flagTakesValue(name string) bool {
 		"--artifact-dir",
 		"--recover",
 		"--signal",
-		"--salt",
 		"--config",
 		"--prompt-file",
 		"--max-depth",
 		"--permission-mode",
-		"--response-max-chars",
 		"--sandbox",
 		"--reasoning", "-r",
 		"--max-turns",
@@ -1400,7 +1379,6 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 	if err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
-			annotations.ResponseMaxChars,
 			"",
 			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]"),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
@@ -1417,7 +1395,6 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 		}
 		return dispatch.BuildFailedResult(
 			spec,
-			annotations.ResponseMaxChars,
 			"",
 			dispatch.NewDispatchError("model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
@@ -1429,7 +1406,6 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
-			annotations.ResponseMaxChars,
 			"",
 			dispatch.NewDispatchError("artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
@@ -1440,7 +1416,6 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 	if err := recovery.RegisterDispatchSpec(spec); err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
-			annotations.ResponseMaxChars,
 			"",
 			dispatch.NewDispatchError("config_error", fmt.Sprintf("Register control path for dispatch %q: %v", spec.DispatchID, err), "Ensure the control path is writable."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
@@ -1524,9 +1499,6 @@ func mergeStdinCLIFlags(req *dispatchRequest, flags cliFlags, flagsSet map[strin
 	if flagsSet["max-depth"] {
 		spec.MaxDepth = flags.maxDepth
 	}
-	if flagsSet["response-max-chars"] {
-		req.DispatchAnnotations.ResponseMaxChars = flags.responseMaxChars
-	}
 	if flagsSet["full"] || flagsSet["f"] {
 		spec.FullAccess = flags.full
 	}
@@ -1586,15 +1558,12 @@ func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {
 		"context-file",
 		"artifact-dir",
 		"recover",
-		"salt",
 		"config",
 		"full", "f",
 		"no-full",
 		"prompt-file",
 		"max-depth",
-		"no-subdispatch",
 		"permission-mode",
-		"response-max-chars",
 		"sandbox",
 		"reasoning", "r",
 		"max-turns",

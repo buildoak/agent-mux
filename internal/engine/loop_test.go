@@ -255,7 +255,7 @@ func TestLoopEnginePersistsCompletedDispatchToStore(t *testing.T) {
 	spec := testDispatchSpec(artifactDir)
 
 	engine := NewLoopEngine(adapter, io.Discard, nil)
-	engine.SetAnnotations(types.DispatchAnnotations{ResponseMaxChars: 0})
+	engine.SetAnnotations(types.DispatchAnnotations{})
 	result, err := engine.Dispatch(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -938,7 +938,7 @@ func TestLongCommandExtendsSilenceThreshold(t *testing.T) {
 	}
 }
 
-func TestFinalizeCompletedEmitsResponseTruncatedAndStoresFullResponse(t *testing.T) {
+func TestFinalizeCompletedStoresFullResponse(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	artifactDir := t.TempDir()
@@ -949,20 +949,10 @@ func TestFinalizeCompletedEmitsResponseTruncatedAndStoresFullResponse(t *testing
 	emitter := newTestEmitter(t, spec, &stream)
 	defer func() { _ = emitter.Close() }()
 
-	result := finalizeCompleted(spec, types.DispatchAnnotations{ResponseMaxChars: 10}, emitter, response, emptyActivity(), testMetadata(), 25)
+	result := finalizeCompleted(spec, types.DispatchAnnotations{}, emitter, response, emptyActivity(), testMetadata(), 25)
 
-	if !result.ResponseTruncated || result.FullOutputPath == nil {
-		t.Fatalf("result = %+v, want truncated response with full_output_path", result)
-	}
-	if !strings.Contains(stream.String(), "\"type\":\"response_truncated\"") {
-		t.Fatalf("stderr stream missing response_truncated event:\n%s", stream.String())
-	}
-	eventsData, err := os.ReadFile(filepath.Join(artifactDir, "events.jsonl"))
-	if err != nil {
-		t.Fatalf("ReadFile(events.jsonl): %v", err)
-	}
-	if !strings.Contains(string(eventsData), "\"type\":\"response_truncated\"") {
-		t.Fatalf("events.jsonl missing response_truncated event:\n%s", string(eventsData))
+	if result.Response != response {
+		t.Fatalf("response len = %d, want %d", len(result.Response), len(response))
 	}
 	storedResponse, err := dispatch.ReadResult(spec.DispatchID)
 	if err != nil {
@@ -973,7 +963,7 @@ func TestFinalizeCompletedEmitsResponseTruncatedAndStoresFullResponse(t *testing
 	}
 }
 
-func TestFinalizeTimedOutEmitsResponseTruncatedAndStoresFullResponse(t *testing.T) {
+func TestFinalizeTimedOutStoresFullResponse(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	artifactDir := t.TempDir()
@@ -985,16 +975,13 @@ func TestFinalizeTimedOutEmitsResponseTruncatedAndStoresFullResponse(t *testing.
 	emitter := newTestEmitter(t, spec, &stream)
 	defer func() { _ = emitter.Close() }()
 
-	result := finalizeTimedOut(spec, types.DispatchAnnotations{ResponseMaxChars: 10}, emitter, response, emptyActivity(), testMetadata(), 25)
+	result := finalizeTimedOut(spec, types.DispatchAnnotations{}, emitter, response, emptyActivity(), testMetadata(), 25)
 
 	if result.Status != types.StatusTimedOut {
 		t.Fatalf("status = %q, want timed_out", result.Status)
 	}
-	if !result.ResponseTruncated || result.FullOutputPath == nil {
-		t.Fatalf("result = %+v, want truncated response with full_output_path", result)
-	}
-	if !strings.Contains(stream.String(), "\"type\":\"response_truncated\"") {
-		t.Fatalf("stderr stream missing response_truncated event:\n%s", stream.String())
+	if result.Response != response {
+		t.Fatalf("response len = %d, want %d", len(result.Response), len(response))
 	}
 	storedResponse, err := dispatch.ReadResult(spec.DispatchID)
 	if err != nil {
@@ -1005,7 +992,7 @@ func TestFinalizeTimedOutEmitsResponseTruncatedAndStoresFullResponse(t *testing.
 	}
 }
 
-func TestFinalizeFailedEmitsResponseTruncatedAndStoresFullResponse(t *testing.T) {
+func TestFinalizeFailedStoresFullResponse(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	artifactDir := t.TempDir()
@@ -1016,16 +1003,13 @@ func TestFinalizeFailedEmitsResponseTruncatedAndStoresFullResponse(t *testing.T)
 	emitter := newTestEmitter(t, spec, &stream)
 	defer func() { _ = emitter.Close() }()
 
-	result := finalizeFailed(spec, types.DispatchAnnotations{ResponseMaxChars: 10}, emitter, response, emptyActivity(), testMetadata(), 25, dispatch.NewDispatchError("internal_error", "", ""))
+	result := finalizeFailed(spec, types.DispatchAnnotations{}, emitter, response, emptyActivity(), testMetadata(), 25, dispatch.NewDispatchError("internal_error", "", ""))
 
 	if result.Status != types.StatusFailed {
 		t.Fatalf("status = %q, want failed", result.Status)
 	}
-	if !result.ResponseTruncated || result.FullOutputPath == nil {
-		t.Fatalf("result = %+v, want truncated response with full_output_path", result)
-	}
-	if !strings.Contains(stream.String(), "\"type\":\"response_truncated\"") {
-		t.Fatalf("stderr stream missing response_truncated event:\n%s", stream.String())
+	if result.Response != response {
+		t.Fatalf("response len = %d, want %d", len(result.Response), len(response))
 	}
 	storedResponse, err := dispatch.ReadResult(spec.DispatchID)
 	if err != nil {

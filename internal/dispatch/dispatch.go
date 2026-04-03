@@ -104,23 +104,9 @@ func ReadDispatchMeta(artifactDir string) (*DispatchMeta, error) {
 	return &meta, nil
 }
 
-func WriteFullOutput(artifactDir, response string) (string, error) {
-	path := filepath.Join(artifactDir, "full_output.md")
-	if err := os.WriteFile(path, []byte(response), 0644); err != nil {
-		return "", fmt.Errorf("write full output: %w", err)
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", fmt.Errorf("resolve full output path: %w", err)
-	}
-	return absPath, nil
-}
-
 type terminalResponseShape struct {
-	Response          string
-	HandoffSummary    string
-	ResponseTruncated bool
-	FullOutputPath    *string
+	Response       string
+	HandoffSummary string
 }
 
 func ExtractHandoffSummary(response string, maxChars int) string {
@@ -407,24 +393,24 @@ func levenshtein(a, b string) int {
 
 	return prev[lb]
 }
-func BuildCompletedResult(spec *types.DispatchSpec, responseMaxChars int, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := baseResult(spec, types.StatusCompleted, shapeTerminalResponse(spec.ArtifactDir, responseMaxChars, response), activity, metadata, durationMS)
+func BuildCompletedResult(spec *types.DispatchSpec, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := baseResult(spec, types.StatusCompleted, shapeTerminalResponse(response), activity, metadata, durationMS)
 
 	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
 	return result
 }
-func BuildTimedOutResult(spec *types.DispatchSpec, responseMaxChars int, response, reason string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := baseResult(spec, types.StatusTimedOut, shapeTerminalResponse(spec.ArtifactDir, responseMaxChars, response), activity, metadata, durationMS)
+func BuildTimedOutResult(spec *types.DispatchSpec, response, reason string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := baseResult(spec, types.StatusTimedOut, shapeTerminalResponse(response), activity, metadata, durationMS)
 	result.Partial = true
 	result.Recoverable = true
 	result.Reason = reason
 	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
 	return result
 }
-func BuildFailedResult(spec *types.DispatchSpec, responseMaxChars int, response string, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+func BuildFailedResult(spec *types.DispatchSpec, response string, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	// FM-9: Include accumulated partial response so callers can see what the
 	// worker accomplished before failure.
-	result := baseResult(spec, types.StatusFailed, shapeTerminalResponse(spec.ArtifactDir, responseMaxChars, response), activity, metadata, durationMS)
+	result := baseResult(spec, types.StatusFailed, shapeTerminalResponse(response), activity, metadata, durationMS)
 	if response == "" {
 		result.HandoffSummary = dispatchErr.Message
 	}
@@ -494,41 +480,22 @@ func truncateAtBoundary(s string, maxChars int) string {
 	return truncated
 }
 
-func shapeTerminalResponse(artifactDir string, responseMaxChars int, response string) terminalResponseShape {
-	shape := terminalResponseShape{
+func shapeTerminalResponse(response string) terminalResponseShape {
+	return terminalResponseShape{
 		Response:       response,
 		HandoffSummary: ExtractHandoffSummary(response, 2000),
 	}
-
-	if responseMaxChars <= 0 {
-		return shape
-	}
-	if utf8.RuneCountInString(response) <= responseMaxChars {
-		return shape
-	}
-
-	fullOutputPath, err := WriteFullOutput(artifactDir, response)
-	if err != nil {
-		return shape
-	}
-
-	shape.Response = truncateAtBoundary(response, responseMaxChars)
-	shape.ResponseTruncated = true
-	shape.FullOutputPath = &fullOutputPath
-	return shape
 }
 
 func baseResult(spec *types.DispatchSpec, status types.DispatchStatus, shaped terminalResponseShape, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	return &types.DispatchResult{
-		SchemaVersion:     1,
-		Status:            status,
-		DispatchID:        spec.DispatchID,
-		Response:          shaped.Response,
-		ResponseTruncated: shaped.ResponseTruncated,
-		FullOutputPath:    shaped.FullOutputPath,
-		HandoffSummary:    shaped.HandoffSummary,
-		Activity:          activity,
-		Metadata:          metadata,
-		DurationMS:        durationMS,
+		SchemaVersion:  1,
+		Status:         status,
+		DispatchID:     spec.DispatchID,
+		Response:       shaped.Response,
+		HandoffSummary: shaped.HandoffSummary,
+		Activity:       activity,
+		Metadata:       metadata,
+		DurationMS:     durationMS,
 	}
 }

@@ -231,7 +231,7 @@ func TestBuildCompletedResult(t *testing.T) {
 		Tokens: &types.TokenUsage{Input: 100, Output: 50},
 	}
 
-	result := BuildCompletedResult(spec, 0, "Done.", activity, metadata, 5000)
+	result := BuildCompletedResult(spec, "Done.", activity, metadata, 5000)
 
 	if result.Status != types.StatusCompleted {
 		t.Errorf("status = %q, want completed", result.Status)
@@ -244,48 +244,6 @@ func TestBuildCompletedResult(t *testing.T) {
 	}
 	if result.ResponseTruncated {
 		t.Error("response should not be truncated")
-	}
-}
-
-func TestBuildCompletedResultSpillsOversizedResponse(t *testing.T) {
-	dir := t.TempDir()
-	spec := &types.DispatchSpec{
-		DispatchID:  "01JQXYZ",
-		ArtifactDir: dir,
-	}
-	activity := &types.DispatchActivity{
-		FilesChanged: []string{},
-		FilesRead:    []string{},
-		CommandsRun:  []string{},
-		ToolCalls:    []string{},
-	}
-	metadata := &types.DispatchMetadata{
-		Engine: "codex",
-		Model:  "gpt-5.4",
-		Tokens: &types.TokenUsage{Input: 100, Output: 50},
-	}
-	response := "First sentence. Second sentence. Third sentence."
-
-	result := BuildCompletedResult(spec, 20, response, activity, metadata, 5000)
-
-	if !result.ResponseTruncated {
-		t.Fatal("response_truncated = false, want true")
-	}
-	if result.FullOutputPath == nil {
-		t.Fatal("full_output_path = nil, want path")
-	}
-	if result.Response == response {
-		t.Fatalf("response = %q, want truncated response", result.Response)
-	}
-	if utf8.RuneCountInString(result.Response) > 20 {
-		t.Fatalf("response rune count = %d, want <= %d", utf8.RuneCountInString(result.Response), 20)
-	}
-	data, err := os.ReadFile(*result.FullOutputPath)
-	if err != nil {
-		t.Fatalf("ReadFile(full_output_path): %v", err)
-	}
-	if string(data) != response {
-		t.Fatalf("full_output.md = %q, want %q", string(data), response)
 	}
 }
 
@@ -306,7 +264,7 @@ func TestBuildTimedOutResult(t *testing.T) {
 		Tokens: &types.TokenUsage{},
 	}
 
-	result := BuildTimedOutResult(spec, 0, "partial", "Soft timeout at 600s.", activity, metadata, 660000)
+	result := BuildTimedOutResult(spec, "partial", "Soft timeout at 600s.", activity, metadata, 660000)
 
 	if result.Status != types.StatusTimedOut {
 		t.Errorf("status = %q, want timed_out", result.Status)
@@ -337,7 +295,7 @@ func TestBuildFailedResult(t *testing.T) {
 	}
 	dispatchErr := NewDispatchError("model_not_found", "Model not found.", "Try gpt-5.4")
 
-	result := BuildFailedResult(spec, 0, "", dispatchErr, activity, metadata, 430)
+	result := BuildFailedResult(spec, "", dispatchErr, activity, metadata, 430)
 
 	if result.Status != types.StatusFailed {
 		t.Errorf("status = %q, want failed", result.Status)
@@ -350,26 +308,7 @@ func TestBuildFailedResult(t *testing.T) {
 	}
 }
 
-func TestBuildTimedOutResultSpillsOversizedResponse(t *testing.T) {
-	dir := t.TempDir()
-	spec := &types.DispatchSpec{
-		DispatchID:  "01JQXYZ",
-		ArtifactDir: dir,
-	}
-	activity := &types.DispatchActivity{}
-	metadata := &types.DispatchMetadata{Engine: "codex", Tokens: &types.TokenUsage{}}
-
-	result := BuildTimedOutResult(spec, 10, "1234567890\nabcdefghij", "Soft timeout at 600s.", activity, metadata, 660000)
-
-	if !result.ResponseTruncated {
-		t.Fatal("response_truncated = false, want true")
-	}
-	if result.FullOutputPath == nil {
-		t.Fatal("full_output_path = nil, want path")
-	}
-}
-
-func TestBuildFailedResultSpillsOversizedResponseAndKeepsFullSummary(t *testing.T) {
+func TestBuildFailedResultKeepsFullSummary(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
 		DispatchID:  "01JQXYZ",
@@ -380,16 +319,16 @@ func TestBuildFailedResultSpillsOversizedResponseAndKeepsFullSummary(t *testing.
 	dispatchErr := NewDispatchError("internal_error", "", "")
 	response := "## Summary\nunicode canary: 你好 alpha beta gamma.\n## Details\nmore"
 
-	result := BuildFailedResult(spec, 12, response, dispatchErr, activity, metadata, 430)
+	result := BuildFailedResult(spec, response, dispatchErr, activity, metadata, 430)
 
-	if !result.ResponseTruncated {
-		t.Fatal("response_truncated = false, want true")
-	}
 	if !strings.Contains(result.HandoffSummary, "unicode canary: 你好") {
 		t.Fatalf("handoff_summary = %q, want summary from full response", result.HandoffSummary)
 	}
 	if !utf8.ValidString(result.Response) {
 		t.Fatalf("response = %q, want valid UTF-8", result.Response)
+	}
+	if result.Response != response {
+		t.Fatalf("response = %q, want full response", result.Response)
 	}
 }
 

@@ -684,7 +684,11 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 	// Check if already done.
 	record := resolved.Record
 	if record != nil {
-		return showResult(record.ID, record, jsonOutput, false, stdout)
+		if _, err := dispatch.ReadPersistentResult(record.ID); err == nil {
+			return showResult(record.ID, record, jsonOutput, false, stdout)
+		} else if err != nil && !os.IsNotExist(err) {
+			return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("read result for dispatch %q: %v", record.ID, err), "")
+		}
 	}
 
 	artifactDir := resolved.ArtifactDir
@@ -692,14 +696,40 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 		return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no dispatch found for reference %q", ref), "")
 	}
 
+	deadline := time.Time{}
+	if record != nil && record.TimeoutSec > 0 {
+		if startedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(record.StartedAt)); err == nil {
+			deadline = startedAt.Add(time.Duration(record.TimeoutSec) * time.Second)
+		}
+	}
+
+	if result, err := dispatch.ReadPersistentResult(resolved.DispatchID); err == nil && result != nil {
+		return showResult(record.ID, record, jsonOutput, false, stdout)
+	} else if err != nil && !os.IsNotExist(err) {
+		return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("read result for dispatch %q: %v", resolved.DispatchID, err), "")
+	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// Check store first.
+		// Completion is defined by result.json, not by the presence of metadata.
 		record, _ = dispatch.FindDispatchRecordByRef(resolved.InputRef)
-		if record != nil && strings.TrimSpace(record.Status) != "" {
-			return showResult(record.ID, record, jsonOutput, false, stdout)
+		if result, err := dispatch.ReadPersistentResult(resolved.DispatchID); err == nil && result != nil {
+			if record == nil {
+				record = resolved.Record
+			}
+			return showResult(resolved.DispatchID, record, jsonOutput, false, stdout)
+		} else if err != nil && !os.IsNotExist(err) {
+			return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("read result for dispatch %q: %v", resolved.DispatchID, err), "")
+		}
+
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			return emitLifecycleError(stdout, 1, "timed_out", fmt.Sprintf("dispatch %q timed out before result.json was written", resolved.DispatchID), "")
+		}
+
+		if pid, err := dispatch.ReadHostPID(artifactDir); err == nil && !dispatch.IsProcessAlive(pid) {
+			return emitLifecycleError(stdout, 1, "failed", fmt.Sprintf("dispatch %q stopped before result.json was written", resolved.DispatchID), "")
 		}
 
 		liveStatus, statusErr := dispatch.ReadStatusJSON(artifactDir)
@@ -709,15 +739,8 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 		}
 
 		switch liveStatus.State {
-		case "completed", "failed", "timed_out":
-			record, _ = dispatch.FindDispatchRecordByRef(resolved.InputRef)
-			if record != nil && strings.TrimSpace(record.Status) != "" {
-				return showResult(record.ID, record, jsonOutput, false, stdout)
-			}
-			liveStatus.DispatchID = firstNonEmptyString(strings.TrimSpace(liveStatus.DispatchID), resolved.DispatchID)
-			liveStatus.SessionID = firstNonEmptyString(strings.TrimSpace(liveStatus.SessionID), sessionIDFromArtifacts(artifactDir))
-			writeCompactJSON(stdout, liveStatus)
-			return 0
+		case "timed_out":
+			return emitLifecycleError(stdout, 1, "timed_out", fmt.Sprintf("dispatch %q timed out before result.json was written", resolved.DispatchID), "")
 		case "orphaned":
 			writeCompactJSON(stdout, liveStatus)
 			return 1

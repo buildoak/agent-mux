@@ -262,14 +262,12 @@ func runConfigSkills(args []string, stdout io.Writer) int {
 // key names so the output matches what users see in their config files.
 func configToJSONMap(cfg *config.Config) (map[string]any, error) {
 	defaults := map[string]any{
-		"engine":             cfg.Defaults.Engine,
-		"model":              cfg.Defaults.Model,
-		"effort":             cfg.Defaults.Effort,
-		"sandbox":            cfg.Defaults.Sandbox,
-		"permission_mode":    cfg.Defaults.PermissionMode,
-		"response_max_chars": cfg.Defaults.ResponseMaxChars,
-		"max_depth":          cfg.Defaults.MaxDepth,
-		"allow_subdispatch":  cfg.Defaults.AllowSubdispatch,
+		"engine":          cfg.Defaults.Engine,
+		"model":           cfg.Defaults.Model,
+		"effort":          cfg.Defaults.Effort,
+		"sandbox":         cfg.Defaults.Sandbox,
+		"permission_mode": cfg.Defaults.PermissionMode,
+		"max_depth":       cfg.Defaults.MaxDepth,
 	}
 
 	roles := make(map[string]any, len(cfg.Roles))

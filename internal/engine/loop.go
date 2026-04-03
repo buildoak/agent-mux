@@ -956,7 +956,7 @@ func buildFailureResult(spec *types.DispatchSpec, annotations types.DispatchAnno
 	if emitter != nil {
 		_ = emitter.EmitDispatchEnd("failed", durationMS)
 	}
-	result := dispatch.BuildFailedResult(spec, annotations.ResponseMaxChars, "", dispatch.NewDispatchError(code, message, suggestion), emptyActivity(), metadata, durationMS)
+	result := dispatch.BuildFailedResult(spec, "", dispatch.NewDispatchError(code, message, suggestion), emptyActivity(), metadata, durationMS)
 	persistDispatchRecord(spec, annotations, result, "", emitter)
 	return result
 }
@@ -974,11 +974,11 @@ func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, annotations t
 	dispatchErr.PartialArtifacts = dispatch.ScanArtifacts(spec.ArtifactDir)
 	// FM-9: Preserve accumulated partial response so callers can see what
 	// the worker accomplished even when the meta write fails.
-	return dispatch.BuildFailedResult(spec, annotations.ResponseMaxChars, response, dispatchErr, activity, metadata, durationMS)
+	return dispatch.BuildFailedResult(spec, response, dispatchErr, activity, metadata, durationMS)
 }
 
 func finalizeCompleted(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := dispatch.BuildCompletedResult(spec, annotations.ResponseMaxChars, response, activity, metadata, durationMS)
+	result := dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", result.Artifacts); err != nil {
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
@@ -1017,7 +1017,7 @@ func finalizeCompleted(spec *types.DispatchSpec, annotations types.DispatchAnnot
 }
 
 func finalizeTimedOut(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := dispatch.BuildTimedOutResult(spec, annotations.ResponseMaxChars, response, fmt.Sprintf("Soft timeout at %ds, hard kill after %ds grace.", spec.TimeoutSec, spec.GraceSec), activity, metadata, durationMS)
+	result := dispatch.BuildTimedOutResult(spec, response, fmt.Sprintf("Soft timeout at %ds, hard kill after %ds grace.", spec.TimeoutSec, spec.GraceSec), activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "timed_out", result.Artifacts); err != nil {
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
@@ -1056,7 +1056,7 @@ func finalizeTimedOut(spec *types.DispatchSpec, annotations types.DispatchAnnota
 
 func finalizeFailed(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, dispErr *types.DispatchError) *types.DispatchResult {
 	// FM-9: Pass accumulated response to BuildFailedResult so partial work is preserved.
-	result := dispatch.BuildFailedResult(spec, annotations.ResponseMaxChars, response, dispErr, activity, metadata, durationMS)
+	result := dispatch.BuildFailedResult(spec, response, dispErr, activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "failed", result.Artifacts); err != nil {
 		if emitter != nil {
 			_ = emitter.EmitDispatchEnd("failed", durationMS)
@@ -1114,9 +1114,6 @@ func persistDispatchRecord(spec *types.DispatchSpec, annotations types.DispatchA
 				ErrorCode: "persist_result_failed",
 				Message:   fmt.Sprintf("Persist dispatch result: %v", err),
 			})
-		}
-		if responseText != "" && spec.ArtifactDir != "" {
-			_, _ = dispatch.WriteFullOutput(spec.ArtifactDir, responseText)
 		}
 	}
 }

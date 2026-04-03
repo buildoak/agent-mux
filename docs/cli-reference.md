@@ -27,12 +27,9 @@ For operational usage patterns, see the other docs. This page is the lookup tabl
 | `--coordinator` | | string | — | Legacy alias for `--profile` |
 | `--config` | | string | — | Explicit config path (overrides default lookup) |
 | `--artifact-dir` | | string | auto | Override artifact directory |
-| `--salt` | | string | auto | Human-readable dispatch salt |
 | `--full` | `-f` | bool | `true` | Full access mode |
 | `--no-full` | | bool | `false` | Disable full access |
 | `--max-depth` | | int | `2` | Max recursive dispatch depth |
-| `--no-subdispatch` | | bool | `false` | Disable recursive dispatch |
-| `--response-max-chars` | | int | from config | Truncate response beyond this |
 | `--yes` | | bool | `false` | Skip TTY confirmation |
 | `--verbose` | `-v` | bool | `false` | Raw harness lines on stderr |
 | `--version` | | bool | — | Print version |
@@ -51,7 +48,6 @@ For operational usage patterns, see the other docs. This page is the lookup tabl
 
 | Flag | Short | Type | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `--pipeline` | `-P` | string | — | Named pipeline from config |
 | `--recover` | | string | — | Dispatch ID to continue from |
 | `--signal` | | string | — | Dispatch ID to send a message to |
 | `--stdin` | | bool | `false` | Read DispatchSpec JSON from stdin |
@@ -60,7 +56,6 @@ For operational usage patterns, see the other docs. This page is the lookup tabl
 
 | Flag | Short | Type | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `--output` | `-o` | string | `json` | Output format: `json` or `text` |
 | `--stream` | `-S` | bool | `false` | Stream all events to stderr |
 
 ## --stdin JSON
@@ -74,13 +69,10 @@ Defaults when field is absent from JSON:
 | `dispatch_id` | Generated ULID |
 | `cwd` | `os.Getwd()` |
 | `artifact_dir` | `/tmp/agent-mux/<dispatch_id>/` |
-| `allow_subdispatch` | `true` |
 | `full_access` | `true` |
-| `pipeline_step` | `-1` |
 | `grace_sec` | `60` |
-| `handoff_mode` | `summary_and_refs` |
 
-CLI flags are ignored when `--stdin` is active (warning printed to stderr).
+Supported dispatch flags still apply in `--stdin` mode as explicit overrides for the decoded JSON fields.
 
 ## Config Subcommand
 
@@ -120,14 +112,6 @@ lifter          codex   gpt-5.4     high    1800s
   └ claude      claude  claude-...  high    1800s
 ```
 
-### config pipelines
-
-```bash
-agent-mux config pipelines [--json]
-```
-
-Pipeline names and step counts.
-
 ### config models
 
 ```bash
@@ -162,7 +146,6 @@ Prints the fully resolved `DispatchSpec` as JSON without executing. Useful for v
 | `agent-mux [flags] <prompt>` | dispatch (default) |
 | `agent-mux dispatch [flags] <prompt>` | dispatch (explicit) |
 | `agent-mux preview [flags] <prompt>` | preview |
-| `agent-mux --pipeline <name> [flags] <prompt>` | pipeline |
 | `agent-mux --recover <id> [flags] <prompt>` | recover + dispatch |
 | `agent-mux --signal <id> <message>` | signal |
 | `agent-mux --stdin [flags]` | stdin dispatch |
@@ -172,7 +155,6 @@ Prints the fully resolved `DispatchSpec` as JSON without executing. Useful for v
 | `agent-mux status <id> [flags]` | lifecycle: dispatch status |
 | `agent-mux result <id> [flags]` | lifecycle: dispatch result |
 | `agent-mux inspect <id> [flags]` | lifecycle: deep dispatch view |
-| `agent-mux gc [flags]` | lifecycle: garbage collection |
 | `agent-mux wait <id> [flags]` | async: block until done |
 | `agent-mux steer <id> <action> [args]` | steering: mid-flight control |
 | `agent-mux -- help` | dispatch literal prompt `help` |
@@ -194,4 +176,3 @@ Prints the fully resolved `DispatchSpec` as JSON without executing. Useful for v
 - [Lifecycle](./lifecycle.md) for lifecycle subcommand details
 - [Async](./async.md) for `--async` and `wait`
 - [Steering](./steering.md) for `steer` subcommand details
-- [Pipelines](./pipelines.md) for `--pipeline` flag and pipeline TOML

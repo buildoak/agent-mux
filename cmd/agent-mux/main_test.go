@@ -367,6 +367,14 @@ func TestResultCommandFallsBackToLegacyFullOutput(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(artifactDir, "full_output.md"), []byte(response), 0o644); err != nil {
 		t.Fatalf("WriteFile(full_output.md): %v", err)
 	}
+	if err := dispatch.WriteStatusJSON(artifactDir, dispatch.LiveStatus{
+		State:        "completed",
+		ElapsedS:     1,
+		LastActivity: "done",
+		DispatchID:   record.ID,
+	}); err != nil {
+		t.Fatalf("WriteStatusJSON: %v", err)
+	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -429,9 +437,6 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	}
 	if preview.Control.ArtifactDir != artifactDir {
 		t.Fatalf("control.artifact_dir = %q, want %q", preview.Control.ArtifactDir, artifactDir)
-	}
-	if preview.ResultMetadata.ResponseMaxChars != 128000 {
-		t.Fatalf("result_metadata.response_max_chars = %d, want 128000", preview.ResultMetadata.ResponseMaxChars)
 	}
 	if len(preview.PromptPreamble) != 1 {
 		t.Fatalf("prompt_preamble len = %d, want 1 (%v)", len(preview.PromptPreamble), preview.PromptPreamble)
@@ -1377,8 +1382,8 @@ func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
 	}
 }
 
-func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndAllowedZero(t *testing.T) {
-	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","allow_subdispatch":false,"full_access":false,"response_max_chars":0}`))
+func TestDecodeStdinDispatchSpecPreservesExplicitFalse(t *testing.T) {
+	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","full_access":false}`))
 	if err != nil {
 		t.Fatalf("decodeStdinDispatchSpec: %v", err)
 	}
@@ -1388,9 +1393,6 @@ func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndAllowedZero(t *testing.
 	}
 	if spec.GraceSec != 60 {
 		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
-	}
-	if spec.ResponseMaxChars != 0 {
-		t.Fatalf("response_max_chars = %d, want 0", spec.ResponseMaxChars)
 	}
 }
 
@@ -2068,11 +2070,10 @@ type previewResultForTest struct {
 		TimeoutSec int    `json:"timeout_sec"`
 	} `json:"dispatch_spec"`
 	ResultMetadata struct {
-		Role             string   `json:"role"`
-		Variant          string   `json:"variant"`
-		Profile          string   `json:"profile"`
-		ResponseMaxChars int      `json:"response_max_chars"`
-		Skills           []string `json:"skills"`
+		Role    string   `json:"role"`
+		Variant string   `json:"variant"`
+		Profile string   `json:"profile"`
+		Skills  []string `json:"skills"`
 	} `json:"result_metadata"`
 	Prompt struct {
 		Excerpt           string `json:"excerpt"`
@@ -2517,30 +2518,6 @@ func TestRoleSkillsStdinMerge(t *testing.T) {
 	want := []string{"web-search", "pratchett-read"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("skills = %#v, want %#v", got, want)
-	}
-}
-
-func TestPreviewStdinPreservesExplicitZeroResponseMaxChars(t *testing.T) {
-	input := map[string]any{
-		"engine":             "codex",
-		"prompt":             "from stdin",
-		"response_max_chars": 0,
-	}
-	data, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("marshal input: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"preview", "--stdin"}, bytes.NewReader(data), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	preview := decodePreviewResult(t, stdout.Bytes())
-	if preview.ResultMetadata.ResponseMaxChars != 0 {
-		t.Fatalf("result_metadata.response_max_chars = %d, want 0", preview.ResultMetadata.ResponseMaxChars)
 	}
 }
 

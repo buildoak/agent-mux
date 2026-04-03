@@ -24,14 +24,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Defaults.PermissionMode != "" {
 		t.Fatalf("Defaults.PermissionMode = %q, want %q", cfg.Defaults.PermissionMode, "")
 	}
-	if cfg.Defaults.ResponseMaxChars != 128000 {
-		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 128000)
-	}
 	if cfg.Defaults.MaxDepth != 2 {
 		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 2)
-	}
-	if !cfg.Defaults.AllowSubdispatch {
-		t.Fatal("Defaults.AllowSubdispatch = false, want true")
 	}
 	if cfg.Liveness.HeartbeatIntervalSec != 15 {
 		t.Fatalf("Liveness.HeartbeatIntervalSec = %d, want %d", cfg.Liveness.HeartbeatIntervalSec, 15)
@@ -70,9 +64,7 @@ model = "gpt-5.4"
 effort = "medium"
 sandbox = "workspace-write"
 permission_mode = "default"
-response_max_chars = 0
 max_depth = 5
-allow_subdispatch = false
 
 [models]
 codex = ["gpt-5.4", "gpt-5.4-mini"]
@@ -124,14 +116,8 @@ event_deny_action = "block"
 	if cfg.Defaults.PermissionMode != "default" {
 		t.Fatalf("Defaults.PermissionMode = %q, want %q", cfg.Defaults.PermissionMode, "default")
 	}
-	if cfg.Defaults.ResponseMaxChars != 0 {
-		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 0)
-	}
 	if cfg.Defaults.MaxDepth != 5 {
 		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 5)
-	}
-	if cfg.Defaults.AllowSubdispatch {
-		t.Fatal("Defaults.AllowSubdispatch = true, want false")
 	}
 
 	if got := cfg.Models["codex"]; len(got) != 2 || got[0] != "gpt-5.4" || got[1] != "gpt-5.4-mini" {
@@ -236,21 +222,6 @@ silence_warn_seconds = 45
 	}
 	if cfg.Timeout.High != 1800 {
 		t.Fatalf("Timeout.High = %d, want default %d", cfg.Timeout.High, 1800)
-	}
-}
-
-func TestLoadConfigWithoutOverridesKeepsDefaultResponseMaxChars(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cwd := t.TempDir()
-
-	cfg, err := LoadConfig("", cwd)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-
-	if cfg.Defaults.ResponseMaxChars != 128000 {
-		t.Fatalf("Defaults.ResponseMaxChars = %d, want %d", cfg.Defaults.ResponseMaxChars, 128000)
 	}
 }
 

@@ -12,7 +12,7 @@ agent-mux list [--limit N] [--status completed|failed|timed_out] [--engine codex
 
 Lists recent dispatches. Default limit is 20 (pass 0 for all).
 
-Output columns: ID (12-character prefix), SALT, STATUS, ENGINE, MODEL, DURATION, CWD.
+Output columns: ID (12-character prefix), STATUS, ENGINE, MODEL, DURATION, CWD.
 
 With `--json`, emits NDJSON (one record per line).
 
@@ -30,7 +30,7 @@ agent-mux status [--json] <dispatch_id>
 
 Shows status for a single dispatch. Accepts full ID or unique prefix.
 
-Fields shown: Status, Engine/Model, Duration, Started, Truncated, Salt, ArtifactDir.
+Fields shown: Status, Engine/Model, Duration, Started, Truncated, ArtifactDir.
 
 For running dispatches, reads live `status.json` from the artifact directory. Detects orphaned processes where the host PID is dead but the dispatch was never marked terminal.
 
@@ -72,7 +72,7 @@ agent-mux inspect [--json] <dispatch_id>
 
 Deep view of a dispatch. Accepts full ID or unique prefix.
 
-Shows all record fields: ID, Status, Engine, Model, Role, Variant, Started, Ended, Duration, Truncated, Salt, Cwd, ArtifactDir. Also includes artifact listing and full response text.
+Shows all record fields: ID, Status, Engine, Model, Role, Variant, Started, Ended, Duration, Truncated, Cwd, ArtifactDir. Also includes artifact listing and full response text.
 
 JSON mode adds `meta` from `dispatch_meta.json` when present.
 
@@ -80,24 +80,6 @@ Example:
 
 ```bash
 agent-mux inspect 01JARQ8X
-```
-
-## Garbage Collection
-
-```bash
-agent-mux gc --older-than <duration> [--dry-run]
-```
-
-`--older-than` is required. Duration format: `Nd` (days) or `Nh` (hours).
-
-Cleans: JSONL records, result files, and artifact directories. Records with unparseable timestamps are always kept.
-
-`--dry-run` shows what would be deleted without deleting anything.
-
-Example — dry run, dispatches older than 7 days:
-
-```bash
-agent-mux gc --older-than 7d --dry-run
 ```
 
 ## Cross-References

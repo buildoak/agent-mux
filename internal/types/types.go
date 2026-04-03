@@ -62,11 +62,10 @@ type DispatchMetadata struct {
 }
 
 type DispatchAnnotations struct {
-	Role             string
-	Variant          string
-	Profile          string
-	Skills           []string
-	ResponseMaxChars int
+	Role    string
+	Variant string
+	Profile string
+	Skills  []string
 }
 
 type TokenUsage struct {

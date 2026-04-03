@@ -9,15 +9,15 @@ This document is self-contained. If you need to know how a prompt becomes a runn
 1. **Config load**: `config.LoadConfig(flags.config, spec.Cwd)` merges the active config layers before any dispatch-specific resolution happens.
 2. **Profile resolution**: if `profile` is set, `config.LoadProfile` applies frontmatter defaults, prepends profile skills, and merges the profile companion config when present.
 3. **Role resolution**: if `role` is set, `config.ResolveRole` applies the role and optional variant overlay, prepends the role `system_prompt_file`, and merges role skills with CLI or stdin skills taking precedence.
-4. **Defaults application**: unresolved `engine`, `model`, `effort`, `max_depth`, `allow_subdispatch`, and `response_max_chars` fields are filled from config defaults, with `effort` falling back to `"high"`.
+4. **Defaults application**: unresolved `engine`, `model`, `effort`, and `max_depth` fields are filled from config defaults, with `effort` falling back to `"high"`.
 5. **Timeout resolution**: `timeout_sec` is taken from the explicit spec, then role or profile timeout, then `config.TimeoutForEffort`, while `grace_sec` falls back to `cfg.Timeout.Grace`.
 6. **EngineOpts injection**: liveness settings and the default `permission-mode` are written into `spec.EngineOpts` unless the dispatch already set them.
 7. **Skill injection**: unless `skip_skills` is true, `config.LoadSkills` searches `cwd`, the active role config directory, and `[skills].search_paths`, then prepends XML-wrapped skill blocks and adds any skill `scripts/` directories to `engine_opts["add-dir"]`.
 8. **Context file preamble**: when `context_file` is set and exists, a fixed preamble telling the worker to read `$AGENT_MUX_CONTEXT` is prepended to the user prompt.
 9. **Hook check**: deny hooks can abort the dispatch before execution, and allow or warn rules can inject a safety preamble ahead of the user prompt.
-10. **Traceability**: `dispatch.EnsureTraceability` fills `salt` and `trace_token`, and the final prompt later receives the dispatch preamble with trace token, dispatch ID, and artifact-dir hint.
+10. **Prompt preamble**: `dispatch.WithPromptPreamble` prepends runtime instructions for `$AGENT_MUX_CONTEXT` and `$AGENT_MUX_ARTIFACT_DIR` when those paths are present.
 
-After these ten steps, agent-mux resolves the adapter, validates pipeline mode if requested, writes recovery control records for live dispatches, and hands the materialized spec to `LoopEngine.Dispatch`.
+After these ten steps, agent-mux resolves the adapter, writes recovery control records for live dispatches, and hands the materialized spec to `LoopEngine.Dispatch`.
 
 ## Prompt Composition Order
 
@@ -36,7 +36,7 @@ After these ten steps, agent-mux resolves the adapter, validates pipeline mode i
 4. Recovery prompt
 5. Original user prompt
 
-At execution time, `dispatch.WithPromptPreamble` prepends the trace token, dispatch ID, and artifact-dir instruction ahead of the composed user prompt.
+At execution time, `dispatch.WithPromptPreamble` prepends the runtime context-file and artifact-dir instructions ahead of the composed user prompt.
 
 ## DispatchSpec
 
@@ -44,39 +44,21 @@ Current source definition:
 
 ```go
 type DispatchSpec struct {
-	DispatchID          string         `json:"dispatch_id"`
-	Salt                string         `json:"salt,omitempty"`
-	TraceToken          string         `json:"trace_token,omitempty"`
-	Engine              string         `json:"engine"`
-	Model               string         `json:"model,omitempty"`
-	Effort              string         `json:"effort"`
-	Prompt              string         `json:"prompt"`
-	SystemPrompt        string         `json:"system_prompt,omitempty"`
-	Cwd                 string         `json:"cwd"`
-	Skills              []string       `json:"skills,omitempty"`
-	SkipSkills          bool           `json:"skip_skills,omitempty"`
-	Profile             string         `json:"-"`
-	Pipeline            string         `json:"pipeline,omitempty"`
-	ContextFile         string         `json:"context_file,omitempty"`
-	ArtifactDir         string         `json:"artifact_dir"`
-	TimeoutSec          int            `json:"timeout_sec,omitempty"`
-	GraceSec            int            `json:"grace_sec,omitempty"`
-	Role                string         `json:"role,omitempty"`
-	Variant             string         `json:"variant,omitempty"`
-	MaxDepth            int            `json:"max_depth"`
-	AllowSubdispatch    bool           `json:"allow_subdispatch"`
-	Depth               int            `json:"depth"`
-	ParentDispatchID    string         `json:"parent_dispatch_id,omitempty"`
-	PipelineID          string         `json:"pipeline_id,omitempty"`
-	PipelineStep        int            `json:"pipeline_step"`
-	ContinuesDispatchID string         `json:"continues_dispatch_id,omitempty"`
-	Receives            string         `json:"receives,omitempty"`
-	PassOutputAs        string         `json:"pass_output_as,omitempty"`
-	Parallel            int            `json:"parallel,omitempty"`
-	HandoffMode         string         `json:"handoff_mode,omitempty"`
-	ResponseMaxChars    int            `json:"response_max_chars,omitempty"`
-	EngineOpts          map[string]any `json:"engine_opts,omitempty"`
-	FullAccess          bool           `json:"full_access"`
+	DispatchID   string         `json:"dispatch_id"`
+	Engine       string         `json:"engine"`
+	Model        string         `json:"model,omitempty"`
+	Effort       string         `json:"effort"`
+	Prompt       string         `json:"prompt"`
+	SystemPrompt string         `json:"system_prompt,omitempty"`
+	Cwd          string         `json:"cwd"`
+	ContextFile  string         `json:"context_file,omitempty"`
+	ArtifactDir  string         `json:"artifact_dir"`
+	TimeoutSec   int            `json:"timeout_sec,omitempty"`
+	GraceSec     int            `json:"grace_sec,omitempty"`
+	MaxDepth     int            `json:"max_depth"`
+	Depth        int            `json:"depth"`
+	EngineOpts   map[string]any `json:"engine_opts,omitempty"`
+	FullAccess   bool           `json:"full_access"`
 }
 ```
 
@@ -87,36 +69,18 @@ type DispatchSpec struct {
 | Field | JSON key | Type | Meaning |
 | --- | --- | --- | --- |
 | `DispatchID` | `dispatch_id` | `string` | Stable dispatch identifier; generated if absent in stdin mode. |
-| `Salt` | `salt` | `string` | Human-readable dispatch label used in logs and metadata. |
-| `TraceToken` | `trace_token` | `string` | Stable trace token injected into the prompt preamble and metadata. |
 | `Engine` | `engine` | `string` | Adapter name: `codex`, `claude`, or `gemini`. |
 | `Model` | `model` | `string` | Model override after role, profile, and default resolution. |
 | `Effort` | `effort` | `string` | Effort bucket used for defaults and timeout mapping. |
 | `Prompt` | `prompt` | `string` | Final user task before preamble injection. |
 | `SystemPrompt` | `system_prompt` | `string` | Composed system prompt content passed to the adapter. |
 | `Cwd` | `cwd` | `string` | Working directory used for config discovery and harness execution. |
-| `Skills` | `skills` | `[]string` | Named skills to resolve and inject into the prompt. |
-| `SkipSkills` | `skip_skills` | `bool` | Disables skill prompt injection while preserving role defaults. |
-| `Profile` | `profile` | `string` | Coordinator profile name; `coordinator` is accepted as an input alias. |
-| `Pipeline` | `pipeline` | `string` | Named pipeline from config; switches execution from single dispatch to pipeline mode. |
 | `ContextFile` | `context_file` | `string` | Large context file path whose contents are referenced through `$AGENT_MUX_CONTEXT`. |
 | `ArtifactDir` | `artifact_dir` | `string` | Artifact root for events, status, metadata, and worker outputs. |
 | `TimeoutSec` | `timeout_sec` | `int` | Hard execution timeout in seconds. |
 | `GraceSec` | `grace_sec` | `int` | Grace period after timeout before forced termination. |
-| `Role` | `role` | `string` | Role name resolved from config. |
-| `Variant` | `variant` | `string` | Variant name applied within the selected role. |
 | `MaxDepth` | `max_depth` | `int` | Maximum recursive dispatch depth allowed for subdispatch. |
-| `AllowSubdispatch` | `allow_subdispatch` | `bool` | Enables or disables recursive dispatch from the worker. |
-| `Depth` | `depth` | `int` | Current recursion depth; mainly used for pipeline and subdispatch bookkeeping. |
-| `ParentDispatchID` | `parent_dispatch_id` | `string` | Parent dispatch ID for nested runs and pipeline children. |
-| `PipelineID` | `pipeline_id` | `string` | Pipeline instance ID stamped onto pipeline worker specs. |
-| `PipelineStep` | `pipeline_step` | `int` | Zero-based step index for pipeline workers; defaults to `-1` in stdin mode. |
-| `ContinuesDispatchID` | `continues_dispatch_id` | `string` | Previous dispatch being recovered or continued. |
-| `Receives` | `receives` | `string` | Named input binding from an earlier pipeline step. |
-| `PassOutputAs` | `pass_output_as` | `string` | Name under which this worker output is exposed downstream. |
-| `Parallel` | `parallel` | `int` | Fan-out count for parallel workers in one pipeline step. |
-| `HandoffMode` | `handoff_mode` | `string` | Pipeline handoff strategy such as `summary_and_refs`, `full_concat`, or `refs_only`. |
-| `ResponseMaxChars` | `response_max_chars` | `int` | Max length for stored response before truncation and full-output spillover. |
+| `Depth` | `depth` | `int` | Current recursion depth carried through nested dispatches. |
 | `EngineOpts` | `engine_opts` | `map[string]any` | Adapter-specific options such as liveness, permission mode, sandbox, and add-dir values. |
 | `FullAccess` | `full_access` | `bool` | Tells adapters whether the run should request full filesystem access. |
 
@@ -131,13 +95,10 @@ cat <<'JSON' | agent-mux --stdin
   "cwd": ".",
   "artifact_dir": "/tmp/agent-mux/01KTESTDISPATCH0000000000000",
   "full_access": true,
-  "allow_subdispatch": true,
   "max_depth": 2,
   "depth": 0,
-  "pipeline_step": -1,
   "effort": "high",
-  "grace_sec": 60,
-  "handoff_mode": "summary_and_refs"
+  "grace_sec": 60
 }
 JSON
 ```
@@ -151,8 +112,6 @@ type DispatchResult struct {
 	SchemaVersion     int               `json:"schema_version"`
 	Status            DispatchStatus    `json:"status"`
 	DispatchID        string            `json:"dispatch_id"`
-	DispatchSalt      string            `json:"dispatch_salt"`
-	TraceToken        string            `json:"trace_token"`
 	Response          string            `json:"response"`
 	ResponseTruncated bool              `json:"response_truncated"`
 	FullOutput        *string           `json:"full_output"`
@@ -176,12 +135,10 @@ type DispatchResult struct {
 | `SchemaVersion` | `schema_version` | `int` | Result schema version for callers consuming structured output. |
 | `Status` | `status` | `DispatchStatus` | Terminal state: `completed`, `timed_out`, or `failed`. |
 | `DispatchID` | `dispatch_id` | `string` | Dispatch identifier for the finished run. |
-| `DispatchSalt` | `dispatch_salt` | `string` | Human-readable label associated with the dispatch. |
-| `TraceToken` | `trace_token` | `string` | Trace token carried through execution and artifacts. |
 | `Response` | `response` | `string` | Final response text returned inline. |
-| `ResponseTruncated` | `response_truncated` | `bool` | Indicates the inline response was truncated. |
-| `FullOutput` | `full_output` | `*string` | Optional full untruncated response payload. |
-| `FullOutputPath` | `full_output_path` | `*string` | Optional absolute path to `full_output.md` when persisted separately. |
+| `ResponseTruncated` | `response_truncated` | `bool` | Reserved compatibility field; current results keep the full response inline. |
+| `FullOutput` | `full_output` | `*string` | Reserved compatibility field; currently unused. |
+| `FullOutputPath` | `full_output_path` | `*string` | Reserved compatibility field; currently unused. |
 | `HandoffSummary` | `handoff_summary` | `string` | Downstream handoff summary extracted from the response. |
 | `Artifacts` | `artifacts` | `[]string` | Artifact files found in the dispatch artifact directory. |
 | `Partial` | `partial` | `bool` | Marks a partial result when the worker produced usable output before terminal failure. |
@@ -222,8 +179,6 @@ type DispatchResult struct {
 | `Turns` | `turns` | `int` | Conversation or step count reported by the harness loop. |
 | `CostUSD` | `cost_usd` | `float64` | Reported or estimated run cost in USD. |
 | `SessionID` | `session_id` | `string` | Harness session ID used for resume or correlation. |
-| `PipelineID` | `pipeline_id` | `string` | Pipeline instance ID when the dispatch ran as a pipeline worker. |
-| `ParentDispatchID` | `parent_dispatch_id` | `string` | Parent dispatch ID for nested or pipeline-owned runs. |
 
 ### TokenUsage
 

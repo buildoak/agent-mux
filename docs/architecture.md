@@ -10,12 +10,12 @@ The principles below are already reflected in code. Each one has an implementati
 
 | Principle | Implementation implication |
 | --- | --- |
-| Tool, not orchestrator | `cmd/agent-mux/main.go` resolves inputs and dispatches; it does not decide strategy. Multi-step behavior lives in `internal/pipeline` as TOML-defined data. |
+| Tool, not orchestrator | `cmd/agent-mux/main.go` resolves inputs and dispatches; it does not decide strategy beyond materializing one dispatch request. |
 | Job done is holy | `internal/dispatch.EnsureArtifactDir` and `WriteDispatchMeta` run before process spawn so artifacts exist even if the harness later fails. |
 | Errors are steering signals | `internal/dispatch.ErrorCatalog` normalizes failures into codes, messages, suggestions, and retryability for the caller. |
-| Single-shot with curated context first | The default path is one `types.DispatchSpec` into one `engine.LoopEngine`; fan-out only happens when `spec.Pipeline` resolves to a configured pipeline. |
+| Single-shot with curated context first | The default path is one `types.DispatchSpec` into one `engine.LoopEngine`. |
 | Simplest viable dispatch | CLI flags, stdin JSON, role overlays, and timeout buckets resolve into a single materialized spec before execution. The engine loop does not keep reinterpreting config at runtime. |
-| Config over code | `internal/config` owns merge semantics, role definitions, skill search paths, timeout buckets, and pipelines; the binary stays generic. |
+| Config over code | `internal/config` owns merge semantics, role definitions, skill search paths, and timeout buckets; the binary stays generic. |
 
 ## Key Architecture Decisions
 
@@ -74,7 +74,6 @@ codex binary      claude binary      gemini binary
 | `internal/engine` | `LoopEngine` process lifecycle, event loop, timeout/watchdog/inbox handling |
 | `internal/engine/adapter` | Adapter registry plus `CodexAdapter`, `ClaudeAdapter`, `GeminiAdapter` |
 | `internal/supervisor` | `exec.Cmd` wrapper with process-group startup and signal handling |
-| `internal/pipeline` | `ExecutePipeline` step chaining, fan-out, handoff rendering |
 | `internal/event` | `Emitter` NDJSON formatting, heartbeat ticker, dual-sink streaming |
 | `internal/dispatch` | Traceability, artifact directory management, dispatch metadata |
 | `internal/recovery` | Control records, artifact directory resolution, recovery prompt construction |
@@ -96,14 +95,14 @@ type DispatchSpec struct {
 	Prompt       string
 	SystemPrompt string
 	Cwd          string
-	Skills       []string
 	ArtifactDir  string
+	ContextFile  string
 	TimeoutSec   int
 	GraceSec     int
-	Role         string
-	Variant      string
-	Pipeline     string
+	MaxDepth     int
+	Depth        int
 	EngineOpts   map[string]any
+	FullAccess   bool
 }
 
 type HarnessAdapter interface {
@@ -158,7 +157,7 @@ optional variant overlay
   |
   v
 defaults application
-  `-> engine/model/effort/max_depth/allow_subdispatch
+  `-> engine/model/effort/max_depth
   |
   v
 timeout resolution
@@ -182,24 +181,16 @@ safety preamble injection
   |
   v
 traceability and artifact setup
-  `-> dispatch.EnsureTraceability(...)
+  `-> dispatch.WriteDispatchMeta(...)
   `-> recovery.RegisterDispatchSpec(...)
   |
   v
 adapter selection
   `-> adapter.Registry.Get(spec.Engine)
   |
-  +------------------------------+
-  | pipeline path               |
-  | runPipeline(...)            |
-  | -> pipeline.ExecutePipeline |
-  +------------------------------+
-  |
-  +------------------------------+
-  | single dispatch path         |
-  | engine.NewLoopEngine(...)    |
-  | -> LoopEngine.Dispatch(...)  |
-  +------------------------------+
+single dispatch path
+  `-> engine.NewLoopEngine(...)
+  `-> LoopEngine.Dispatch(...)
   |
   v
 process spawn

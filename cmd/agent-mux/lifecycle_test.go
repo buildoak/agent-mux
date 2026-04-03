@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +180,39 @@ func TestInspectCommandPrefixMatch(t *testing.T) {
 	}
 	if !strings.Contains(out, "prefix match response") {
 		t.Fatalf("stdout = %q, want response text", out)
+	}
+}
+
+func TestWaitCommandPollsMetadataOnlyRecordUntilResultExists(t *testing.T) {
+	isolateHome(t)
+
+	record := testStoreRecord("01KMT4E7BBNN1KQEC8MYJRW5H5", "completed")
+	writeStoreRecord(t, record, "", false)
+	if err := dispatch.WriteStatusJSON(record.ArtifactDir, dispatch.LiveStatus{
+		State:        "running",
+		ElapsedS:     1,
+		LastActivity: "working",
+		DispatchID:   record.ID,
+	}); err != nil {
+		t.Fatalf("WriteStatusJSON: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(record.ArtifactDir, "host.pid"), []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
+		t.Fatalf("write host.pid: %v", err)
+	}
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		writeStoreRecord(t, record, "wait response", true)
+	}()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"wait", "--poll", "1s", record.ID}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stdout.String() != "wait response" {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), "wait response")
 	}
 }
 

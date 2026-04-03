@@ -30,14 +30,12 @@ type SkillsConfig struct {
 }
 
 type DefaultsConfig struct {
-	Engine           string `toml:"engine"`
-	Model            string `toml:"model"`
-	Effort           string `toml:"effort"`
-	Sandbox          string `toml:"sandbox"`
-	PermissionMode   string `toml:"permission_mode"`
-	ResponseMaxChars int    `toml:"response_max_chars"`
-	MaxDepth         int    `toml:"max_depth"`
-	AllowSubdispatch bool   `toml:"allow_subdispatch"`
+	Engine         string `toml:"engine"`
+	Model          string `toml:"model"`
+	Effort         string `toml:"effort"`
+	Sandbox        string `toml:"sandbox"`
+	PermissionMode string `toml:"permission_mode"`
+	MaxDepth       int    `toml:"max_depth"`
 }
 
 type RoleConfig struct {
@@ -108,12 +106,10 @@ func IsValidationError(err error) bool {
 func DefaultConfig() *Config {
 	return &Config{
 		Defaults: DefaultsConfig{
-			Effort:           "high",
-			Sandbox:          "danger-full-access",
-			PermissionMode:   "",
-			ResponseMaxChars: 128000,
-			MaxDepth:         2,
-			AllowSubdispatch: true,
+			Effort:         "high",
+			Sandbox:        "danger-full-access",
+			PermissionMode: "",
+			MaxDepth:       2,
 		},
 		Models: make(map[string][]string),
 		Roles:  make(map[string]RoleConfig),
@@ -197,9 +193,7 @@ func mergeConfig(base, overlay *Config) {
 	merge(&base.Defaults.Effort, overlay.Defaults.Effort, overlay.defined("defaults", "effort"))
 	merge(&base.Defaults.Sandbox, overlay.Defaults.Sandbox, overlay.defined("defaults", "sandbox"))
 	merge(&base.Defaults.PermissionMode, overlay.Defaults.PermissionMode, overlay.defined("defaults", "permission_mode"))
-	merge(&base.Defaults.ResponseMaxChars, overlay.Defaults.ResponseMaxChars, overlay.defined("defaults", "response_max_chars"))
 	merge(&base.Defaults.MaxDepth, overlay.Defaults.MaxDepth, overlay.defined("defaults", "max_depth"))
-	merge(&base.Defaults.AllowSubdispatch, overlay.Defaults.AllowSubdispatch, overlay.defined("defaults", "allow_subdispatch"))
 
 	if overlay.defined("skills", "search_paths") || len(overlay.Skills.SearchPaths) > 0 {
 		base.Skills.SearchPaths = deduplicateStrings(append(base.Skills.SearchPaths, overlay.Skills.SearchPaths...))

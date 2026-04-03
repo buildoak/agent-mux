@@ -39,20 +39,17 @@ Top-level sections:
 [skills]
 [roles.NAME]
 [roles.NAME.variants.VARIANT]
-[pipelines.NAME]
 ```
 ### `[defaults]`
 `[defaults]` maps to `DefaultsConfig`:
 ```go
 type DefaultsConfig struct {
-	Engine           string `toml:"engine"`
-	Model            string `toml:"model"`
-	Effort           string `toml:"effort"`
-	Sandbox          string `toml:"sandbox"`
-	PermissionMode   string `toml:"permission_mode"`
-	ResponseMaxChars int    `toml:"response_max_chars"`
-	MaxDepth         int    `toml:"max_depth"`
-	AllowSubdispatch bool   `toml:"allow_subdispatch"`
+	Engine         string `toml:"engine"`
+	Model          string `toml:"model"`
+	Effort         string `toml:"effort"`
+	Sandbox        string `toml:"sandbox"`
+	PermissionMode string `toml:"permission_mode"`
+	MaxDepth       int    `toml:"max_depth"`
 }
 ```
 | Key | Type | Default | Notes |
@@ -62,9 +59,7 @@ type DefaultsConfig struct {
 | `effort` | string | `"high"` | Default effort |
 | `sandbox` | string | `"danger-full-access"` | Default Codex sandbox mode |
 | `permission_mode` | string | `""` | Default permission mode passed through engine options |
-| `response_max_chars` | int | `0` | Default truncation ceiling |
 | `max_depth` | int | `2` | Default recursive dispatch depth |
-| `allow_subdispatch` | bool | `true` | Default worker sub-dispatch permission |
 Notes:
 - Defaults are applied after role and profile inputs if the dispatch still leaves a field unset.
 - `permission_mode` only applies when `engine_opts["permission-mode"]` is missing or empty.
