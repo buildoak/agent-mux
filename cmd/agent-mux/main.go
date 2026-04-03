@@ -456,11 +456,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		code, msg, suggestion := promptDeniedFailure(matched)
 		return failResult(spec, code, msg, suggestion)
 	}
-	if hookEval.HasRules() {
-		if inj := hookEval.PromptInjection(); inj != "" {
-			spec.Prompt = inj + "\n\n" + spec.Prompt
-		}
-	}
 
 	preview := buildPreviewResult(req, shouldRequireConfirmation(flags.yes, stdin, stdout, stderr, isTerminal))
 	if command == commandPreview {
@@ -624,25 +619,7 @@ func checkPromptDenied(spec *types.DispatchSpec, hookEval *hooks.Evaluator) (boo
 	if spec == nil || hookEval == nil {
 		return false, ""
 	}
-	return hookEval.CheckPrompt(stripHookPromptInjection(spec.Prompt, hookEval), spec.SystemPrompt)
-}
-
-func stripHookPromptInjection(prompt string, hookEval *hooks.Evaluator) string {
-	if hookEval == nil {
-		return prompt
-	}
-	inj := hookEval.PromptInjection()
-	if inj == "" {
-		return prompt
-	}
-	withSpacing := inj + "\n\n"
-	if strings.HasPrefix(prompt, withSpacing) {
-		return strings.TrimPrefix(prompt, withSpacing)
-	}
-	if strings.HasPrefix(prompt, inj) {
-		return strings.TrimPrefix(prompt, inj)
-	}
-	return prompt
+	return hookEval.CheckPrompt(spec.Prompt, spec.SystemPrompt)
 }
 
 func promptDeniedFailure(matched string) (code, msg, suggestion string) {

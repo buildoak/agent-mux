@@ -16,7 +16,6 @@ import (
 
 	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
-	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/steer"
 	"github.com/buildoak/agent-mux/internal/types"
 )
@@ -1023,7 +1022,14 @@ func TestRunRejectsDeniedSystemPromptContent(t *testing.T) {
 	isolateHome(t)
 
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
-	cfgPath := writeTempConfig(t, "[hooks]\ndeny = [\"blocked secret\"]\n")
+	scriptPath := writeTempHookScript(t, t.TempDir(), "deny-system-prompt.sh", `#!/bin/bash
+if [[ "${HOOK_SYSTEM_PROMPT}" == *"blocked secret"* ]]; then
+	echo "blocked secret" >&2
+	exit 1
+fi
+exit 0
+`)
+	cfgPath := writeTempConfig(t, fmt.Sprintf("[hooks]\npre_dispatch = [%q]\n", scriptPath))
 	t.Setenv("PATH", t.TempDir())
 
 	var stdout bytes.Buffer
@@ -1047,7 +1053,7 @@ func TestRunRejectsDeniedSystemPromptContent(t *testing.T) {
 		t.Fatalf("error = %#v, want prompt_denied", result.Error)
 	}
 	if !strings.Contains(result.Error.Message, `matched: "blocked secret"`) {
-		t.Fatalf("error.message = %q, want matched deny pattern", result.Error.Message)
+		t.Fatalf("error.message = %q, want matched hook reason", result.Error.Message)
 	}
 }
 
@@ -1062,15 +1068,22 @@ func TestRunRejectsDeniedRoleSystemPromptFileContent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "prompts", "reviewer.md"), []byte("contains blocked payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile prompt: %v", err)
 	}
-	if err := os.WriteFile(cfgPath, []byte(strings.TrimSpace(`
+	scriptPath := writeTempHookScript(t, configDir, "deny-role-system-prompt.sh", `#!/bin/bash
+if [[ "${HOOK_SYSTEM_PROMPT}" == *"blocked payload"* ]]; then
+	echo "blocked payload" >&2
+	exit 1
+fi
+exit 0
+`)
+	if err := os.WriteFile(cfgPath, []byte(strings.TrimSpace(fmt.Sprintf(`
 [hooks]
-deny = ["blocked payload"]
+pre_dispatch = [%q]
 
 [roles.reviewer]
 engine = "codex"
 model = "gpt-5.4"
 system_prompt_file = "prompts/reviewer.md"
-`)), 0o644); err != nil {
+`, scriptPath))), 0o644); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 	t.Setenv("PATH", t.TempDir())
@@ -1096,7 +1109,7 @@ system_prompt_file = "prompts/reviewer.md"
 		t.Fatalf("error = %#v, want prompt_denied", result.Error)
 	}
 	if !strings.Contains(result.Error.Message, `matched: "blocked payload"`) {
-		t.Fatalf("error.message = %q, want matched deny pattern", result.Error.Message)
+		t.Fatalf("error.message = %q, want matched hook reason", result.Error.Message)
 	}
 }
 
@@ -1899,11 +1912,12 @@ func TestRunLeavesPromptUnchangedWithoutContextFile(t *testing.T) {
 	}
 }
 
-func TestRunInjectsHookRulesWithoutSelfDenying(t *testing.T) {
+func TestRunHookScriptDoesNotInjectIntoPrompt(t *testing.T) {
 	isolateHome(t)
 
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
-	cfgPath := writeTempConfig(t, "[hooks]\ndeny = [\"rm -rf\"]\n")
+	scriptPath := writeTempHookScript(t, t.TempDir(), "allow.sh", "#!/bin/bash\nexit 0\n")
+	cfgPath := writeTempConfig(t, fmt.Sprintf("[hooks]\npre_dispatch = [%q]\n", scriptPath))
 	t.Setenv("PATH", t.TempDir())
 
 	var stdout bytes.Buffer
@@ -1928,9 +1942,8 @@ func TestRunInjectsHookRulesWithoutSelfDenying(t *testing.T) {
 	}
 
 	meta := readDispatchMeta(t, artifactDir)
-	injectedPrompt := hooks.NewEvaluator(config.HooksConfig{Deny: []string{"rm -rf"}}).PromptInjection() + "\n\n" + prompt
-	if meta.PromptHash != promptHash(injectedPrompt) {
-		t.Fatalf("prompt_hash = %q, want %q", meta.PromptHash, promptHash(injectedPrompt))
+	if meta.PromptHash != promptHash(prompt) {
+		t.Fatalf("prompt_hash = %q, want %q", meta.PromptHash, promptHash(prompt))
 	}
 }
 
@@ -1957,6 +1970,16 @@ func writeTempConfig(t *testing.T, content string) string {
 	t.Cleanup(func() { os.Remove(f.Name()) })
 
 	return f.Name()
+}
+
+func writeTempHookScript(t *testing.T, dir, name, content string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func writeTestSkillFile(t *testing.T, cwd, name, content string) {

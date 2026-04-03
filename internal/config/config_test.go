@@ -87,9 +87,9 @@ xhigh = 1200
 grace = 15
 
 [hooks]
-deny = ["rm -rf", "curl | sh"]
-warn = ["git clean -fd"]
-event_deny_action = "block"
+pre_dispatch = ["./hooks/pre-dispatch.sh", "./hooks/common.sh"]
+on_event = ["./hooks/on-event.sh"]
+event_deny_action = "warn"
 `
 
 	if err := os.WriteFile(path, []byte(strings.TrimSpace(content)), 0o644); err != nil {
@@ -145,14 +145,14 @@ event_deny_action = "block"
 		t.Fatalf("Timeout = %#v, want low=30 medium=300 high=900 xhigh=1200 grace=15", cfg.Timeout)
 	}
 
-	if len(cfg.Hooks.Deny) != 2 || cfg.Hooks.Deny[0] != "rm -rf" || cfg.Hooks.Deny[1] != "curl | sh" {
-		t.Fatalf("Hooks.Deny = %#v, want %#v", cfg.Hooks.Deny, []string{"rm -rf", "curl | sh"})
+	if len(cfg.Hooks.PreDispatch) != 2 || cfg.Hooks.PreDispatch[0] != "./hooks/pre-dispatch.sh" || cfg.Hooks.PreDispatch[1] != "./hooks/common.sh" {
+		t.Fatalf("Hooks.PreDispatch = %#v, want %#v", cfg.Hooks.PreDispatch, []string{"./hooks/pre-dispatch.sh", "./hooks/common.sh"})
 	}
-	if len(cfg.Hooks.Warn) != 1 || cfg.Hooks.Warn[0] != "git clean -fd" {
-		t.Fatalf("Hooks.Warn = %#v, want %#v", cfg.Hooks.Warn, []string{"git clean -fd"})
+	if len(cfg.Hooks.OnEvent) != 1 || cfg.Hooks.OnEvent[0] != "./hooks/on-event.sh" {
+		t.Fatalf("Hooks.OnEvent = %#v, want %#v", cfg.Hooks.OnEvent, []string{"./hooks/on-event.sh"})
 	}
-	if cfg.Hooks.EventDenyAction != "block" {
-		t.Fatalf("Hooks.EventDenyAction = %q, want %q", cfg.Hooks.EventDenyAction, "block")
+	if cfg.Hooks.EventDenyAction != "warn" {
+		t.Fatalf("Hooks.EventDenyAction = %q, want %q", cfg.Hooks.EventDenyAction, "warn")
 	}
 }
 

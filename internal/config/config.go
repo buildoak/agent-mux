@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/buildoak/agent-mux/internal/hooks"
 )
 
 type Config struct {
@@ -19,7 +20,7 @@ type Config struct {
 	Roles    map[string]RoleConfig `toml:"roles"`
 	Liveness LivenessConfig        `toml:"liveness"`
 	Timeout  TimeoutConfig         `toml:"timeout"`
-	Hooks    HooksConfig           `toml:"hooks"`
+	Hooks    hooks.HooksConfig     `toml:"hooks"`
 	Async    AsyncConfig           `toml:"async"`
 
 	meta *toml.MetaData
@@ -70,12 +71,6 @@ type TimeoutConfig struct {
 	High   int `toml:"high"`
 	XHigh  int `toml:"xhigh"`
 	Grace  int `toml:"grace"`
-}
-
-type HooksConfig struct {
-	Deny            []string `toml:"deny"`
-	Warn            []string `toml:"warn"`
-	EventDenyAction string   `toml:"event_deny_action"`
 }
 
 type AsyncConfig struct {
@@ -230,11 +225,11 @@ func mergeConfig(base, overlay *Config) {
 	merge(&base.Timeout.XHigh, overlay.Timeout.XHigh, overlay.defined("timeout", "xhigh"))
 	merge(&base.Timeout.Grace, overlay.Timeout.Grace, overlay.defined("timeout", "grace"))
 
-	if overlay.defined("hooks", "deny") || len(overlay.Hooks.Deny) > 0 {
-		base.Hooks.Deny = deduplicateStrings(append(base.Hooks.Deny, overlay.Hooks.Deny...))
+	if overlay.defined("hooks", "pre_dispatch") || len(overlay.Hooks.PreDispatch) > 0 {
+		base.Hooks.PreDispatch = deduplicateStrings(append(base.Hooks.PreDispatch, overlay.Hooks.PreDispatch...))
 	}
-	if overlay.defined("hooks", "warn") || len(overlay.Hooks.Warn) > 0 {
-		base.Hooks.Warn = deduplicateStrings(append(base.Hooks.Warn, overlay.Hooks.Warn...))
+	if overlay.defined("hooks", "on_event") || len(overlay.Hooks.OnEvent) > 0 {
+		base.Hooks.OnEvent = deduplicateStrings(append(base.Hooks.OnEvent, overlay.Hooks.OnEvent...))
 	}
 	merge(&base.Hooks.EventDenyAction, overlay.Hooks.EventDenyAction, overlay.defined("hooks", "event_deny_action"))
 

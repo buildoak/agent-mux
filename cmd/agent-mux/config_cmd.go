@@ -317,8 +317,8 @@ func configToJSONMap(cfg *config.Config) (map[string]any, error) {
 	}
 
 	hooks := map[string]any{
-		"deny":              cfg.Hooks.Deny,
-		"warn":              cfg.Hooks.Warn,
+		"pre_dispatch":      cfg.Hooks.PreDispatch,
+		"on_event":          cfg.Hooks.OnEvent,
 		"event_deny_action": cfg.Hooks.EventDenyAction,
 	}
 
