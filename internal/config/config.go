@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// --- Hardcoded defaults (previously from config.toml) ---
+// --- Hardcoded defaults ---
 
 // DefaultTimeoutSec is the fallback timeout when no timeout is specified
 // via CLI flag or frontmatter. Effort level does not affect timeout.

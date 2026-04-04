@@ -252,7 +252,7 @@ func TestEffortTiers(t *testing.T) {
 
 	t.Logf("effort=low timeout_sec=%d, effort=high timeout_sec=%d", lowTimeout, highTimeout)
 
-	// Per config.toml: low=120, high=1800. They must differ.
+	// Timeout values must differ between effort tiers.
 	if lowTimeout > 0 && highTimeout > 0 && lowTimeout >= highTimeout {
 		t.Fatalf("effort tier timeout mismatch: low=%d >= high=%d (expected low < high)", lowTimeout, highTimeout)
 	}

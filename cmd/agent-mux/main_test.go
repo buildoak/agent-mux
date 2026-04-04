@@ -742,10 +742,6 @@ func TestBuildDispatchSpecPrefersProfileFlag(t *testing.T) {
 	}
 }
 
-// Tests for loadSystemPromptFile, prependSystemPrompt, and role-based hooks
-// were removed when config.toml and roles were eliminated.
-
-
 func TestRunRejectsDeniedSystemPromptContentViaHookDir(t *testing.T) {
 	isolateHome(t)
 
@@ -1814,9 +1810,6 @@ func TestFlagSetVisitDoesNotTrackDefaults(t *testing.T) {
 		t.Error("effort should not be tracked when only the default applies")
 	}
 }
-
-// Role effort/skills tests removed — roles are eliminated.
-
 
 func TestBuildDispatchSpecLeavesEffortEmptyWithoutExplicitFlag(t *testing.T) {
 	t.Parallel()

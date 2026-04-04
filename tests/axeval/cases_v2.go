@@ -13,8 +13,6 @@ import (
 
 // buildCasesV2 returns the v2 ax-eval test cases using the given fixture cwd.
 func buildCasesV2(cwd string) []TestCase {
-	hookConfigPath := mustWriteHookBlockingConfig(cwd)
-
 	return []TestCase{
 		{
 			Name:         "output-contract-schema",
@@ -150,7 +148,7 @@ func buildCasesV2(cwd string) []TestCase {
 			TimeoutSec:   60,
 			MaxWallClock: 2 * time.Minute,
 			SkipSkills:   true,
-			ExtraFlags:   []string{"--config", hookConfigPath},
+			// hook discovered via .agent-mux/hooks/pre-dispatch/ in cwd
 			Evaluate: compose(
 				statusIs("failed"),
 				errorCodeIs("prompt_denied"),
@@ -338,20 +336,3 @@ func buildCasesV2(cwd string) []TestCase {
 	}
 }
 
-func mustWriteHookBlockingConfig(cwd string) string {
-	scriptPath := filepath.Join(cwd, ".agent-mux", "hooks", "deny-all.sh")
-	info, err := os.Stat(scriptPath)
-	if err != nil {
-		panic(fmt.Sprintf("stat hook blocking script %q: %v", scriptPath, err))
-	}
-	if info.Mode()&0o111 == 0 {
-		panic(fmt.Sprintf("hook blocking script %q is not executable", scriptPath))
-	}
-
-	configPath := filepath.Join(cwd, ".agent-mux", "hook-script-blocking.toml")
-	config := fmt.Sprintf("[hooks]\npre_dispatch = [%q]\n", scriptPath)
-	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
-		panic(fmt.Sprintf("write hook blocking config %q: %v", configPath, err))
-	}
-	return configPath
-}
