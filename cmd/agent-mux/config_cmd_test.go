@@ -168,10 +168,10 @@ func TestConfigSkills_Deduplication(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConfigPrompts_Table(t *testing.T) {
-	isolateHome(t)
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
 
-	dir := t.TempDir()
-	promptsDir := filepath.Join(dir, ".agent-mux", "prompts")
+	promptsDir := filepath.Join(homeDir, ".agent-mux", "prompts")
 	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestConfigPrompts_Table(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	exit := runConfigCommand([]string{"prompts", "--cwd", dir}, &stdout)
+	exit := runConfigCommand([]string{"prompts"}, &stdout)
 	if exit != 0 {
 		t.Fatalf("exit code = %d, want 0; output = %q", exit, stdout.String())
 	}
@@ -201,10 +201,10 @@ func TestConfigPrompts_Table(t *testing.T) {
 }
 
 func TestConfigPrompts_JSON(t *testing.T) {
-	isolateHome(t)
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
 
-	dir := t.TempDir()
-	promptsDir := filepath.Join(dir, ".agent-mux", "prompts")
+	promptsDir := filepath.Join(homeDir, ".agent-mux", "prompts")
 	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestConfigPrompts_JSON(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	exit := runConfigCommand([]string{"prompts", "--json", "--cwd", dir}, &stdout)
+	exit := runConfigCommand([]string{"prompts", "--json"}, &stdout)
 	if exit != 0 {
 		t.Fatalf("exit code = %d, want 0; output = %q", exit, stdout.String())
 	}

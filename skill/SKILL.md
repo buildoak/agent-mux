@@ -201,6 +201,10 @@ printf '%s' '{"profile":"lifter","prompt":"Implement the fix","cwd":"/repo"}' \
 
 Do not mix CLI dispatch flags into `--stdin` mode.
 
+## Bash Timeout
+
+Claude Code's Bash tool defaults to 120s (2 minutes). Agent-mux dispatches can run much longer (up to 45 minutes for auditor). Always set an explicit `timeout` parameter on the Bash tool call that matches or exceeds the worker's expected runtime. For long-running dispatches, use `run_in_background: true` on the Bash tool call.
+
 ## Anti-Patterns
 
 - Treating `_dispatch_ref.json` as available at async ack time

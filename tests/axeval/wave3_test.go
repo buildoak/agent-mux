@@ -61,7 +61,19 @@ func TestConfigIntrospection(t *testing.T) {
 		t.Fatal("config stdout empty")
 	}
 
-	promptsResult := dispatchWithFlags(t, binaryPath, []string{"config", "prompts", "--cwd", cwd}, 2*time.Minute)
+	// Set up prompts in a temp HOME so config prompts can discover them.
+	// DiscoverPromptFiles reads $HOME/.agent-mux/prompts/, not --cwd.
+	promptHome := t.TempDir()
+	promptsDir := filepath.Join(promptHome, ".agent-mux", "prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("mkdir prompts dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptsDir, "sysprompt-test.md"), []byte("---\neffort: low\n---\nTest prompt.\n"), 0o644); err != nil {
+		t.Fatalf("write sysprompt-test.md: %v", err)
+	}
+	t.Setenv("HOME", promptHome)
+
+	promptsResult := dispatchWithFlags(t, binaryPath, []string{"config", "prompts"}, 2*time.Minute)
 	if promptsResult.ExitCode != 0 {
 		t.Fatalf("config prompts exit=%d\nstdout=%s\nstderr=%s", promptsResult.ExitCode, string(promptsResult.RawStdout), string(promptsResult.RawStderr))
 	}
@@ -69,15 +81,15 @@ func TestConfigIntrospection(t *testing.T) {
 	if strings.TrimSpace(promptsOut) == "" {
 		t.Fatal("config prompts stdout empty")
 	}
-	if !strings.Contains(promptsOut, "sysprompt-test") || !strings.Contains(promptsOut, "variant-test-mini") {
-		t.Fatalf("config prompts output missing expected profile names\nstdout=%s", promptsOut)
+	if !strings.Contains(promptsOut, "sysprompt-test") {
+		t.Fatalf("config prompts output missing expected profile name 'sysprompt-test'\nstdout=%s", promptsOut)
 	}
 
 	jsonFlag := detectJSONFlag(t, "config", "prompts")
 	if jsonFlag == "" {
 		t.Skip("TODO: config prompts JSON flag not implemented yet")
 	}
-	promptsJSONResult := dispatchWithFlags(t, binaryPath, []string{"config", "prompts", jsonFlag, "--cwd", cwd}, 2*time.Minute)
+	promptsJSONResult := dispatchWithFlags(t, binaryPath, []string{"config", "prompts", jsonFlag}, 2*time.Minute)
 	if promptsJSONResult.ExitCode != 0 {
 		t.Fatalf("config prompts %s exit=%d\nstdout=%s\nstderr=%s", jsonFlag, promptsJSONResult.ExitCode, string(promptsJSONResult.RawStdout), string(promptsJSONResult.RawStderr))
 	}

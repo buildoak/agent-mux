@@ -388,16 +388,18 @@ func TestResultCommandFallsBackToLegacyFullOutput(t *testing.T) {
 }
 
 func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
-	isolateHome(t)
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
 
-	cwd := t.TempDir()
-	agentsDir := filepath.Join(cwd, ".claude", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q): %v", agentsDir, err)
+	promptsDir := filepath.Join(homeDir, ".agent-mux", "prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", promptsDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "planner.md"), []byte("Planner profile.\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(promptsDir, "planner.md"), []byte("Planner profile.\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(profile): %v", err)
 	}
+
+	cwd := t.TempDir()
 
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
 	prompt := "implement feature"
@@ -1123,15 +1125,18 @@ func TestRunStdinRejectsNonPositiveGrace(t *testing.T) {
 // TestRunPreviewRejectsConfigWithNonPositiveGrace removed — grace is now hardcoded.
 
 func TestRunPreviewRejectsProfileWithNonPositiveTimeout(t *testing.T) {
-	cwd := t.TempDir()
-	agentsDir := filepath.Join(cwd, ".claude", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q): %v", agentsDir, err)
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	promptsDir := filepath.Join(homeDir, ".agent-mux", "prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", promptsDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "planner.md"), []byte("---\ntimeout: 0\n---\nplanner\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(promptsDir, "planner.md"), []byte("---\ntimeout: 0\n---\nplanner\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(planner.md): %v", err)
 	}
 
+	cwd := t.TempDir()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := run([]string{"preview", "--cwd", cwd, "--profile", "planner", "--engine", "codex", "hello"}, strings.NewReader(""), &stdout, &stderr)
@@ -1538,18 +1543,6 @@ func writeTempHookScript(t *testing.T, dir, name, content string) string {
 		t.Fatal(err)
 	}
 	return path
-}
-
-func writeTestSkillFile(t *testing.T, cwd, name, content string) {
-	t.Helper()
-
-	path := filepath.Join(cwd, ".claude", "skills", name, "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
 }
 
 func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response string, writeResult bool) {

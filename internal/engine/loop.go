@@ -1085,27 +1085,6 @@ func backfillStartedAt(endedAt string, durationMS int64) string {
 	return ended.Add(-time.Duration(durationMS) * time.Millisecond).Format(time.RFC3339)
 }
 
-func metadataEngine(result *types.DispatchResult) string {
-	if result == nil || result.Metadata == nil {
-		return ""
-	}
-	return result.Metadata.Engine
-}
-
-func metadataSessionID(result *types.DispatchResult) string {
-	if result == nil || result.Metadata == nil {
-		return ""
-	}
-	return result.Metadata.SessionID
-}
-
-func metadataModel(result *types.DispatchResult) string {
-	if result == nil || result.Metadata == nil {
-		return ""
-	}
-	return result.Metadata.Model
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		value = strings.TrimSpace(value)

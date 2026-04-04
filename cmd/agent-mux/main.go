@@ -447,33 +447,6 @@ func anySliceOrEmpty(v any) []string {
 	}
 }
 
-func mergeSkills(base, overlay []string) []string {
-	if len(base) == 0 && len(overlay) == 0 {
-		return nil
-	}
-
-	merged := make([]string, 0, len(base)+len(overlay))
-	seen := make(map[string]struct{}, len(base)+len(overlay))
-
-	for _, skill := range overlay {
-		if _, ok := seen[skill]; ok {
-			continue
-		}
-		seen[skill] = struct{}{}
-		merged = append(merged, skill)
-	}
-	for _, skill := range base {
-		if _, ok := seen[skill]; ok {
-			continue
-		}
-		seen[skill] = struct{}{}
-		merged = append(merged, skill)
-	}
-
-	return merged
-}
-
-
 func checkPromptDenied(spec *types.DispatchSpec, hookEval *hooks.Evaluator) (bool, string) {
 	if spec == nil || hookEval == nil {
 		return false, ""

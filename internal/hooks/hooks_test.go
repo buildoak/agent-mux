@@ -18,34 +18,6 @@ func writeScript(t *testing.T, dir, name, content string) string {
 	return path
 }
 
-// setupHookDirs creates the directory-convention hook layout for testing.
-func setupHookDirs(t *testing.T, cwd string, preDispatchScripts, onEventScripts []string) {
-	t.Helper()
-	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
-	onDir := filepath.Join(cwd, ".agent-mux", "hooks", "on-event")
-	if err := os.MkdirAll(preDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(onDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range preDispatchScripts {
-		writeScript(t, preDir, filepath.Base(s), readContent(t, s))
-	}
-	for _, s := range onEventScripts {
-		writeScript(t, onDir, filepath.Base(s), readContent(t, s))
-	}
-}
-
-func readContent(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
-}
-
 func TestCheckPromptAllow(t *testing.T) {
 	cwd := t.TempDir()
 	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")

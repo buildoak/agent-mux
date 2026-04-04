@@ -201,23 +201,3 @@ func runHook(scriptPath string, input map[string]any, extraEnv []string) HookRes
 		return HookResult{Action: "allow", Reason: reason}
 	}
 }
-
-func expandPaths(paths []string) []string {
-	if len(paths) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if strings.HasPrefix(p, "~/") {
-			if home, err := os.UserHomeDir(); err == nil {
-				p = filepath.Join(home, p[2:])
-			}
-		}
-		out = append(out, p)
-	}
-	return out
-}

@@ -214,10 +214,3 @@ func TestWaitCommandPollsMetadataOnlyRecordUntilResultExists(t *testing.T) {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), "wait response")
 	}
 }
-
-func testStoreRecordWithTime(id, status string, started time.Time) dispatch.DispatchRecord {
-	record := testStoreRecord(id, status)
-	record.StartedAt = started.Format(time.RFC3339)
-	record.EndedAt = started.Add(5 * time.Minute).Format(time.RFC3339)
-	return record
-}

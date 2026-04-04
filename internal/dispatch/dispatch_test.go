@@ -444,12 +444,3 @@ func TestLevenshtein(t *testing.T) {
 		}
 	}
 }
-
-func containsArtifact(artifacts []string, want string) bool {
-	for _, artifact := range artifacts {
-		if artifact == want {
-			return true
-		}
-	}
-	return false
-}
