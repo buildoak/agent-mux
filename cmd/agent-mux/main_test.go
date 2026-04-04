@@ -438,7 +438,7 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	if len(preview.PromptPreamble) != 1 {
 		t.Fatalf("prompt_preamble len = %d, want 1 (%v)", len(preview.PromptPreamble), preview.PromptPreamble)
 	}
-	if preview.PromptPreamble[0] != "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR." {
+	if preview.PromptPreamble[0] != "If you need a temporary directory for intermediate files, use $AGENT_MUX_ARTIFACT_DIR." {
 		t.Fatalf("prompt_preamble[0] = %q, want artifact preamble", preview.PromptPreamble[0])
 	}
 	if preview.Prompt.Excerpt != prompt {

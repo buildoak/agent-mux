@@ -585,7 +585,7 @@ func TestLoopEngineInjectsUsefulPreambleIntoPrompt(t *testing.T) {
 
 	wantPrefix := strings.Join([]string{
 		"Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.",
-		"Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.",
+		"If you need a temporary directory for intermediate files, use $AGENT_MUX_ARTIFACT_DIR.",
 		"",
 		"build the parser",
 	}, "\n")
