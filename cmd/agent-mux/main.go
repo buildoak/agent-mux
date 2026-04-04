@@ -282,7 +282,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	profileName := req.DispatchAnnotations.Profile
 	if profileName != "" {
-		coordSpec, err := config.LoadProfile(profileName, spec.Cwd)
+		coordSpec, err := config.LoadProfile(profileName)
 		if err != nil {
 			return failResult(spec, configFailureCode(err), err.Error(), "")
 		}

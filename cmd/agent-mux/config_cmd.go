@@ -126,21 +126,14 @@ func runConfigPrompts(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("agent-mux config prompts", flag.ContinueOnError)
 	fs.SetOutput(&flagOutput)
 
-	var cwd string
 	var jsonOutput bool
-	fs.StringVar(&cwd, "cwd", "", "Working directory for prompt file discovery")
 	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON array")
 
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
 		return handleLifecycleParseError(stdout, &flagOutput, err)
 	}
 
-	effectiveCwd := cwd
-	if effectiveCwd == "" {
-		effectiveCwd, _ = os.Getwd()
-	}
-
-	prompts := config.DiscoverPromptFiles(effectiveCwd)
+	prompts := config.DiscoverPromptFiles()
 
 	if jsonOutput {
 		writeCompactJSON(stdout, prompts)

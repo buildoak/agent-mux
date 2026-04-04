@@ -8,11 +8,12 @@ import (
 )
 
 func TestLoadProfileFrontmatterAndBody(t *testing.T) {
-	cwd := t.TempDir()
-	agentsDir := filepath.Join(cwd, ".claude", "agents")
-	mustMkdirAll(t, agentsDir)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	promptsDir := filepath.Join(home, ".agent-mux", "prompts")
+	mustMkdirAll(t, promptsDir)
 
-	writeTestFile(t, filepath.Join(agentsDir, "planner.md"), `---
+	writeTestFile(t, filepath.Join(promptsDir, "planner.md"), `---
 model: gpt-5.4
 effort: medium
 engine: codex
@@ -25,7 +26,7 @@ temperature: 0.2
 You are the planning coordinator.
 `)
 
-	spec, err := LoadProfile("planner", cwd)
+	spec, err := LoadProfile("planner")
 	if err != nil {
 		t.Fatalf("LoadProfile: %v", err)
 	}
@@ -53,21 +54,22 @@ You are the planning coordinator.
 }
 
 func TestLoadProfileIgnoresCompanionConfig(t *testing.T) {
-	cwd := t.TempDir()
-	agentsDir := filepath.Join(cwd, ".claude", "agents")
-	mustMkdirAll(t, agentsDir)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	promptsDir := filepath.Join(home, ".agent-mux", "prompts")
+	mustMkdirAll(t, promptsDir)
 
-	writeTestFile(t, filepath.Join(agentsDir, "builder.md"), `---
+	writeTestFile(t, filepath.Join(promptsDir, "builder.md"), `---
 model: gpt-5.4-mini
 skills: [repo-map]
 ---
 Build things.
 `)
-	writeTestFile(t, filepath.Join(agentsDir, "builder.toml"), `
+	writeTestFile(t, filepath.Join(promptsDir, "builder.toml"), `
 not valid toml = [
 `)
 
-	spec, err := LoadProfile("builder", cwd)
+	spec, err := LoadProfile("builder")
 	if err != nil {
 		t.Fatalf("LoadProfile: %v", err)
 	}
@@ -77,17 +79,18 @@ not valid toml = [
 }
 
 func TestLoadProfileRejectsNonPositiveFrontmatterTimeout(t *testing.T) {
-	cwd := t.TempDir()
-	agentsDir := filepath.Join(cwd, ".claude", "agents")
-	mustMkdirAll(t, agentsDir)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	promptsDir := filepath.Join(home, ".agent-mux", "prompts")
+	mustMkdirAll(t, promptsDir)
 
-	writeTestFile(t, filepath.Join(agentsDir, "planner.md"), `---
+	writeTestFile(t, filepath.Join(promptsDir, "planner.md"), `---
 timeout: 0
 ---
 planner
 `)
 
-	_, err := LoadProfile("planner", cwd)
+	_, err := LoadProfile("planner")
 	if err == nil {
 		t.Fatal("LoadProfile error = nil, want validation error")
 	}
@@ -100,18 +103,15 @@ planner
 }
 
 func TestLoadProfileNotFoundListsAvailable(t *testing.T) {
-	cwd := t.TempDir()
-	projectAgents := filepath.Join(cwd, ".claude", "agents")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	globalAgents := filepath.Join(home, ".agent-mux", "agents")
-	mustMkdirAll(t, projectAgents)
-	mustMkdirAll(t, globalAgents)
+	promptsDir := filepath.Join(home, ".agent-mux", "prompts")
+	mustMkdirAll(t, promptsDir)
 
-	writeTestFile(t, filepath.Join(projectAgents, "alpha.md"), "Project alpha.")
-	writeTestFile(t, filepath.Join(globalAgents, "beta.md"), "Global beta.")
+	writeTestFile(t, filepath.Join(promptsDir, "alpha.md"), "Alpha prompt.")
+	writeTestFile(t, filepath.Join(promptsDir, "beta.md"), "Beta prompt.")
 
-	_, err := LoadProfile("missing", cwd)
+	_, err := LoadProfile("missing")
 	if err == nil {
 		t.Fatal("LoadProfile(missing) error = nil, want error")
 	}
@@ -120,14 +120,12 @@ func TestLoadProfileNotFoundListsAvailable(t *testing.T) {
 		t.Fatalf("error = %q, want missing profile message", msg)
 	}
 	if !strings.Contains(msg, "alpha") || !strings.Contains(msg, "beta") {
-		t.Fatalf("error = %q, want available profiles from both dirs", msg)
+		t.Fatalf("error = %q, want available profiles listed", msg)
 	}
 }
 
 func TestLoadProfileRejectsInvalidName(t *testing.T) {
-	cwd := t.TempDir()
-
-	_, err := LoadProfile("../planner", cwd)
+	_, err := LoadProfile("../planner")
 	if err == nil {
 		t.Fatal("LoadProfile error = nil, want invalid profile name")
 	}
@@ -136,98 +134,36 @@ func TestLoadProfileRejectsInvalidName(t *testing.T) {
 	}
 }
 
-func TestLoadProfileSearchOrderProjectThenGlobal(t *testing.T) {
-	cwd := t.TempDir()
-	projectAgents := filepath.Join(cwd, ".claude", "agents")
+func TestLoadProfileGlobalOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	globalAgents := filepath.Join(home, ".agent-mux", "agents")
-	mustMkdirAll(t, projectAgents)
-	mustMkdirAll(t, globalAgents)
+	promptsDir := filepath.Join(home, ".agent-mux", "prompts")
+	mustMkdirAll(t, promptsDir)
 
-	writeTestFile(t, filepath.Join(projectAgents, "shared.md"), `---
-model: gpt-5.4
----
-project prompt
-`)
-	writeTestFile(t, filepath.Join(globalAgents, "shared.md"), `---
+	writeTestFile(t, filepath.Join(promptsDir, "shared.md"), `---
 model: claude-sonnet-4-6
 ---
 global prompt
 `)
-	writeTestFile(t, filepath.Join(globalAgents, "fallback.md"), `---
-engine: gemini
----
-fallback prompt
-`)
 
-	spec, err := LoadProfile("shared", cwd)
+	spec, err := LoadProfile("shared")
 	if err != nil {
 		t.Fatalf("LoadProfile(shared): %v", err)
 	}
-	if spec.Model != "gpt-5.4" || spec.SystemPrompt != "project prompt\n" {
-		t.Fatalf("project coordinator = %#v, want project file to win", spec)
+	if spec.Model != "claude-sonnet-4-6" || spec.SystemPrompt != "global prompt\n" {
+		t.Fatalf("spec = %#v, want global file", spec)
 	}
-
-	spec, err = LoadProfile("fallback", cwd)
-	if err != nil {
-		t.Fatalf("LoadProfile(fallback): %v", err)
-	}
-	if spec.Engine != "gemini" || spec.SystemPrompt != "fallback prompt\n" {
-		t.Fatalf("fallback coordinator = %#v, want global file used", spec)
-	}
-}
-
-// TestLoadProfileAgentMuxDirSearchPaths verifies that the new .agent-mux/agents
-// project-level and ~/.agent-mux/agents global paths are searched.
-func TestLoadProfileAgentMuxDirSearchPaths(t *testing.T) {
-	cwd := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	t.Run("cwd-dot-agent-mux-agents", func(t *testing.T) {
-		agentMuxAgents := filepath.Join(cwd, ".agent-mux", "agents")
-		mustMkdirAll(t, agentMuxAgents)
-		writeTestFile(t, filepath.Join(agentMuxAgents, "lifter.md"), `---
-engine: codex
----
-lifted prompt
-`)
-		spec, err := LoadProfile("lifter", cwd)
-		if err != nil {
-			t.Fatalf("LoadProfile: %v", err)
-		}
-		if spec.Engine != "codex" || spec.SystemPrompt != "lifted prompt\n" {
-			t.Fatalf("spec = %#v, want .agent-mux/agents file", spec)
-		}
-	})
-
-	t.Run("home-dot-agent-mux-agents", func(t *testing.T) {
-		globalAgents := filepath.Join(home, ".agent-mux", "agents")
-		mustMkdirAll(t, globalAgents)
-		writeTestFile(t, filepath.Join(globalAgents, "global-agent.md"), `---
-engine: claude
----
-global agent prompt
-`)
-		spec, err := LoadProfile("global-agent", cwd)
-		if err != nil {
-			t.Fatalf("LoadProfile: %v", err)
-		}
-		if spec.Engine != "claude" || spec.SystemPrompt != "global agent prompt\n" {
-			t.Fatalf("spec = %#v, want ~/.agent-mux/agents file", spec)
-		}
-	})
 }
 
 func TestLoadProfileWithoutFrontmatterUsesBodyOnly(t *testing.T) {
-	cwd := t.TempDir()
-	agentsDir := filepath.Join(cwd, ".claude", "agents")
-	mustMkdirAll(t, agentsDir)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	promptsDir := filepath.Join(home, ".agent-mux", "prompts")
+	mustMkdirAll(t, promptsDir)
 
-	writeTestFile(t, filepath.Join(agentsDir, "plain.md"), "Just the prompt body.\nSecond line.\n")
+	writeTestFile(t, filepath.Join(promptsDir, "plain.md"), "Just the prompt body.\nSecond line.\n")
 
-	spec, err := LoadProfile("plain", cwd)
+	spec, err := LoadProfile("plain")
 	if err != nil {
 		t.Fatalf("LoadProfile: %v", err)
 	}
@@ -236,6 +172,35 @@ func TestLoadProfileWithoutFrontmatterUsesBodyOnly(t *testing.T) {
 	}
 	if spec.SystemPrompt != "Just the prompt body.\nSecond line.\n" {
 		t.Fatalf("SystemPrompt = %q, want full body", spec.SystemPrompt)
+	}
+}
+
+func TestDiscoverPromptFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	promptsDir := filepath.Join(home, ".agent-mux", "prompts")
+	mustMkdirAll(t, promptsDir)
+
+	writeTestFile(t, filepath.Join(promptsDir, "alpha.md"), `---
+engine: codex
+---
+alpha prompt
+`)
+	writeTestFile(t, filepath.Join(promptsDir, "beta.md"), "beta prompt\n")
+	writeTestFile(t, filepath.Join(promptsDir, "readme.txt"), "not a prompt")
+
+	results := DiscoverPromptFiles()
+	if len(results) != 2 {
+		t.Fatalf("got %d prompts, want 2", len(results))
+	}
+	if results[0].Name != "alpha" || results[1].Name != "beta" {
+		t.Fatalf("names = [%s, %s], want [alpha, beta]", results[0].Name, results[1].Name)
+	}
+	if results[0].Engine != "codex" {
+		t.Fatalf("alpha engine = %q, want codex", results[0].Engine)
+	}
+	if results[0].Source != "~/.agent-mux/prompts" {
+		t.Fatalf("source = %q, want ~/.agent-mux/prompts", results[0].Source)
 	}
 }
 

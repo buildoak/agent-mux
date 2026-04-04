@@ -21,18 +21,10 @@ type CoordinatorSpec struct {
 	SystemPrompt string
 }
 
-func LoadProfile(name, cwd string) (*CoordinatorSpec, error) {
+func LoadProfile(name string) (*CoordinatorSpec, error) {
 	name = strings.TrimSpace(name)
 	if err := sanitize.ValidateBasename(name); err != nil {
 		return nil, fmt.Errorf("invalid profile name %q: %w", name, err)
-	}
-
-	if cwd == "" {
-		var err error
-		cwd, err = os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("get working directory: %w", err)
-		}
 	}
 
 	homeDir, err := os.UserHomeDir()
@@ -40,36 +32,29 @@ func LoadProfile(name, cwd string) (*CoordinatorSpec, error) {
 		return nil, fmt.Errorf("get home directory: %w", err)
 	}
 
-	searchDirs := []string{
-		filepath.Join(cwd, ".agent-mux", "prompts"),
-		filepath.Join(homeDir, ".agent-mux", "prompts"),
-	}
+	promptsDir := filepath.Join(homeDir, ".agent-mux", "prompts")
 
-	for _, dir := range searchDirs {
-		path := filepath.Join(dir, name+".md")
-		info, err := os.Stat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
+	path := filepath.Join(promptsDir, name+".md")
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			available, aerr := availableCoordinators([]string{promptsDir})
+			if aerr != nil {
+				return nil, aerr
 			}
-			return nil, fmt.Errorf("stat profile %q: %w", path, err)
+			return nil, fmt.Errorf("profile %q not found. Available profiles: %v", name, available)
 		}
-		if info.IsDir() {
-			return nil, fmt.Errorf("profile path %q is a directory", path)
-		}
-
-		spec, err := loadCoordinatorSpec(path, name)
-		if err != nil {
-			return nil, err
-		}
-		return spec, nil
+		return nil, fmt.Errorf("stat profile %q: %w", path, err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("profile path %q is a directory", path)
 	}
 
-	available, err := availableCoordinators(searchDirs)
+	spec, err := loadCoordinatorSpec(path, name)
 	if err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("profile %q not found. Available profiles: %v", name, available)
+	return spec, nil
 }
 
 func loadCoordinatorSpec(path, name string) (*CoordinatorSpec, error) {
@@ -157,71 +142,45 @@ type PromptFileInfo struct {
 	Engine string   `json:"engine,omitempty"`
 }
 
-// DiscoverPromptFiles scans all profile/prompt search directories and returns
-// deduplicated results with first-match-wins semantics.
-func DiscoverPromptFiles(cwd string) []PromptFileInfo {
-	if cwd == "" {
-		cwd, _ = os.Getwd()
-	}
-
+// DiscoverPromptFiles scans ~/.agent-mux/prompts/ and returns all prompt files.
+func DiscoverPromptFiles() []PromptFileInfo {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		homeDir = ""
+		return nil
 	}
 
-	type labeledDir struct {
-		dir   string
-		label string
+	promptsDir := filepath.Join(homeDir, ".agent-mux", "prompts")
+	entries, err := os.ReadDir(promptsDir)
+	if err != nil {
+		return nil
 	}
 
-	var searchDirs []labeledDir
-	searchDirs = append(searchDirs,
-		labeledDir{filepath.Join(cwd, ".agent-mux", "prompts"), "project"},
-	)
-	if homeDir != "" {
-		searchDirs = append(searchDirs,
-			labeledDir{filepath.Join(homeDir, ".agent-mux", "prompts"), "global"},
-		)
-	}
-
-	seen := make(map[string]struct{})
 	var results []PromptFileInfo
-
-	for _, sd := range searchDirs {
-		entries, err := os.ReadDir(sd.dir)
-		if err != nil {
+	for _, entry := range entries {
+		if entry.IsDir() {
 			continue
 		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			fname := entry.Name()
-			if filepath.Ext(fname) != ".md" {
-				continue
-			}
-			name := strings.TrimSuffix(fname, ".md")
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			seen[name] = struct{}{}
-
-			fullPath := filepath.Join(sd.dir, fname)
-			info := PromptFileInfo{
-				Name:   name,
-				Path:   fullPath,
-				Source: sd.label,
-			}
-
-			// Try to parse frontmatter for metadata.
-			if spec, err := loadCoordinatorSpec(fullPath, name); err == nil {
-				info.Skills = spec.Skills
-				info.Effort = spec.Effort
-				info.Engine = spec.Engine
-			}
-
-			results = append(results, info)
+		fname := entry.Name()
+		if filepath.Ext(fname) != ".md" {
+			continue
 		}
+		name := strings.TrimSuffix(fname, ".md")
+
+		fullPath := filepath.Join(promptsDir, fname)
+		info := PromptFileInfo{
+			Name:   name,
+			Path:   fullPath,
+			Source: "~/.agent-mux/prompts",
+		}
+
+		// Try to parse frontmatter for metadata.
+		if spec, err := loadCoordinatorSpec(fullPath, name); err == nil {
+			info.Skills = spec.Skills
+			info.Effort = spec.Effort
+			info.Engine = spec.Engine
+		}
+
+		results = append(results, info)
 	}
 
 	sort.Slice(results, func(i, j int) bool {
