@@ -196,6 +196,10 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		emitResult(stdout, buildFailedResult(&types.DispatchSpec{}, "invalid_args", err.Error(), strings.TrimSpace(flagOutput.String())))
 		return 2
 	}
+	if err := validateStringFlagValues(fs); err != nil {
+		emitResult(stdout, buildFailedResult(&types.DispatchSpec{}, "invalid_args", err.Error(), ""))
+		return 2
+	}
 	flags := *parsed
 	positional := fs.Args()
 	var flagsSet map[string]bool
@@ -617,6 +621,23 @@ func buildSignalAck(dispatchID, artifactDir string) SignalAck {
 		ArtifactDir: artifactDir,
 		Message:     "Signal delivered to inbox",
 	}
+}
+
+func validateStringFlagValues(fs *flag.FlagSet) error {
+	var errs []string
+	fs.Visit(func(f *flag.Flag) {
+		if f.DefValue == "false" || f.DefValue == "true" {
+			return
+		}
+		val := f.Value.String()
+		if val != "" && strings.HasPrefix(val, "-") && val != "-" {
+			errs = append(errs, fmt.Sprintf("flag -%s has value %q which looks like another flag — did you forget to provide a value?", f.Name, val))
+		}
+	})
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 func buildSignalErrorAck(dispatchID, code, message, suggestion string) SignalAck {
