@@ -42,11 +42,7 @@ func LoadProfile(name, cwd string) (*CoordinatorSpec, error) {
 
 	searchDirs := []string{
 		filepath.Join(cwd, ".agent-mux", "prompts"),
-		filepath.Join(cwd, ".agent-mux", "agents"),
-		filepath.Join(cwd, ".claude", "agents"),
-		filepath.Join(cwd, "agents"),
 		filepath.Join(homeDir, ".agent-mux", "prompts"),
-		filepath.Join(homeDir, ".agent-mux", "agents"),
 	}
 
 	for _, dir := range searchDirs {
@@ -180,15 +176,11 @@ func DiscoverPromptFiles(cwd string) []PromptFileInfo {
 
 	var searchDirs []labeledDir
 	searchDirs = append(searchDirs,
-		labeledDir{filepath.Join(cwd, ".agent-mux", "prompts"), "project (prompts)"},
-		labeledDir{filepath.Join(cwd, ".agent-mux", "agents"), "project (agents)"},
-		labeledDir{filepath.Join(cwd, ".claude", "agents"), "project (.claude/agents)"},
-		labeledDir{filepath.Join(cwd, "agents"), "project (agents/)"},
+		labeledDir{filepath.Join(cwd, ".agent-mux", "prompts"), "project"},
 	)
 	if homeDir != "" {
 		searchDirs = append(searchDirs,
-			labeledDir{filepath.Join(homeDir, ".agent-mux", "prompts"), "global (prompts)"},
-			labeledDir{filepath.Join(homeDir, ".agent-mux", "agents"), "global (agents)"},
+			labeledDir{filepath.Join(homeDir, ".agent-mux", "prompts"), "global"},
 		)
 	}
 

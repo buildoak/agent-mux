@@ -14,19 +14,17 @@ and `agent-mux preview ...`.
 | Flag | Short | Type | Default | Notes |
 |------|-------|------|---------|-------|
 | `--engine` | `-E` | string | from config | `codex`, `claude`, `gemini` |
-| `--role` | `-R` | string | unset | Flat role name from config |
-| `--profile` | | string | unset | Coordinator persona from `agents/<name>.md` |
+| `--profile` | `-P` | string | unset | Profile prompt file from `prompts/<name>.md` |
 | `--cwd` | `-C` | string | current dir | Working directory for the harness |
-| `--model` | `-m` | string | from role/profile/config | Model override |
-| `--effort` | `-e` | string | from role/profile/config | `low`, `medium`, `high`, `xhigh` |
+| `--model` | `-m` | string | from profile/config | Model override |
+| `--effort` | `-e` | string | from profile/config | `low`, `medium`, `high`, `xhigh` |
 | `--timeout` | `-t` | int | effort-mapped | Timeout in seconds |
 | `--system-prompt` | `-s` | string | unset | Extra system prompt text |
 | `--system-prompt-file` | | string | unset | Read system prompt text from file |
 | `--prompt-file` | | string | unset | Read prompt from file instead of positional arg |
 | `--context-file` | | string | unset | Sets `AGENT_MUX_CONTEXT` and adds the read preamble |
 | `--skill` | | string[] | `[]` | Repeatable skill names |
-| `--skip-skills` | | bool | `false` | Skip skill injection while keeping role resolution |
-| `--config` | | string | unset | Explicit config source; skips implicit global/project merge |
+| `--skip-skills` | | bool | `false` | Skip skill injection while keeping profile resolution |
 | `--artifact-dir` | | string | auto | Override artifact directory |
 | `--recover` | | string | unset | Continue from a prior dispatch ID |
 | `--signal` | | string | unset | Dispatch ID to send a message to; message is the first positional arg |
@@ -64,9 +62,8 @@ Allowed CLI flags in `--stdin` mode:
 | `--verbose` | `-v` | Raw harness lines on stderr |
 | `--stream` | | Full event stream on stderr |
 | `--async` | | Background dispatch |
-| `--config` | | Explicit config source |
 
-Do not expect `--stdin` mode to merge in CLI `--role`, `--model`, `--cwd`,
+Do not expect `--stdin` mode to merge in CLI `--profile`, `--model`, `--cwd`,
 or similar dispatch flags. Put those fields in the JSON object.
 
 ---
@@ -93,7 +90,7 @@ or similar dispatch flags. Put those fields in the JSON object.
 |------------|---------|
 | `agent-mux config` | resolved config JSON with `_sources` |
 | `agent-mux config --sources` | JSON list of loaded config files |
-| `agent-mux config roles [--json]` | flat role catalog |
+| `agent-mux config prompts [--json]` | profile catalog |
 | `agent-mux config models [--json]` | configured model lists |
 | `agent-mux config skills [--json]` | discovered skills and winning paths |
 
@@ -111,12 +108,9 @@ or similar dispatch flags. Put those fields in the JSON object.
 | `result` | `--no-wait` | bool | `false` | Error if still running |
 | `inspect` | `--json` | bool | `false` | Combined JSON payload |
 | `wait` | `--poll` | string | config or `60s` | Go duration string |
-| `wait` | `--json` | bool | `false` | Same compact JSON shape as `result --json` |
-| `wait` | `--config` | string | unset | Config source for poll lookup |
+| `wait` | `--json` | bool | `false` | Compact JSON; orphaned dispatches emit raw `LiveStatus` instead |
 | `wait` | `--cwd` | string | unset | Project root for config discovery |
-| `config` | `--config` | string | unset | Explicit config source |
 | `config` | `--cwd` | string | unset | Project root for config discovery |
-| `config` | `--sources` | bool | `false` | Root command only |
 
 ### Steer actions
 
@@ -139,13 +133,12 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 |----------|------|----------|---------|-------|
 | `prompt` | string | yes | - | Task prompt |
 | `cwd` | string | no | shell cwd | Working directory |
-| `engine` | string | no | from profile/role/config | `codex`, `claude`, `gemini` |
-| `model` | string | no | from profile/role/config | Model override |
-| `effort` | string | no | from profile/role/config | `low`, `medium`, `high`, `xhigh` |
+| `engine` | string | no | from profile/config | `codex`, `claude`, `gemini` |
+| `model` | string | no | from profile/config | Model override |
+| `effort` | string | no | from profile/config | `low`, `medium`, `high`, `xhigh` |
 | `system_prompt` | string | no | unset | Run-level system prompt |
 | `context_file` | string | no | unset | Sets `AGENT_MUX_CONTEXT` |
-| `role` | string | no | unset | Flat role name |
-| `profile` | string | no | unset | Coordinator/profile name |
+| `profile` | string | no | unset | Profile/prompt file name |
 | `coordinator` | string | no | unset | Alias for `profile`; conflicting values error |
 | `skills` | string[] | no | `[]` | Extra skill names |
 | `skip_skills` | bool | no | `false` | Disable skill injection |
@@ -173,9 +166,12 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 | `permission-mode` | string | Permission/approval mode override |
 | `max-turns` | int | Claude turn cap |
 | `add-dir` | string[] | Extra writable/include directories |
-| `heartbeat_interval_sec` | int | Override heartbeat cadence |
-| `silence_warn_seconds` | int | Override frozen warning threshold |
-| `silence_kill_seconds` | int | Override frozen kill threshold |
+| `heartbeat_interval_sec` | int | Override heartbeat cadence (default 15s) |
+| `silence_warn_seconds` | int | Override frozen warning threshold (default 90s) |
+| `silence_kill_seconds` | int | Override frozen kill threshold (default 180s) |
+| `long_command_silence_seconds` | int | Extended kill threshold while a known long-running command is active (default 540s) |
+| `max_steer_wait_seconds` | int | Maximum seconds to wait for a tool to finish before force-delivering a steer message (default 120s) |
+| `long_command_prefixes` | string | Comma-separated extra command prefixes that qualify as long-running (extends built-in list) |
 
 ---
 
@@ -201,16 +197,12 @@ The durable store is always `~/.agent-mux/dispatches/<id>/`.
 
 ## Precedence
 
-### Config source order
-
-Implicit lookup uses exactly two files, later winning on conflict:
+### Profile search order
 
 ```
-~/.agent-mux/config.toml
-  > <cwd>/.agent-mux/config.toml
+<cwd>/.agent-mux/prompts/<name>.md   (project-level)
+  > ~/.agent-mux/prompts/<name>.md   (global)
 ```
-
-`--config` is the sole config source when set.
 
 ### Dispatch fields in standard CLI mode
 
@@ -218,9 +210,7 @@ For `engine`, `model`, and `effort`:
 
 ```
 explicit CLI flags
-  > role
   > profile
-  > merged config [defaults]
   > hardcoded defaults
 ```
 
@@ -228,7 +218,6 @@ For `timeout`:
 
 ```
 explicit CLI --timeout
-  > role.timeout
   > profile.timeout
   > timeout table for the chosen effort
 ```
@@ -240,8 +229,6 @@ For `engine`, `model`, and `effort`:
 ```
 explicit JSON fields
   > profile
-  > role
-  > merged config [defaults]
   > hardcoded defaults
 ```
 
@@ -250,7 +237,6 @@ For `timeout`:
 ```
 explicit JSON timeout_sec
   > profile.timeout
-  > role.timeout
   > timeout table for the chosen effort
 ```
 

@@ -35,7 +35,7 @@ func TestRecoverDispatch_ValidDir(t *testing.T) {
 		ArtifactDir: artifactDir,
 		Prompt:      "recover test",
 	}
-	annotations := types.DispatchAnnotations{Role: "worker"}
+	annotations := types.DispatchAnnotations{}
 
 	if err := WritePersistentMeta(spec, annotations); err != nil {
 		t.Fatalf("WritePersistentMeta: %v", err)

@@ -21,7 +21,6 @@ type DispatchMeta struct {
 	StartedAt  string   `json:"started_at"`
 	Engine     string   `json:"engine"`
 	Model      string   `json:"model"`
-	Role       string   `json:"role,omitempty"`
 	PromptHash string   `json:"prompt_hash"`
 	Cwd        string   `json:"cwd"`
 	EndedAt    string   `json:"ended_at,omitempty"`
@@ -85,7 +84,6 @@ func ReadDispatchMeta(artifactDir string) (*DispatchMeta, error) {
 			StartedAt:  pm.StartedAt,
 			Engine:     pm.Engine,
 			Model:      pm.Model,
-			Role:       pm.Role,
 			Cwd:        pm.Cwd,
 			PromptHash: pm.PromptHash,
 		}
@@ -195,7 +193,7 @@ var ErrorCatalog = map[string]ErrorInfo{
 	"frozen_tool_call": {
 		Message:   "Worker appears stuck in a tool call.",
 		Hint:      "Worker stopped producing harness events while likely blocked in a hanging tool or shell command. Partial work was preserved in the artifact directory.",
-		Example:   "Retry with a narrower task: agent-mux -R=lifter --cwd /repo \"<narrowed prompt>\". If long commands are expected, raise `silence_kill_seconds` in config.",
+		Example:   "Retry with a narrower task: agent-mux -P=lifter --cwd /repo \"<narrowed prompt>\". If long commands are expected, raise `silence_kill_seconds` in config.",
 		Retryable: true,
 	},
 	"invalid_args": {
@@ -212,8 +210,8 @@ var ErrorCatalog = map[string]ErrorInfo{
 	},
 	"config_error": {
 		Message:   "Configuration is invalid.",
-		Hint:      "agent-mux could not load or validate the referenced config, role, or control path.",
-		Example:   "Fix the config file or role name, then retry. Example: agent-mux -R lifter --config /path/to/agent-mux.yaml --cwd /repo \"<prompt>\".",
+		Hint:      "agent-mux could not load or validate the referenced profile or control path.",
+		Example:   "Fix the profile name, then retry. Example: agent-mux -P=lifter --cwd /repo \"<prompt>\".",
 		Retryable: true,
 	},
 	"parse_error": {
@@ -231,7 +229,7 @@ var ErrorCatalog = map[string]ErrorInfo{
 	"frozen_killed": {
 		Message:   "Worker killed after prolonged silence.",
 		Hint:      "Worker was killed after prolonged silence - likely stuck in a hanging tool call. Partial work was preserved in the artifact directory.",
-		Example:   "Retry with a narrower task: agent-mux -R=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
+		Example:   "Retry with a narrower task: agent-mux -P=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
 		Retryable: true,
 	},
 	"signal_killed": {

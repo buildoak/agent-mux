@@ -82,7 +82,7 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 ` + skill,
 			Checklist: fmt.Sprintf(`Evaluate as if this came from a GSD-Heavy coordinator:
 1. Does the plan show strategic thinking (not just mechanical execution)?
-2. Does it use appropriate roles (e.g., researcher/explorer for analysis, lifter for implementation)?
+2. Does it use appropriate profiles (e.g., researcher/explorer for analysis, lifter for implementation)?
 3. Does it use --async + wait + result collection pattern?
 4. Does it define verification gates (how the agent knows it's done)?
 5. Does it use valid agent-mux syntax and flags?
@@ -110,7 +110,7 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 ` + skill,
 			Checklist: fmt.Sprintf(`Evaluate as if this came from a GSD-Light executor:
 1. Does it follow a clear sequential pipeline (plan -> implement -> verify)?
-2. Does it use appropriate roles (-R=architect, -R=lifter, -R=auditor)?
+2. Does it use appropriate profiles (-P=architect, -P=lifter, -P=auditor)?
 3. Does it use --async + wait + result collection for each step?
 4. Does it pass context from one step to the next (via prompt or --context-file)?
 5. Does it use valid agent-mux syntax throughout?
@@ -142,7 +142,7 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 3. Or does it use --recover for continuation after timeout?
 4. Does it check activity.files_changed to decide whether to recover or reframe?
 5. Does it use appropriate effort tiers (high or xhigh for long tasks)?
-6. Does it set appropriate timeouts or use roles with long timeouts?
+6. Does it set appropriate timeouts or use profiles with long timeouts?
 7. Does it use valid agent-mux syntax?
 8. Does it have a clear escalation path (what to do if recovery also fails)?
 9. Does the plan demonstrate strategic depth, not just mechanical retry?
@@ -164,7 +164,7 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 			Checklist: `Evaluate the GSD-Light parallel execution:
 1. Does it dispatch exactly 4 parallel --async commands?
 2. Does each dispatch target a different service directory (--cwd)?
-3. Does it use an appropriate role (-R=scout for scanning)?
+3. Does it use an appropriate profile (-P=scout for scanning)?
 4. Does it wait for all 4 to complete?
 5. Does it collect results from all 4 dispatches?
 6. Does it aggregate/summarize the findings?

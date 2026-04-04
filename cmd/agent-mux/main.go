@@ -748,7 +748,6 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 	}
 
 	var aux struct {
-		Role        string   `json:"role"`
 		Profile     string   `json:"profile"`
 		Coordinator string   `json:"coordinator"`
 		Skills      []string `json:"skills"`
@@ -762,26 +761,12 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 	if err != nil {
 		return err
 	}
-	req.DispatchAnnotations.Role = strings.TrimSpace(aux.Role)
 	req.DispatchAnnotations.Profile = strings.TrimSpace(profile)
 	req.SkipSkills = aux.SkipSkills
 	req.RecoverDispatchID = strings.TrimSpace(aux.Recover)
 	if req.DispatchAnnotations.Profile != "" {
 		if err := sanitize.ValidateBasename(req.DispatchAnnotations.Profile); err != nil {
 			return newInputValidationError("profile", req.DispatchAnnotations.Profile, err)
-		}
-	}
-	for _, field := range []struct {
-		label string
-		value string
-	}{
-		{label: "role", value: req.DispatchAnnotations.Role},
-	} {
-		if strings.TrimSpace(field.value) == "" {
-			continue
-		}
-		if err := sanitize.ValidateBasename(field.value); err != nil {
-			return newInputValidationError(field.label, field.value, err)
 		}
 	}
 	for i, name := range aux.Skills {
@@ -1190,8 +1175,7 @@ func normalizeArgs(args []string) []string {
 func flagTakesValue(name string) bool {
 	switch name {
 	case "--engine", "-E",
-		"--role", "-R",
-		"--profile",
+		"--profile", "-P",
 		"--cwd", "-C",
 		"--model", "-m",
 		"--effort", "-e",
@@ -1203,7 +1187,6 @@ func flagTakesValue(name string) bool {
 		"--artifact-dir",
 		"--recover",
 		"--signal",
-		"--config",
 		"--prompt-file",
 		"--max-depth",
 		"--permission-mode",
@@ -1287,7 +1270,7 @@ func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations typ
 			"",
 			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]"),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
@@ -1303,7 +1286,7 @@ func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations typ
 			"",
 			dispatch.NewDispatchError("model_not_found", fmt.Sprintf("Model %q not found for engine %s.", spec.Model, spec.Engine), suggestionText),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
@@ -1314,7 +1297,7 @@ func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations typ
 			"",
 			dispatch.NewDispatchError("artifact_dir_unwritable", fmt.Sprintf("Create artifact dir %q: %v", spec.ArtifactDir, err), "Choose a writable --artifact-dir path."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}
@@ -1324,7 +1307,7 @@ func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations typ
 			"",
 			dispatch.NewDispatchError("config_error", fmt.Sprintf("Register control path for dispatch %q: %v", spec.DispatchID, err), "Ensure the control path is writable."),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: annotations.Role, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
 		), nil
 	}

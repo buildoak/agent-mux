@@ -1572,7 +1572,7 @@ func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response str
 	if err := os.MkdirAll(record.ArtifactDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(artifactDir): %v", err)
 	}
-	annotations := types.DispatchAnnotations{Role: record.Role, Profile: record.Profile}
+	annotations := types.DispatchAnnotations{Profile: record.Profile}
 	if err := dispatch.WritePersistentMeta(spec, annotations); err != nil {
 		t.Fatalf("WritePersistentMeta: %v", err)
 	}
@@ -1594,7 +1594,6 @@ func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response str
 			Metadata: &types.DispatchMetadata{
 				Engine:    record.Engine,
 				Model:     record.Model,
-				Role:      record.Role,
 				Profile:   record.Profile,
 				SessionID: record.SessionID,
 				Tokens:    &types.TokenUsage{},
@@ -1619,7 +1618,6 @@ func testStoreRecord(id, status string) dispatch.DispatchRecord {
 		Status:        status,
 		Engine:        "codex",
 		Model:         "gpt-5.4",
-		Role:          "explorer",
 		StartedAt:     "2026-03-28T13:45:00Z",
 		EndedAt:       "2026-03-28T13:58:44Z",
 		DurationMs:    824000,
@@ -1651,7 +1649,6 @@ type previewResultForTest struct {
 		TimeoutSec int    `json:"timeout_sec"`
 	} `json:"dispatch_spec"`
 	ResultMetadata struct {
-		Role    string   `json:"role"`
 		Profile string   `json:"profile"`
 		Skills  []string `json:"skills"`
 	} `json:"result_metadata"`

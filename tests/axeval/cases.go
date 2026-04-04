@@ -752,7 +752,7 @@ func buildCasesV1(cwd string) []TestCase {
 
 		// ── Role & Pipeline ─────────────────────────────────────────────
 		{
-			Name:         "role-dispatch",
+			Name:         "profile-dispatch",
 			Category:     CatCorrectness,
 			Engine:       "codex",
 			Model:        "gpt-5.4-mini",
@@ -762,8 +762,8 @@ func buildCasesV1(cwd string) []TestCase {
 			TimeoutSec:   180,
 			MaxWallClock: 4 * time.Minute,
 			SkipSkills:   true,
-			// Use -R=scout — lightweight role, codex engine, quick timeout.
-			ExtraFlags: []string{"-R=scout"},
+			// Use -P=scout — lightweight profile, codex engine, quick timeout.
+			ExtraFlags: []string{"-P=scout"},
 			Evaluate: compose(
 				statusIs("completed"),
 				noErrorEvents(),
@@ -771,10 +771,10 @@ func buildCasesV1(cwd string) []TestCase {
 					// Response should exist and be non-empty — the role resolved and dispatched.
 					if len(strings.TrimSpace(r.Response)) < 10 {
 						return Verdict{Pass: false, Score: 0.0,
-							Reason: fmt.Sprintf("response too short for role dispatch; len=%d", len(r.Response))}
+							Reason: fmt.Sprintf("response too short for profile dispatch; len=%d", len(r.Response))}
 					}
 					return Verdict{Pass: true, Score: 1.0,
-						Reason: fmt.Sprintf("role=scout dispatched successfully; response_len=%d", len(r.Response))}
+						Reason: fmt.Sprintf("profile=scout dispatched successfully; response_len=%d", len(r.Response))}
 				},
 			),
 		},

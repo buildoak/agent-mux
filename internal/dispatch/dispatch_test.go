@@ -60,7 +60,7 @@ func TestReadDispatchMetaRoundTripsThroughPersistentStore(t *testing.T) {
 		Cwd:         "/path/to/project",
 		ArtifactDir: dir,
 	}
-	annotations := types.DispatchAnnotations{Role: "worker"}
+	annotations := types.DispatchAnnotations{}
 
 	if err := WritePersistentMeta(spec, annotations); err != nil {
 		t.Fatalf("WritePersistentMeta: %v", err)
@@ -76,7 +76,6 @@ func TestReadDispatchMetaRoundTripsThroughPersistentStore(t *testing.T) {
 		Metadata: &types.DispatchMetadata{
 			Engine: spec.Engine,
 			Model:  spec.Model,
-			Role:   annotations.Role,
 			Tokens: &types.TokenUsage{},
 		},
 	}
@@ -118,7 +117,6 @@ func TestReadDispatchMetaFallsBackToLegacyFile(t *testing.T) {
 		StartedAt:  time.Now().UTC().Format(time.RFC3339),
 		Engine:     "codex",
 		Model:      "gpt-5.4",
-		Role:       "worker",
 		PromptHash: "sha256:deadbeef",
 		Cwd:        "/path/to/project",
 		Status:     "failed",
@@ -160,7 +158,7 @@ func TestReadDispatchMetaPrefersDispatchRefOverLegacyFile(t *testing.T) {
 		Cwd:         "/new/path",
 		ArtifactDir: dir,
 	}
-	if err := WritePersistentMeta(spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
+	if err := WritePersistentMeta(spec, types.DispatchAnnotations{}); err != nil {
 		t.Fatalf("WritePersistentMeta: %v", err)
 	}
 	if err := WriteDispatchRef(dir, spec.DispatchID); err != nil {
@@ -172,7 +170,6 @@ func TestReadDispatchMetaPrefersDispatchRefOverLegacyFile(t *testing.T) {
 		StartedAt:  "2026-01-01T00:00:00Z",
 		Engine:     "claude",
 		Model:      "legacy-model",
-		Role:       "legacy",
 		PromptHash: "sha256:legacy",
 		Cwd:        "/legacy/path",
 	}

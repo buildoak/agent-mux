@@ -51,7 +51,6 @@ type DispatchActivity struct {
 type DispatchMetadata struct {
 	Engine    string      `json:"engine"`
 	Model     string      `json:"model"`
-	Role      string      `json:"role,omitempty"`
 	Profile   string      `json:"profile,omitempty"`
 	Skills    []string    `json:"skills,omitempty"`
 	Tokens    *TokenUsage `json:"tokens"`
@@ -61,7 +60,6 @@ type DispatchMetadata struct {
 }
 
 type DispatchAnnotations struct {
-	Role    string
 	Profile string
 	Skills  []string
 }

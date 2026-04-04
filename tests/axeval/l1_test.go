@@ -82,7 +82,7 @@ func buildErrorScenarios() []errorScenario {
 			ErrorJSON: mustMarshalError("frozen_killed",
 				"Worker killed after prolonged silence.",
 				"Worker was killed after prolonged silence - likely stuck in a hanging tool call. Partial work was preserved in the artifact directory.",
-				"Retry with a narrower task: agent-mux -R=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
+				"Retry with a narrower task: agent-mux -P=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
 				true),
 			ChecklistItems: `1. Does the corrected command have a narrower/more specific prompt than the original?
 2. Does the corrected command still target the same general goal?
@@ -91,16 +91,16 @@ func buildErrorScenarios() []errorScenario {
 5. Is the corrected command syntactically valid?`,
 		},
 		{
-			Name:            "config-error-bad-role",
+			Name:            "config-error-bad-profile",
 			ErrorCode:       "config_error",
-			OriginalCommand: `agent-mux -R=super-worker --cwd /repo "Build the feature"`,
+			OriginalCommand: `agent-mux -P=super-worker --cwd /repo "Build the feature"`,
 			ErrorJSON: mustMarshalError("config_error",
 				"Configuration is invalid.",
-				"agent-mux could not load or validate the referenced config, role, or control path.",
-				"Fix the config file or role name, then retry. Example: agent-mux -R lifter --config /path/to/agent-mux.yaml --cwd /repo \"<prompt>\".",
+				"agent-mux could not load or validate the referenced profile or control path.",
+				"Fix the profile name, then retry. Example: agent-mux -P=lifter --cwd /repo \"<prompt>\".",
 				true),
-			ChecklistItems: `1. Does the corrected command use a different (likely valid) role name?
-2. Did the agent suggest checking available roles (e.g., agent-mux config roles)?
+			ChecklistItems: `1. Does the corrected command use a different (likely valid) profile name?
+2. Did the agent suggest checking available profiles (e.g., agent-mux config prompts)?
 3. Does the corrected command preserve the original prompt intent?
 4. Is the corrected command syntactically valid?`,
 		},

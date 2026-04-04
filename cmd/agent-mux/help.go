@@ -13,8 +13,8 @@ Usage:
   agent-mux help
 
 Quickstart:
-  agent-mux config roles
-  agent-mux -R=lifter --async -C=/repo "Implement retries in client.ts"
+  agent-mux config prompts
+  agent-mux -P=lifter --async -C=/repo "Implement retries in client.ts"
   agent-mux wait <dispatch_id>
   agent-mux result <dispatch_id> --json
 

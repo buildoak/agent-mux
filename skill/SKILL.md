@@ -4,227 +4,169 @@ description: |
   Cross-engine dispatch layer for AI coding agents. Use when you need to:
   launch a worker on Codex/Claude/Gemini, recover a timed-out dispatch, steer
   a running worker mid-flight, or coordinate multi-model work. Trigger on:
-  agent-mux, dispatch, spawn worker, codex worker, role dispatch, async
+  agent-mux, dispatch, spawn worker, codex worker, profile dispatch, async
   dispatch, steer agent, recover timeout, multi-engine.
 ---
 
 # agent-mux
 
-Dispatch substrate. One CLI, one JSON contract, three engines. agent-mux
-resolves inputs and dispatches; it does not decide strategy.
+One CLI, three engines (Codex, Claude, Gemini), one JSON contract. agent-mux
+resolves config, builds prompts, dispatches workers, and collects results.
 
-Current invariants:
+## Dispatch
 
-- roles are flat; there is no variant system
-- implicit config discovery is a two-file merge:
-  `~/.agent-mux/config.toml` then `<cwd>/.agent-mux/config.toml`
-- durable state lives in `~/.agent-mux/dispatches/<id>/`
-- the artifact dir contains `_dispatch_ref.json`, not `_dispatch_meta.json`
-
-## Quickstart
-
-### Discovery
-
-Run this first:
+### Sync (blocks until done)
 
 ```bash
-agent-mux config roles
+agent-mux -P=lifter -C=/repo "Fix the retry logic in src/client/retry.go" 2>/dev/null
 ```
 
-That is the live role catalog for the current project. Do not invent role
-names, and do not assume a role has variants.
+Parse stdout JSON — it is a `DispatchResult` with `status`, `response`,
+`activity.files_changed`, and `metadata.engine`.
 
-### Dispatch -> Wait -> Collect
-
-`--async` returns an ack immediately. `wait` is the completion primitive.
-`result` reads the stored response.
+### Async (early ack, collect later)
 
 ```bash
-agent-mux -R=scout --async -C=/repo "Find deprecated API usages" 2>/dev/null
+ID=$(agent-mux -P=scout --async -C=/repo "Find deprecated API usages" 2>/dev/null | jq -r .dispatch_id)
 
-agent-mux wait --poll 30s <id> 2>/dev/null
+agent-mux wait --poll 30s "$ID" 2>/dev/null      # block until done
 
-agent-mux result --json <id> 2>/dev/null
-
-agent-mux status --json <id> 2>/dev/null
-
-agent-mux inspect --json <id> 2>/dev/null
+agent-mux result --json "$ID" 2>/dev/null         # read stored result
 ```
 
-Rules:
+`--async` emits an ack, detaches stdio, then runs synchronously in the current
+process. It does NOT daemonize. If you need background execution, the caller
+must background the process (shell `&` or `run_in_background`).
 
-- always parse stdout, not stderr
-- redirect stderr away when you need machine-readable output
-- do not poll `status --json` in a loop for completion; use `wait`
+Before the ack is emitted, these exist on disk:
+- `~/.agent-mux/dispatches/<id>/meta.json` (persistent metadata)
+- `<artifact_dir>/host.pid`
+- `<artifact_dir>/status.json`
 
-### Structured dispatch spec
+`_dispatch_ref.json` is written later during engine startup — do NOT rely on
+it existing at ack time.
 
-Use `--stdin` when the dispatch shape is easier to express as JSON:
+**Fan-out with shell `&`:** `--async` returns control after the ack, but the
+ack itself takes engine startup time (~10-20s for Codex). Sequential fan-out
+means that cost is paid serially. Use shell `&` to parallelize startup, then
+`agent-mux wait` to synchronize:
 
 ```bash
-printf '%s' '{"role":"lifter","prompt":"Implement the fix","cwd":"/repo"}' \
+# Fan-out: shell & parallelizes engine startup
+for svc in auth billing orders; do
+  { agent-mux --async -P=scout -C="/repo/$svc" "Audit $svc" 2>/dev/null | jq -r .dispatch_id > "/tmp/$svc.id"; } &
+done
+wait  # all acks received, all workers running
+# Synchronize:
+for svc in auth billing orders; do
+  agent-mux wait "$(cat /tmp/$svc.id)"
+done
+```
+
+### Structured dispatch via stdin
+
+```bash
+printf '%s' '{"profile":"lifter","prompt":"Implement the fix","cwd":"/repo"}' \
   | agent-mux --stdin --async 2>/dev/null
 ```
 
-In `--stdin` mode, dispatch fields belong in JSON. The CLI is only carrying
-transport flags like `--stdin`, `--async`, `--stream`, `--verbose`, `--yes`,
-and `--config`.
+In `--stdin` mode, dispatch fields go in JSON. CLI carries only transport
+flags: `--stdin`, `--async`, `--stream`, `--verbose`, `--yes`.
 
-### Mid-flight steering
+## Reading Results
+
+Always check these fields on every result:
+
+- `status` — `completed`, `timed_out`, or `failed`
+- `response` — worker's final text
+- `activity.files_changed` — files the worker modified
+- `metadata.engine`, `metadata.model` — what ran
+- `kill_reason` — present on some `failed` results (via `result --json`)
+
+`wait --json` normally returns the same shape as `result --json`. Exception:
+orphaned dispatches emit raw `LiveStatus` JSON and exit nonzero.
+
+## Steering
 
 ```bash
-agent-mux steer <id> redirect "Narrow to the parser module only" 2>/dev/null
-agent-mux steer <id> nudge 2>/dev/null
-agent-mux steer <id> extend 300 2>/dev/null
-agent-mux steer <id> abort 2>/dev/null
+agent-mux steer <id> redirect "Narrow to the parser module only"
+agent-mux steer <id> nudge
+agent-mux steer <id> extend 300
+agent-mux steer <id> abort
 ```
 
-Steering is unified under `internal/steer`. The package manages both:
+Delivery varies by engine:
+- **Codex**: FIFO pipe (`stdin.pipe`) when `stdin_pipe_ready=true`, else inbox
+- **Claude/Gemini**: inbox delivery triggers session resume/restart via
+  `ResumeArgs()` — not passive file polling
 
-- inbox delivery in the artifact dir
-- FIFO delivery via `stdin.pipe` on Unix when Codex soft steering is available
+## Profiles
 
----
-
-## Role Selection
-
-Treat role names as ordinary flat config keys.
-
-- good mental model: `lifter`, `lifter-claude`, `auditor`
-- bad mental model: `lifter` plus a `claude` variant
-
-If you need a different engine/model pairing, use a different role name if the
-project defines one.
-
-Profiles are separate from roles:
-
-- roles come from TOML config
-- profiles come from `agents/<name>.md`
-
----
-
-## Output Parsing
-
-On every result, check:
-
-- `status`
-- `response`
-- `activity.files_changed`
-- `metadata.engine` and `metadata.model`
-
-Compatibility fields:
-
-- `response_truncated` remains in the schema but is normally `false`
-- `full_output` remains in the schema but is normally `null`
-- `full_output_path` is a deprecated compatibility stub; do not build new flow around it
-
-Durable sources of truth:
-
-- `~/.agent-mux/dispatches/<id>/meta.json`
-- `~/.agent-mux/dispatches/<id>/result.json`
-
-Runtime state:
-
-- `<artifact_dir>/_dispatch_ref.json`
-- `<artifact_dir>/status.json`
-- `<artifact_dir>/events.jsonl`
-
----
-
-## Failure and Recovery
-
-Recovery code lives in `internal/dispatch/recovery.go`.
-
-Use `--recover=<dispatch_id>` when the earlier run already produced useful
-files or notes.
-
-Decision rule:
-
-```text
-timed_out + useful artifacts exist
-  -> recover
-timed_out + no useful artifacts
-  -> tighten the prompt and retry once
-failed + retryable
-  -> fix the cause and retry once
-failed + not retryable
-  -> escalate
+```bash
+agent-mux config prompts        # list available profiles for this project
 ```
 
-Your recovery prompt should describe the delta only. agent-mux already injects
-the prior dispatch ID, status, engine/model, and artifact list.
+Profiles are markdown files with optional YAML frontmatter. Search order:
+1. `<cwd>/.agent-mux/prompts/<name>.md` (project-level)
+2. `~/.agent-mux/prompts/<name>.md` (global)
 
----
+Use `-P=<name>` to select a profile (e.g. `lifter`, `scout`, `architect`).
 
-## Prompt Discipline
+## Auto-Injected Preamble
 
-### General rules
-
-1. give the worker one job
-2. name exact files or directories
-3. state hard constraints
-4. provide a verification gate
-5. state the expected output
-
-### Codex
-
-Use Codex for implementation, debugging, and precise edits.
-
-Good:
-
-- exact file paths
-- explicit tests to run
-- narrow output requirements
-
-Bad:
-
-- open-ended exploration
-- mixed planning plus implementation plus review
-
-### Claude
-
-Use Claude for planning, synthesis, review, and ambiguity reduction.
-
-### Gemini
-
-Use Gemini as a narrow contrast pass or second opinion.
-
-### Auto-injected context
-
-agent-mux may prepend:
+agent-mux may prepend to the worker's prompt:
 
 - `Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.`
-- `Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.`
+- `If you need a temporary directory for intermediate files, use $AGENT_MUX_ARTIFACT_DIR.`
 
-If you want a specific scratch file, say so explicitly:
+If you want a specific scratch file, say so:
 
 ```text
 Write your work log to $AGENT_MUX_ARTIFACT_DIR/review-notes.md.
 ```
 
-### Shell hygiene
-
-- put flags before positional args
-- escape worker env vars in prompts when your shell would expand them early
-- use `2>/dev/null` when you need clean JSON on stdout
-
 ---
+
+## Prompt Discipline
+
+1. One job per dispatch
+2. Name exact files or directories
+3. State hard constraints
+4. Provide a verification gate
+5. State the expected output shape
+
+**Codex** — implementation, debugging, precise edits. Narrow scope, exact paths.
+**Claude** — planning, synthesis, review, ambiguity reduction.
+**Gemini** — narrow contrast pass, second opinion.
+
+## Recovery
+
+```bash
+agent-mux -P=lifter --recover=<id> -C=/repo "Finish the remaining parser tests" 2>/dev/null
+```
+
+Decision rule:
+
+- `timed_out` + useful artifacts → `--recover`
+- `timed_out` + no artifacts → tighten prompt, retry once
+- `failed` + `retryable` → fix cause, retry once
+- `failed` + not retryable → escalate
+
+Your recovery prompt describes only the delta. agent-mux injects the prior
+dispatch context automatically.
+
+Artifact dir resolution during recovery: persistent meta first, then current
+secure root, then legacy `/tmp/agent-mux/<id>`.
 
 ## Anti-Patterns
 
-- assuming `config.local.toml` or XDG config lookup exists
-- describing roles as variants
-- mixing CLI dispatch flags into `--stdin` mode
-- treating `_dispatch_ref.json` as the durable result instead of a pointer
-- treating `full_output_path` as a live contract
-- polling `status --json` instead of using `wait`
-- ignoring `status` and reading only `response`
-
----
+- Treating `_dispatch_ref.json` as available at async ack time
+- Polling `status --json` instead of using `wait`
+- Assuming `--async` daemonizes (it does not)
+- Mixing CLI dispatch flags into `--stdin` mode
+- Ignoring `status` and reading only `response`
 
 ## Reference Index
-
-Operational references in `skill/references/`:
 
 | Reference | Read when |
 |-----------|-----------|
@@ -233,21 +175,4 @@ Operational references in `skill/references/`:
 | [output-contract.md](references/output-contract.md) | result schema, preview, lifecycle JSON |
 | [recovery-guide.md](references/recovery-guide.md) | recovery flow, runtime layout, watchdog |
 | [prompting-guide.md](references/prompting-guide.md) | prompt shapes, auto preamble, workflows |
-| [config-and-roles.md](references/config-and-roles.md) | config structure, flat roles, profiles, hooks |
-
-Architecture and internals in `docs/`:
-
-- `docs/architecture.md`
-- `docs/dispatch.md`
-- `docs/engines.md`
-- `docs/config.md`
-- `docs/recovery.md`
-- `docs/lifecycle.md`
-- `docs/async.md`
-- `docs/steering.md`
-
-Discover config sources with:
-
-```bash
-agent-mux config --sources
-```
+| [config-and-roles.md](references/config-and-roles.md) | config structure, profiles, hooks |

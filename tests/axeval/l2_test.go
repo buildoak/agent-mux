@@ -55,7 +55,7 @@ Each step should use --async, wait for completion, and check the result before p
 3. Does it use "agent-mux result <id> --json" to collect results?
 4. Does it use --cwd or -C= to set the working directory?
 5. Does it use valid engines (codex, claude, or gemini)?
-6. Does it use roles (-R=) or at minimum valid engine flags?
+6. Does it use profiles (-P=) or at minimum valid engine flags?
 7. Does it NOT use invalid flags like "--sandbox none" or "--output"?
 8. Does each step have a distinct, specific prompt (not vague)?
 9. Does it redirect stderr (2>/dev/null) on agent-mux calls?
@@ -80,7 +80,7 @@ Show the exact commands.`,
 2. Does it wait for all 3 to complete before starting Step 2?
 3. Does it collect results from all 3 dispatches?
 4. Does Step 2 receive context from Step 1 results (via prompt or --context-file)?
-5. Does it use appropriate roles/engines (research -> Claude/Codex, synthesis -> Claude)?
+5. Does it use appropriate profiles/engines (research -> Claude/Codex, synthesis -> Claude)?
 6. Does it use --cwd for each dispatch?
 7. Does it NOT use invalid flags?
 8. Does it redirect stderr (2>/dev/null)?
@@ -139,22 +139,22 @@ Score 1.0 if all 8 items met. Deduct 0.125 per missed item.
 Polling status in a loop is a critical anti-pattern: -0.3.`,
 		},
 		{
-			Name: "context-and-roles",
+			Name: "context-and-profiles",
 			Task: `You are a coordinator agent with access to agent-mux. A user asks you to:
 "We have a detailed specification in /tmp/spec.md (2000 lines). Have a scout quickly scan it, then have an architect plan the implementation, then have a lifter implement the first module."
 
-Plan this 3-step workflow using agent-mux roles and context passing.
+Plan this 3-step workflow using agent-mux profiles and context passing.
 Show the exact commands, including how context flows between steps.`,
 			Checklist: `Evaluate the agent's plan:
-1. Does it use -R=scout for the first step (scanning)?
-2. Does it use -R=architect for the second step (planning)?
-3. Does it use -R=lifter for the third step (implementation)?
+1. Does it use -P=scout for the first step (scanning)?
+2. Does it use -P=architect for the second step (planning)?
+3. Does it use -P=lifter for the third step (implementation)?
 4. Does it pass the spec to the first step via --context-file or including in prompt?
 5. Does it pass output from step 1 to step 2 (via --context-file, prompt injection, or result piping)?
 6. Does it pass output from step 2 to step 3?
 7. Does it use --async + wait + result collection pattern?
 8. Does it use --cwd for each dispatch?
-9. Does it NOT use roles that don't exist in the skill doc?
+9. Does it NOT use profiles that don't exist in the skill doc?
 10. Are timeouts appropriate (scout fast, architect medium, lifter longer)?
 
 Score 1.0 if all 10 items met. Deduct 0.1 per missed item.`,

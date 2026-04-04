@@ -61,39 +61,36 @@ func TestConfigIntrospection(t *testing.T) {
 		t.Fatal("config stdout empty")
 	}
 
-	rolesResult := dispatchWithFlags(t, binaryPath, []string{"config", "roles", "--cwd", cwd}, 2*time.Minute)
-	if rolesResult.ExitCode != 0 {
-		t.Fatalf("config roles exit=%d\nstdout=%s\nstderr=%s", rolesResult.ExitCode, string(rolesResult.RawStdout), string(rolesResult.RawStderr))
+	promptsResult := dispatchWithFlags(t, binaryPath, []string{"config", "prompts", "--cwd", cwd}, 2*time.Minute)
+	if promptsResult.ExitCode != 0 {
+		t.Fatalf("config prompts exit=%d\nstdout=%s\nstderr=%s", promptsResult.ExitCode, string(promptsResult.RawStdout), string(promptsResult.RawStderr))
 	}
-	rolesOut := string(rolesResult.RawStdout)
-	if strings.TrimSpace(rolesOut) == "" {
-		t.Fatal("config roles stdout empty")
+	promptsOut := string(promptsResult.RawStdout)
+	if strings.TrimSpace(promptsOut) == "" {
+		t.Fatal("config prompts stdout empty")
 	}
-	if !strings.Contains(rolesOut, "sysprompt-test") || !strings.Contains(rolesOut, "variant-test-mini") {
-		t.Fatalf("config roles output missing expected role names\nstdout=%s", rolesOut)
+	if !strings.Contains(promptsOut, "sysprompt-test") || !strings.Contains(promptsOut, "variant-test-mini") {
+		t.Fatalf("config prompts output missing expected profile names\nstdout=%s", promptsOut)
 	}
 
-	jsonFlag := detectJSONFlag(t, "config", "roles")
+	jsonFlag := detectJSONFlag(t, "config", "prompts")
 	if jsonFlag == "" {
-		t.Skip("TODO: config roles JSON flag not implemented yet")
+		t.Skip("TODO: config prompts JSON flag not implemented yet")
 	}
-	rolesJSONResult := dispatchWithFlags(t, binaryPath, []string{"config", "roles", jsonFlag, "--cwd", cwd}, 2*time.Minute)
-	if rolesJSONResult.ExitCode != 0 {
-		t.Fatalf("config roles %s exit=%d\nstdout=%s\nstderr=%s", jsonFlag, rolesJSONResult.ExitCode, string(rolesJSONResult.RawStdout), string(rolesJSONResult.RawStderr))
+	promptsJSONResult := dispatchWithFlags(t, binaryPath, []string{"config", "prompts", jsonFlag, "--cwd", cwd}, 2*time.Minute)
+	if promptsJSONResult.ExitCode != 0 {
+		t.Fatalf("config prompts %s exit=%d\nstdout=%s\nstderr=%s", jsonFlag, promptsJSONResult.ExitCode, string(promptsJSONResult.RawStdout), string(promptsJSONResult.RawStderr))
 	}
-	roleEntries, err := parseJSONArrayObjects(rolesJSONResult.RawStdout, "config roles stdout")
+	promptEntries, err := parseJSONArrayObjects(promptsJSONResult.RawStdout, "config prompts stdout")
 	if err != nil {
-		t.Fatalf("%v\nstdout=%s", err, string(rolesJSONResult.RawStdout))
+		t.Fatalf("%v\nstdout=%s", err, string(promptsJSONResult.RawStdout))
 	}
-	if len(roleEntries) == 0 {
-		t.Fatal("config roles JSON array empty")
+	if len(promptEntries) == 0 {
+		t.Fatal("config prompts JSON array empty")
 	}
-	for _, entry := range roleEntries {
+	for _, entry := range promptEntries {
 		if err := requireNonEmptyStringField(entry, "name"); err != nil {
-			t.Fatalf("config roles JSON entry invalid: %v\nstdout=%s", err, string(rolesJSONResult.RawStdout))
-		}
-		if err := requireNonEmptyStringField(entry, "engine"); err != nil {
-			t.Fatalf("config roles JSON entry invalid: %v\nstdout=%s", err, string(rolesJSONResult.RawStdout))
+			t.Fatalf("config prompts JSON entry invalid: %v\nstdout=%s", err, string(promptsJSONResult.RawStdout))
 		}
 	}
 

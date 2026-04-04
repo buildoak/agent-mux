@@ -114,7 +114,6 @@ func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
 				StartedAt:  persistentMeta.StartedAt,
 				Engine:     persistentMeta.Engine,
 				Model:      persistentMeta.Model,
-				Role:       persistentMeta.Role,
 				Cwd:        persistentMeta.Cwd,
 			}
 		} else {

@@ -93,7 +93,7 @@ func buildCasesV2(cwd string) []TestCase {
 			),
 		},
 		{
-			Name:         "role-system-prompt-delivery",
+			Name:         "profile-system-prompt-delivery",
 			Category:     CatCorrectness,
 			Engine:       "codex",
 			Model:        "gpt-5.4-mini",
@@ -103,14 +103,14 @@ func buildCasesV2(cwd string) []TestCase {
 			TimeoutSec:   120,
 			MaxWallClock: 3 * time.Minute,
 			SkipSkills:   true,
-			ExtraFlags:   []string{"-R=sysprompt-test"},
+			ExtraFlags:   []string{"-P=sysprompt-test"},
 			Evaluate: compose(
 				statusIs("completed"),
 				responseContains("ROLE_SYSPROMPT_CANARY_9931"),
 			),
 		},
 		{
-			Name:         "flat-role-resolution",
+			Name:         "flat-profile-resolution",
 			Category:     CatCorrectness,
 			Engine:       "codex",
 			Model:        "gpt-5.4",
@@ -120,7 +120,7 @@ func buildCasesV2(cwd string) []TestCase {
 			TimeoutSec:   120,
 			MaxWallClock: 3 * time.Minute,
 			SkipSkills:   true,
-			ExtraFlags:   []string{"-R=variant-test-mini", "--cwd", cwd},
+			ExtraFlags:   []string{"-P=variant-test-mini", "--cwd", cwd},
 			Evaluate: compose(
 				statusIs("completed"),
 				func(r Result) Verdict {
@@ -163,7 +163,7 @@ func buildCasesV2(cwd string) []TestCase {
 			),
 		},
 		{
-			Name:         "scout-role-completion",
+			Name:         "scout-profile-completion",
 			Category:     CatCorrectness,
 			Engine:       "codex",
 			Model:        "gpt-5.4-mini",
@@ -173,7 +173,7 @@ func buildCasesV2(cwd string) []TestCase {
 			TimeoutSec:   120,
 			MaxWallClock: 3 * time.Minute,
 			SkipSkills:   true,
-			ExtraFlags:   []string{"-R=scout"},
+			ExtraFlags:   []string{"-P=scout"},
 			Evaluate: compose(
 				statusIs("completed"),
 				func(r Result) Verdict {
@@ -185,7 +185,7 @@ func buildCasesV2(cwd string) []TestCase {
 					if !ok || strings.TrimSpace(response) == "" {
 						return Verdict{Pass: false, Score: 0.0, Reason: "scout response is empty or missing"}
 					}
-					return Verdict{Pass: true, Score: 1.0, Reason: "scout role completed with non-empty response"}
+					return Verdict{Pass: true, Score: 1.0, Reason: "scout profile completed with non-empty response"}
 				},
 			),
 		},
