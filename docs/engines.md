@@ -219,5 +219,5 @@ Operational notes:
 Anthropic ToS compliance matters here: for the `claude` engine, automated use should go through `ANTHROPIC_API_KEY`. Device OAuth subscription login falls under Anthropic consumer terms and is not the compliant path for scripted workflows.
 ## Cross-References
 - [dispatch.md](dispatch.md) for dispatch assembly and lifecycle outside the adapter boundary
-- [config.md](config.md) for model lists, engine defaults, role overlays, and engine option sources
+- [config.md](config.md) for model lists, engine defaults, profile frontmatter, and engine option sources
 - [architecture.md](architecture.md) for the wider supervision loop, package map, and system rationale

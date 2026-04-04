@@ -113,7 +113,7 @@ Output:
 - then open questions
 ```
 
-For read-only work, use `--permission-mode=plan` or an appropriate role.
+For read-only work, use `--permission-mode=plan` or an appropriate profile.
 
 If the job is implementation at its core, plan in Claude and hand the coding to Codex via a second dispatch.
 
@@ -153,7 +153,7 @@ Gemini variants are reasoning-only on this machine. No file reads, no commands, 
 Reusable runbooks from a named skill directory. Keeps prompts short and composable.
 
 ```bash
-agent-mux -R=lifter --skill react --skill test-writer -C /repo "Implement error boundary"
+agent-mux -P=lifter --skill react --skill test-writer -C /repo "Implement error boundary"
 ```
 
 ### --context-file (JSON: "context_file")
@@ -167,12 +167,12 @@ Good uses: bulky handoff notes, long specs, structured research dumps.
 Run-level framing, not giant project manuals:
 
 ```json
-{"role":"auditor","system_prompt":"Prioritize regressions over style","prompt":"...","cwd":"/repo"}
+{"profile":"auditor","system_prompt":"Prioritize regressions over style","prompt":"...","cwd":"/repo"}
 ```
 
-### --profile / "profile" (JSON)
+### -P / --profile / "profile" (JSON)
 
-Persistent personas with default engine/model settings. Put stable persona text in the profile body, dynamic task details in the prompt.
+Persistent personas with default engine/model settings. Put stable persona text in `~/.agent-mux/prompts/<name>.md` using frontmatter; keep dynamic task details in the prompt.
 
 ## Recovery Prompting
 
@@ -229,7 +229,7 @@ For long steps, use `--async` and `wait`:
 
 ```bash
 # Fire the planning step
-ID=$(agent-mux --async --engine claude --role architect -C /repo "Produce a migration plan" \
+ID=$(agent-mux --async --engine claude -P=architect -C /repo "Produce a migration plan" \
   | jq -r .dispatch_id)
 
 # Wait for it
@@ -237,7 +237,7 @@ agent-mux wait "$ID" --poll 30s
 
 # Read the result and dispatch the next step
 PLAN=$(agent-mux result "$ID")
-agent-mux --engine codex --role lifter --context-file <(echo "$PLAN") -C /repo "Implement the plan"
+agent-mux --engine codex -P=lifter --context-file <(echo "$PLAN") -C /repo "Implement the plan"
 ```
 
 ### Fan-out pattern

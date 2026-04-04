@@ -9,7 +9,7 @@ The current CLI path is:
 1. Parse either normal dispatch flags or `--stdin` JSON.
 2. Load config with `config.LoadConfig(flags.config, spec.Cwd)`.
 3. Apply profile defaults when `profile` is set.
-4. Apply role defaults, role system prompt, and role skills when `role` is set.
+4. Apply profile defaults (engine, model, effort, timeout, system prompt, skills) when profile is set.
 5. Fill unresolved `engine`, `model`, `effort`, `max_depth`, `timeout_sec`, and `grace_sec`.
 6. Inject default `engine_opts` values for liveness and `permission-mode` when they were not set explicitly.
 7. Load skill prompts and skill `scripts/` directories unless `skip_skills` is true.
@@ -72,7 +72,7 @@ These are the structured fields decoded directly into `types.DispatchSpec`, incl
 
 | JSON key | Meaning |
 | --- | --- |
-| `role` | Role name to resolve from config |
+| `role` | Legacy role name field, ignored by current stdin parsing |
 | `profile` | Profile name |
 | `coordinator` | Alias for `profile` |
 | `skills` | Explicit skill list |
@@ -145,8 +145,8 @@ Current dispatch persistence is:
   result.json
 ```
 
-- `meta.json` stores durable dispatch metadata such as engine, model, effort, role, profile, cwd, artifact directory, started time, timeout, prompt hash, and session ID.
-- `result.json` stores the terminal `DispatchResult` plus persisted fields such as `started_at`, `ended_at`, `artifact_dir`, `cwd`, `engine`, `model`, `role`, `profile`, `effort`, `session_id`, `response_chars`, and `timeout_sec`.
+- `meta.json` stores durable dispatch metadata such as engine, model, effort, profile, cwd, artifact directory, started time, timeout, prompt hash, and session ID.
+- `result.json` stores the terminal `DispatchResult` plus persisted fields such as `started_at`, `ended_at`, `artifact_dir`, `cwd`, `engine`, `model`, `profile`, `effort`, `session_id`, `response_chars`, and `timeout_sec`.
 
 The artifact-local `_dispatch_ref.json` is only a pointer back to that store.
 

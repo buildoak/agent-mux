@@ -46,11 +46,11 @@ V1 cases cover broad behavior:
 - liveness and freeze handling
 - error handling
 - streaming, async dispatch, steering
-- role dispatch
+- profile dispatch
 V2 cases focus on caller-facing contracts:
 - stdout schema validation
-- role system prompt delivery
-- variant resolution
+- profile system prompt delivery
+- profile resolution
 - artifact metadata
 - handoff summary extraction
 `CASES-V2.md` is the planning document for that expansion. `cases_v2.go` is the executable subset the suite currently enforces.
@@ -199,13 +199,13 @@ Treat that example as policy guidance, not a generated index. The actual runnabl
 V2 is the contract-focused layer added on top of the original behavior suite. The major difference from V1 is that V2 asserts structured caller-facing outputs instead of only checking broad behavior.
 Implemented V2 coverage currently includes:
 - `output-contract-schema`: validates stdout fields such as `schema_version`, `dispatch_id`, `activity`, `metadata`, and `duration_ms`
-- `role-system-prompt-delivery`: verifies that a role-provided system prompt actually reaches the worker
-- `variant-resolution`: checks whether the chosen variant is reflected in `dispatch_start` metadata
+- `profile-system-prompt-delivery`: verifies that a profile-provided system prompt actually reaches the worker
+- `profile-resolution`: checks whether the chosen profile is reflected in `dispatch_start` metadata
 - `artifact-dir-metadata`: validates `events.jsonl` and `status.json` in the artifact directory, and `meta.json` under `~/.agent-mux/dispatches/<id>/`
 - `handoff-summary-extraction`: probes the `handoff_summary` field
 The code also makes clear that V2 is still partly aspirational:
 - `response-truncation` is skipped because that contract is currently disabled in result assembly
-- `variant-resolution` and `handoff-summary-extraction` still accept partial-credit TODO states in some branches
+- `profile-resolution` and `handoff-summary-extraction` still accept partial-credit TODO states in some branches
 That distinction matters. `CASES-V2.md` is the roadmap; `cases_v2.go` is the current enforcement boundary.
 
 ## Reports
