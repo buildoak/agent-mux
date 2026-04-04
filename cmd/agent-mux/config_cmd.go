@@ -146,9 +146,13 @@ func runConfigPrompts(args []string, stdout io.Writer) int {
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tPATH\tSOURCE")
+	fmt.Fprintln(tw, "NAME\tENGINE\tMODEL\tEFFORT\tTIMEOUT\tDESCRIPTION")
 	for _, p := range prompts {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", p.Name, p.Path, p.Source)
+		timeout := ""
+		if p.Timeout > 0 {
+			timeout = fmt.Sprintf("%d", p.Timeout)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", p.Name, p.Engine, p.Model, p.Effort, timeout, p.Description)
 	}
 	_ = tw.Flush()
 	return 0

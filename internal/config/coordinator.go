@@ -18,6 +18,7 @@ type CoordinatorSpec struct {
 	Engine       string
 	Skills       []string
 	Timeout      int
+	Description  string
 	SystemPrompt string
 }
 
@@ -78,11 +79,12 @@ func loadCoordinatorSpec(path, name string) (*CoordinatorSpec, error) {
 	}
 
 	var parsed struct {
-		Model   string   `yaml:"model"`
-		Effort  string   `yaml:"effort"`
-		Engine  string   `yaml:"engine"`
-		Skills  []string `yaml:"skills"`
-		Timeout int      `yaml:"timeout"`
+		Model       string   `yaml:"model"`
+		Effort      string   `yaml:"effort"`
+		Engine      string   `yaml:"engine"`
+		Skills      []string `yaml:"skills"`
+		Timeout     int      `yaml:"timeout"`
+		Description string   `yaml:"description"`
 	}
 	if err := yaml.Unmarshal(frontmatter, &parsed); err != nil {
 		return nil, fmt.Errorf("decode frontmatter: %w", err)
@@ -103,6 +105,7 @@ func loadCoordinatorSpec(path, name string) (*CoordinatorSpec, error) {
 	spec.Engine = parsed.Engine
 	spec.Skills = append([]string(nil), parsed.Skills...)
 	spec.Timeout = parsed.Timeout
+	spec.Description = parsed.Description
 
 	return spec, nil
 }
@@ -134,12 +137,15 @@ func splitFrontmatter(data []byte) ([]byte, string, error) {
 
 // PromptFileInfo describes a discovered prompt/profile file for `config prompts`.
 type PromptFileInfo struct {
-	Name   string   `json:"name"`
-	Path   string   `json:"path"`
-	Source string   `json:"source"`
-	Skills []string `json:"skills,omitempty"`
-	Effort string   `json:"effort,omitempty"`
-	Engine string   `json:"engine,omitempty"`
+	Name        string   `json:"name"`
+	Path        string   `json:"path"`
+	Source      string   `json:"source"`
+	Skills      []string `json:"skills,omitempty"`
+	Effort      string   `json:"effort,omitempty"`
+	Engine      string   `json:"engine,omitempty"`
+	Model       string   `json:"model,omitempty"`
+	Timeout     int      `json:"timeout,omitempty"`
+	Description string   `json:"description,omitempty"`
 }
 
 // DiscoverPromptFiles scans ~/.agent-mux/prompts/ and returns all prompt files.
@@ -178,6 +184,9 @@ func DiscoverPromptFiles() []PromptFileInfo {
 			info.Skills = spec.Skills
 			info.Effort = spec.Effort
 			info.Engine = spec.Engine
+			info.Model = spec.Model
+			info.Timeout = spec.Timeout
+			info.Description = spec.Description
 		}
 
 		results = append(results, info)
