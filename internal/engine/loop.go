@@ -768,6 +768,10 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			// streamDone closed.  Now that streamDone is closed the scanner is
 			// guaranteed finished, so drain one more time to capture every signal.
 			drainCurrentSignals(currentGen)
+			enqueueInboxMessages()
+			if len(pendingMessages) > 0 && restartRun(true) {
+				continue
+			}
 			closeSoftBridge()
 			goto buildResult
 
