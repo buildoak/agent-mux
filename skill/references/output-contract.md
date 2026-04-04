@@ -149,9 +149,13 @@ When `--async` is set, stdout receives:
 
 By the time this ack is emitted:
 
-- `host.pid` and `status.json` are already on disk
-- `_dispatch_ref.json` already points at the durable store
-- `~/.agent-mux/dispatches/<id>/meta.json` already exists
+- `~/.agent-mux/dispatches/<id>/meta.json` already exists (via `RegisterDispatchSpec`)
+- `host.pid` is on disk and fsynced
+- `status.json` is on disk (state `running`, last_activity `initializing`)
+
+NOT guaranteed before ack:
+
+- `_dispatch_ref.json` — written later during engine startup
 
 ---
 
@@ -194,7 +198,7 @@ By the time this ack is emitted:
   },
   "prompt_preamble": [
     "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.",
-    "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR."
+    "If you need a temporary directory for intermediate files, use $AGENT_MUX_ARTIFACT_DIR."
   ],
   "warnings": [],
   "confirmation_required": false
@@ -299,10 +303,12 @@ Compact lifecycle JSON:
 }
 ```
 
-Possible extra field:
+Possible extra fields:
 
-- `kill_reason`: added for some failed runs when agent-mux can identify a
-  kill-related error code from `events.jsonl`
+- `kill_reason`: added for failed runs when agent-mux can identify a
+  kill-related event (frozen_killed, signal_killed, etc.) from `events.jsonl`
+  or status metadata. Present only when `status` is `failed`.
+- `session_id`: harness session ID when available
 
 ### result --json --artifacts
 
@@ -353,7 +359,7 @@ artifact dir via `_dispatch_ref.json`.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `state` | string | `initializing`, `running`, `completed`, `failed`, `timed_out` |
+| `state` | string | `running`, `completed`, `failed`, `timed_out` |
 | `elapsed_s` | int | Seconds since start |
 | `last_activity` | string | Most recent activity summary |
 | `tools_used` | int | Tool-call count |

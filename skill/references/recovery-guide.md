@@ -53,12 +53,16 @@ Use `--recover <id>` or `"recover": "<id>"` in stdin JSON.
 
 ### Flow
 
-1. resolve the dispatch ID from the durable store
-2. read `~/.agent-mux/dispatches/<id>/meta.json` to recover `artifact_dir`
-3. resolve artifact-backed metadata via `_dispatch_ref.json`
-4. scan the artifact directory for worker-written files
-5. build a continuation prompt with dispatch ID, engine, model, prior status, artifact list, and prompt hash
-6. run a new dispatch with that continuation prompt prepended
+1. resolve the artifact directory via `ResolveArtifactDir`:
+   - persistent meta's `artifact_dir` (first priority)
+   - current secure artifact root
+   - legacy `/tmp/agent-mux/<id>` (fallback)
+2. read dispatch metadata from the artifact dir (`_dispatch_ref.json` or
+   `_dispatch_meta.json`); if that fails, fall back to persistent meta at
+   `~/.agent-mux/dispatches/<id>/`
+3. scan the artifact directory for worker-written files
+4. build a continuation prompt with dispatch ID, engine, model, prior status, artifact list, and prompt hash
+5. run a new dispatch with that continuation prompt prepended
 
 The added recovery prompt already says "continue from where the previous run
 left off." Your prompt should only state what remains.
@@ -159,12 +163,15 @@ emit `long_command_detected`.
 
 Soft steering is unified under `internal/steer`:
 
-- inbox delivery for all engines
-- FIFO delivery for Codex when `stdin_pipe_ready=true`
+- **Codex**: FIFO delivery via `stdin.pipe` when `stdin_pipe_ready=true`,
+  otherwise inbox
+- **Claude/Gemini**: inbox delivery triggers session resume/restart via
+  `ResumeArgs()` — the loop restarts the harness with the pending inbox
+  messages as the resume prompt
 
-If a steer message arrives while a tool is still active, agent-mux can defer
-resume/restart until the tool finishes, or force it after the configured
-maximum wait.
+If a steer message arrives while a tool is still active, agent-mux defers
+the resume/restart until the tool finishes. If the tool takes longer than
+`max_steer_wait_seconds` (default 120s), the steer is force-delivered.
 
 ---
 

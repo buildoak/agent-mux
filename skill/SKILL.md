@@ -10,83 +10,132 @@ description: |
 
 # agent-mux
 
-One CLI, three engines (Codex, Claude, Gemini), one JSON contract. agent-mux
-resolves config, builds prompts, dispatches workers, and collects results.
+One CLI, three engines (Codex, Claude, Gemini), one JSON contract. Worker
+identity lives in prompt files at `~/.agent-mux/prompts/` -- markdown with
+YAML frontmatter that sets engine, model, effort, timeout, and system prompt.
+No config files, no role tables. The prompt IS the worker.
 
-## Dispatch
+## Quick Dispatch
 
-### Sync (blocks until done)
+Three patterns cover 95% of dispatches.
+
+**Profile dispatch** (the standard path -- one flag resolves everything):
 
 ```bash
 agent-mux -P=lifter -C=/repo "Fix the retry logic in src/client/retry.go" 2>/dev/null
 ```
 
-Parse stdout JSON — it is a `DispatchResult` with `status`, `response`,
-`activity.files_changed`, and `metadata.engine`.
-
-### Async (early ack, collect later)
+**Async dispatch** (fire, collect later):
 
 ```bash
 ID=$(agent-mux -P=scout --async -C=/repo "Find deprecated API usages" 2>/dev/null | jq -r .dispatch_id)
-
-agent-mux wait --poll 30s "$ID" 2>/dev/null      # block until done
-
-agent-mux result --json "$ID" 2>/dev/null         # read stored result
+agent-mux wait --poll 30s "$ID" 2>/dev/null
+agent-mux result --json "$ID" 2>/dev/null
 ```
 
-`--async` emits an ack, detaches stdio, then runs synchronously in the current
-process. It does NOT daemonize. If you need background execution, the caller
-must background the process (shell `&` or `run_in_background`).
-
-Before the ack is emitted, these exist on disk:
-- `~/.agent-mux/dispatches/<id>/meta.json` (persistent metadata)
-- `<artifact_dir>/host.pid`
-- `<artifact_dir>/status.json`
-
-`_dispatch_ref.json` is written later during engine startup — do NOT rely on
-it existing at ack time.
-
-**Fan-out with shell `&`:** `--async` returns control after the ack, but the
-ack itself takes engine startup time (~10-20s for Codex). Sequential fan-out
-means that cost is paid serially. Use shell `&` to parallelize startup, then
-`agent-mux wait` to synchronize:
-
-```bash
-# Fan-out: shell & parallelizes engine startup
-for svc in auth billing orders; do
-  { agent-mux --async -P=scout -C="/repo/$svc" "Audit $svc" 2>/dev/null | jq -r .dispatch_id > "/tmp/$svc.id"; } &
-done
-wait  # all acks received, all workers running
-# Synchronize:
-for svc in auth billing orders; do
-  agent-mux wait "$(cat /tmp/$svc.id)"
-done
-```
-
-### Structured dispatch via stdin
+**Structured dispatch via stdin** (canonical machine invocation):
 
 ```bash
 printf '%s' '{"profile":"lifter","prompt":"Implement the fix","cwd":"/repo"}' \
   | agent-mux --stdin --async 2>/dev/null
 ```
 
-In `--stdin` mode, dispatch fields go in JSON. CLI carries only transport
-flags: `--stdin`, `--async`, `--stream`, `--verbose`, `--yes`.
+Parse stdout JSON. Every result has `status`, `response`,
+`activity.files_changed`, and `metadata.engine`. Always check `status` first.
+
+## Profile Roster
+
+Discover the live roster:
+
+```bash
+agent-mux config prompts           # human table
+agent-mux config prompts --json    # structured JSON array
+```
+
+Current profiles and when to pick each:
+
+| Profile | Engine | Model | Use When |
+|---------|--------|-------|----------|
+| `scout` | codex | gpt-5.4-mini | Quick read-only probe. Status checks, file reads, grep-and-report |
+| `explorer` | codex | gpt-5.4-mini | Broad codebase exploration. Map structure, find patterns, survey |
+| `researcher` | claude | claude-sonnet-4-6 | Deep analysis and synthesis. Multi-file reasoning, comparisons |
+| `architect` | claude | claude-sonnet-4-6 | System design and migration planning. Plans, not code |
+| `lifter` | codex | gpt-5.4 | Scoped implementation. The workhorse -- build, test, verify |
+| `auditor` | claude | claude-sonnet-4-6 | Code review and correctness verification |
+| `writer` | claude | claude-sonnet-4-6 | Documentation and writing |
+| `grunt` | codex | gpt-5.3-codex-spark | Mechanical edits, renames, bulk changes. Cheapest and fastest |
+| `ticket-worker` | codex | gpt-5.4-mini | Standard ticket execution |
+| `ticket-worker-heavy` | codex | gpt-5.4 | Complex ticket execution |
+
+**Selection heuristic:** scout for reads, lifter for writes, architect for
+plans, grunt for bulk edits, researcher for analysis. When in doubt, scout
+first, then dispatch the right worker with what you learned.
+
+## Essential Flags
+
+| Flag | Short | What it does |
+|------|-------|-------------|
+| `-P` / `--profile` | `-P` | Load a prompt file by name. The primary dispatch flag |
+| `-E` / `--engine` | `-E` | Override engine: `codex`, `claude`, `gemini` |
+| `-m` / `--model` | `-m` | Override model |
+| `-e` / `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` |
+| `-C` / `--cwd` | `-C` | Working directory for the worker |
+| `-t` / `--timeout` | `-t` | Timeout in seconds |
+| `--async` | | Return ack immediately, run in current process |
+| `--context-file` | | File path -- sets `AGENT_MUX_CONTEXT`, worker told to read it |
+| `--skill` | | Repeatable skill name to inject |
+| `--recover` | | Continue from a prior dispatch ID |
+
+Precedence: CLI flags > profile frontmatter > hardcoded defaults. `-P=lifter
+-m gpt-5.4-mini` uses lifter's engine/effort/timeout but overrides the model.
+
+---
+
+## Async and Fan-Out
+
+`--async` emits an ack JSON, detaches stdio, then runs synchronously in the
+current process. It does NOT daemonize. For true background execution, the
+caller must background the process (`&` or `run_in_background`).
+
+**Fan-out with shell `&`:** `--async` ack takes engine startup time (~10-20s
+for Codex). Sequential fan-out pays that cost serially. Parallelize with `&`:
+
+```bash
+for svc in auth billing orders; do
+  { agent-mux --async -P=scout -C="/repo/$svc" "Audit $svc" 2>/dev/null | jq -r .dispatch_id > "/tmp/$svc.id"; } &
+done
+wait  # all acks received
+for svc in auth billing orders; do
+  agent-mux wait "$(cat /tmp/$svc.id)"
+done
+```
+
+**Sequential handoff** (plan then implement):
+
+```bash
+ID1=$(agent-mux -P=architect --async -C=/repo "Design the auth migration" 2>/dev/null | jq -r .dispatch_id)
+agent-mux wait "$ID1" 2>/dev/null
+agent-mux result "$ID1" 2>/dev/null > /tmp/plan.md
+agent-mux -P=lifter --context-file=/tmp/plan.md -C=/repo \
+  'Implement the plan at $AGENT_MUX_CONTEXT' 2>/dev/null
+```
 
 ## Reading Results
 
 Always check these fields on every result:
 
-- `status` — `completed`, `timed_out`, or `failed`
-- `response` — worker's final text
-- `activity.files_changed` — files the worker modified
-- `metadata.engine`, `metadata.model` — what ran
-- `kill_reason` — present on some `failed` results (via `result --json`)
+- `status` -- `completed`, `timed_out`, or `failed`
+- `response` -- worker's final text
+- `activity.files_changed` -- files the worker modified
+- `metadata.engine`, `metadata.model` -- what ran
+- `kill_reason` -- present on some `failed` results (via `result --json`)
 
-`wait --json` normally returns the same shape as `result --json`. Exception:
-orphaned dispatches emit raw `LiveStatus` JSON and exit nonzero.
+`wait --json` returns the same shape as `result --json`. Exception: orphaned
+dispatches emit raw `LiveStatus` JSON and exit nonzero.
 
 ## Steering
+
+Mid-flight control for running dispatches:
 
 ```bash
 agent-mux steer <id> redirect "Narrow to the parser module only"
@@ -96,48 +145,8 @@ agent-mux steer <id> abort
 ```
 
 Delivery varies by engine:
-- **Codex**: FIFO pipe (`stdin.pipe`) when `stdin_pipe_ready=true`, else inbox
-- **Claude/Gemini**: inbox delivery triggers session resume/restart via
-  `ResumeArgs()` — not passive file polling
-
-## Profiles
-
-```bash
-agent-mux config prompts        # list available profiles for this project
-```
-
-Profiles are markdown files with optional YAML frontmatter. Search order:
-1. `<cwd>/.agent-mux/prompts/<name>.md` (project-level)
-2. `~/.agent-mux/prompts/<name>.md` (global)
-
-Use `-P=<name>` to select a profile (e.g. `lifter`, `scout`, `architect`).
-
-## Auto-Injected Preamble
-
-agent-mux may prepend to the worker's prompt:
-
-- `Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.`
-- `If you need a temporary directory for intermediate files, use $AGENT_MUX_ARTIFACT_DIR.`
-
-If you want a specific scratch file, say so:
-
-```text
-Write your work log to $AGENT_MUX_ARTIFACT_DIR/review-notes.md.
-```
-
----
-
-## Prompt Discipline
-
-1. One job per dispatch
-2. Name exact files or directories
-3. State hard constraints
-4. Provide a verification gate
-5. State the expected output shape
-
-**Codex** — implementation, debugging, precise edits. Narrow scope, exact paths.
-**Claude** — planning, synthesis, review, ambiguity reduction.
-**Gemini** — narrow contrast pass, second opinion.
+- **Codex**: FIFO pipe (`stdin.pipe`) when ready, else inbox
+- **Claude/Gemini**: inbox triggers session resume via `ResumeArgs()`
 
 ## Recovery
 
@@ -147,16 +156,50 @@ agent-mux -P=lifter --recover=<id> -C=/repo "Finish the remaining parser tests" 
 
 Decision rule:
 
-- `timed_out` + useful artifacts → `--recover`
-- `timed_out` + no artifacts → tighten prompt, retry once
-- `failed` + `retryable` → fix cause, retry once
-- `failed` + not retryable → escalate
+- `timed_out` + useful artifacts -> `--recover`
+- `timed_out` + no artifacts -> tighten prompt, retry once
+- `failed` + `retryable` -> fix cause, retry once
+- `failed` + not retryable -> escalate
 
-Your recovery prompt describes only the delta. agent-mux injects the prior
-dispatch context automatically.
+Recovery prompt describes only the delta. agent-mux injects prior context
+automatically.
 
-Artifact dir resolution during recovery: persistent meta first, then current
-secure root, then legacy `/tmp/agent-mux/<id>`.
+## Auto-Injected Preamble
+
+agent-mux may prepend to the worker's prompt:
+
+- `Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.`
+- `If you need a temporary directory for intermediate files, use $AGENT_MUX_ARTIFACT_DIR.`
+
+Do not repeat these unless you need a specific filename:
+
+```text
+Write your work log to $AGENT_MUX_ARTIFACT_DIR/review-notes.md.
+```
+
+## Prompt Discipline
+
+1. One job per dispatch
+2. Name exact files or directories
+3. State hard constraints
+4. Provide a verification gate
+5. State the expected output shape
+
+**Codex** -- implementation, debugging, precise edits. Narrow scope, exact paths.
+**Claude** -- planning, synthesis, review, ambiguity reduction.
+**Gemini** -- narrow contrast pass, second opinion.
+
+## `--stdin` Mode
+
+In `--stdin` mode, dispatch fields go in JSON. CLI carries only transport
+flags: `--stdin`, `--async`, `--stream`, `--verbose`, `--yes`.
+
+```bash
+printf '%s' '{"profile":"lifter","prompt":"Implement the fix","cwd":"/repo"}' \
+  | agent-mux --stdin --async 2>/dev/null
+```
+
+Do not mix CLI dispatch flags into `--stdin` mode.
 
 ## Anti-Patterns
 
@@ -175,4 +218,4 @@ secure root, then legacy `/tmp/agent-mux/<id>`.
 | [output-contract.md](references/output-contract.md) | result schema, preview, lifecycle JSON |
 | [recovery-guide.md](references/recovery-guide.md) | recovery flow, runtime layout, watchdog |
 | [prompting-guide.md](references/prompting-guide.md) | prompt shapes, auto preamble, workflows |
-| [config-and-roles.md](references/config-and-roles.md) | config structure, profiles, hooks |
+| [config-and-profiles.md](references/config-and-profiles.md) | profile discovery, frontmatter, hooks, skills |

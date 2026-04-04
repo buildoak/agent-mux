@@ -35,7 +35,7 @@ the harness, artifact dir, and any injected preamble.
 agent-mux may prepend one or both of these lines before the prompt:
 
 - `Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.`
-- `Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.`
+- `If you need a temporary directory for intermediate files, use $AGENT_MUX_ARTIFACT_DIR.`
 
 Implications:
 
@@ -137,7 +137,7 @@ Use named skill directories for reusable runbooks.
 
 ```json
 {
-  "role": "lifter",
+  "profile": "lifter",
   "skills": ["react", "test-writer"],
   "prompt": "...",
   "cwd": "/repo"
@@ -155,7 +155,7 @@ Use for run-level framing, not giant manuals.
 
 ```json
 {
-  "role": "auditor",
+  "profile": "auditor",
   "system_prompt": "Prioritize regressions over style.",
   "prompt": "Review the patch."
 }
@@ -178,33 +178,33 @@ and `--config`.
 ### Sequential handoff
 
 ```bash
-ID1=$(agent-mux -R=architect --async -C=/repo "Design the auth migration" 2>/dev/null | jq -r .dispatch_id)
+ID1=$(agent-mux -P=architect --async -C=/repo "Design the auth migration" 2>/dev/null | jq -r .dispatch_id)
 
 agent-mux wait --poll 30s "$ID1" 2>/dev/null
 
 PLAN=$(agent-mux result --json "$ID1" 2>/dev/null | jq -r .response)
 
-printf '%s' "{\"role\":\"lifter\",\"prompt\":\"Implement this plan:\\n$PLAN\",\"cwd\":\"/repo\"}" \
+printf '%s' "{\"profile\":\"lifter\",\"prompt\":\"Implement this plan:\\n$PLAN\",\"cwd\":\"/repo\"}" \
   | agent-mux --stdin --async 2>/dev/null
 ```
 
 ### Handoff via context file
 
 ```bash
-ID1=$(agent-mux -R=architect --async -C=/repo "Design the auth migration" 2>/dev/null | jq -r .dispatch_id)
+ID1=$(agent-mux -P=architect --async -C=/repo "Design the auth migration" 2>/dev/null | jq -r .dispatch_id)
 agent-mux wait "$ID1" 2>/dev/null
 agent-mux result "$ID1" 2>/dev/null > /tmp/plan.md
 
-agent-mux -R=lifter --async --context-file=/tmp/plan.md -C=/repo \
+agent-mux -P=lifter --async --context-file=/tmp/plan.md -C=/repo \
   'Implement the plan at $AGENT_MUX_CONTEXT' 2>/dev/null
 ```
 
 ### Parallel fan-out
 
 ```bash
-ID1=$(agent-mux -R=scout --async -C=/repo "Scan auth module" 2>/dev/null | jq -r .dispatch_id)
-ID2=$(agent-mux -R=scout --async -C=/repo "Scan API layer" 2>/dev/null | jq -r .dispatch_id)
-ID3=$(agent-mux -R=scout --async -C=/repo "Scan DB layer" 2>/dev/null | jq -r .dispatch_id)
+ID1=$(agent-mux -P=scout --async -C=/repo "Scan auth module" 2>/dev/null | jq -r .dispatch_id)
+ID2=$(agent-mux -P=scout --async -C=/repo "Scan API layer" 2>/dev/null | jq -r .dispatch_id)
+ID3=$(agent-mux -P=scout --async -C=/repo "Scan DB layer" 2>/dev/null | jq -r .dispatch_id)
 
 agent-mux wait "$ID1" 2>/dev/null
 agent-mux wait "$ID2" 2>/dev/null

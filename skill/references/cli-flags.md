@@ -13,11 +13,11 @@ and `agent-mux preview ...`.
 
 | Flag | Short | Type | Default | Notes |
 |------|-------|------|---------|-------|
-| `--engine` | `-E` | string | from config | `codex`, `claude`, `gemini` |
-| `--profile` | `-P` | string | unset | Profile prompt file from `prompts/<name>.md` |
+| `--engine` | `-E` | string | from profile | `codex`, `claude`, `gemini` |
+| `--profile` | `-P` | string | unset | Profile prompt file from `~/.agent-mux/prompts/<name>.md` |
 | `--cwd` | `-C` | string | current dir | Working directory for the harness |
-| `--model` | `-m` | string | from profile/config | Model override |
-| `--effort` | `-e` | string | from profile/config | `low`, `medium`, `high`, `xhigh` |
+| `--model` | `-m` | string | from profile | Model override |
+| `--effort` | `-e` | string | from profile | `low`, `medium`, `high`, `xhigh` |
 | `--timeout` | `-t` | int | effort-mapped | Timeout in seconds |
 | `--system-prompt` | `-s` | string | unset | Extra system prompt text |
 | `--system-prompt-file` | | string | unset | Read system prompt text from file |
@@ -133,9 +133,9 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 |----------|------|----------|---------|-------|
 | `prompt` | string | yes | - | Task prompt |
 | `cwd` | string | no | shell cwd | Working directory |
-| `engine` | string | no | from profile/config | `codex`, `claude`, `gemini` |
-| `model` | string | no | from profile/config | Model override |
-| `effort` | string | no | from profile/config | `low`, `medium`, `high`, `xhigh` |
+| `engine` | string | no | from profile | `codex`, `claude`, `gemini` |
+| `model` | string | no | from profile | Model override |
+| `effort` | string | no | from profile | `low`, `medium`, `high`, `xhigh` |
 | `system_prompt` | string | no | unset | Run-level system prompt |
 | `context_file` | string | no | unset | Sets `AGENT_MUX_CONTEXT` |
 | `profile` | string | no | unset | Profile/prompt file name |
@@ -200,8 +200,7 @@ The durable store is always `~/.agent-mux/dispatches/<id>/`.
 ### Profile search order
 
 ```
-<cwd>/.agent-mux/prompts/<name>.md   (project-level)
-  > ~/.agent-mux/prompts/<name>.md   (global)
+~/.agent-mux/prompts/<name>.md   (single global directory)
 ```
 
 ### Dispatch fields in standard CLI mode
@@ -210,7 +209,7 @@ For `engine`, `model`, and `effort`:
 
 ```
 explicit CLI flags
-  > profile
+  > profile frontmatter
   > hardcoded defaults
 ```
 
@@ -218,8 +217,8 @@ For `timeout`:
 
 ```
 explicit CLI --timeout
-  > profile.timeout
-  > timeout table for the chosen effort
+  > profile frontmatter timeout
+  > hardcoded default (1800s)
 ```
 
 ### Dispatch fields in --stdin mode
@@ -228,7 +227,7 @@ For `engine`, `model`, and `effort`:
 
 ```
 explicit JSON fields
-  > profile
+  > profile frontmatter
   > hardcoded defaults
 ```
 
@@ -236,16 +235,15 @@ For `timeout`:
 
 ```
 explicit JSON timeout_sec
-  > profile.timeout
-  > timeout table for the chosen effort
+  > profile frontmatter timeout
+  > hardcoded default (1800s)
 ```
 
 ### Poll interval
 
 ```
 wait --poll
-  > [async].poll_interval
-  > 60s
+  > 60s hardcoded default
 ```
 
 ---

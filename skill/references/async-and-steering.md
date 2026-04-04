@@ -8,8 +8,10 @@ Async launch, live status, result collection, and steering for running dispatche
 
 ### --async ack
 
-`--async` starts the dispatch in the current process, writes the runtime control
-files, emits an ack on `stdout`, then continues running in the background.
+`--async` writes runtime control files, emits an ack on `stdout`, detaches
+stdio, then runs the dispatch synchronously in the current process. It does
+NOT daemonize. The caller is expected to background the process (shell `&`,
+`run_in_background`, etc.) if true background execution is needed.
 
 ```json
 {
@@ -22,12 +24,16 @@ files, emits an ack on `stdout`, then continues running in the background.
 
 Before the ack is emitted:
 
+- `~/.agent-mux/dispatches/<id>/meta.json` has been written (via `RegisterDispatchSpec`)
 - `<artifact_dir>/host.pid` exists and is fsynced
-- `<artifact_dir>/status.json` exists and is fsynced
-- `<artifact_dir>/_dispatch_ref.json` points at the durable store
-- `~/.agent-mux/dispatches/<id>/meta.json` has been written
+- `<artifact_dir>/status.json` exists (state `running`, last_activity `initializing`)
 
-`_dispatch_ref.json` is a thin pointer:
+NOT guaranteed before ack:
+
+- `<artifact_dir>/_dispatch_ref.json` — written later during engine startup
+  in `internal/engine/loop.go`. Do not read it immediately after the ack.
+
+`_dispatch_ref.json` is a thin pointer to the durable store:
 
 ```json
 {
@@ -37,6 +43,33 @@ Before the ack is emitted:
 ```
 
 The durable store is always `~/.agent-mux/dispatches/<id>/`.
+
+### Fan-out and startup latency
+
+`--async` returns control after the ack, but the ack itself is not
+instantaneous — the engine must initialize before emitting it. Measured
+startup latency: Codex ~15-20s, Claude and Gemini vary. Sequential fan-out
+(dispatching N workers one after another in a loop) pays this cost serially:
+5 Codex workers means ~80-100s of blocked waiting before any worker is
+running.
+
+Use shell `&` to parallelize the startup cost across all workers, then
+`agent-mux wait` to synchronize on completion:
+
+```bash
+# Fan-out: shell & parallelizes engine startup
+for svc in auth billing orders; do
+  { agent-mux --async -P=scout -C="/repo/$svc" "Audit $svc" 2>/dev/null | jq -r .dispatch_id > "/tmp/$svc.id"; } &
+done
+wait  # all acks received, all workers running concurrently
+# Synchronize:
+for svc in auth billing orders; do
+  agent-mux wait "$(cat /tmp/$svc.id)"
+done
+```
+
+This is the recommended pattern for any batch fan-out. Workers DO run
+concurrently once started — the only serial cost is startup.
 
 ### Collecting results
 
@@ -50,7 +83,10 @@ agent-mux wait --json 01K... 2>/dev/null
 
 - `wait` blocks until `result.json` exists
 - stderr gets periodic status lines while waiting
-- `wait --json` prints the same compact lifecycle JSON shape as `result --json`
+- `wait --json` normally prints the same compact lifecycle JSON shape as
+  `result --json`
+- **Exception:** if the dispatch is orphaned (dead `host.pid`, no result),
+  `wait --json` emits raw `LiveStatus` JSON and exits nonzero
 
 `result` reads the durable result:
 
@@ -65,6 +101,8 @@ agent-mux result --artifacts 01K... 2>/dev/null
 - `--json` prints a compact lifecycle JSON object
 - `--artifacts` lists non-internal files in the artifact dir
 - `--no-wait` errors if the dispatch is still running
+- if no persisted `result.json` exists, `result` falls back to reading
+  `full_output.md` from the artifact directory (legacy compatibility)
 
 Current source of truth: `~/.agent-mux/dispatches/<id>/result.json`.
 
@@ -72,17 +110,17 @@ Current source of truth: `~/.agent-mux/dispatches/<id>/result.json`.
 
 ```
 CLI --poll
-  > [async].poll_interval in config.toml
   > 60s hardcoded default
 ```
 
 ### status.json
 
-`<artifact_dir>/status.json` is updated atomically during the run.
+`<artifact_dir>/status.json` is updated on the 5-second watchdog tick, not on
+every event. For near-immediate session ID visibility, read `meta.json` instead.
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `state` | string | `initializing`, `running`, `completed`, `failed`, `timed_out` |
+| `state` | string | `running`, `completed`, `failed`, `timed_out` |
 | `elapsed_s` | int | Seconds since start |
 | `last_activity` | string | Most recent activity summary |
 | `tools_used` | int | Tool-call count seen so far |
@@ -90,10 +128,19 @@ CLI --poll
 | `stdin_pipe_ready` | bool | Codex stdin FIFO bridge is ready |
 | `ts` | string | RFC3339 timestamp |
 | `dispatch_id` | string | Dispatch ID |
-| `session_id` | string | Harness session ID |
+| `session_id` | string | Harness session ID (available once engine emits init event) |
+
+Note: `state` values are `running`, `completed`, `failed`, `timed_out`. The
+initial write sets `state: "running"` with `last_activity: "initializing"` —
+there is no `"initializing"` state value.
 
 `agent-mux status` may synthesize `orphaned` if `host.pid` exists but the
 process is no longer alive.
+
+`session_id` is captured early — as soon as the engine emits its init event.
+However, it appears in `status.json` only on the next 5s watchdog tick.
+`meta.json` updates immediately when the session ID is first seen. For async
+dispatches, prefer reading `meta.json` for early session ID access.
 
 ---
 
@@ -107,6 +154,19 @@ soft-delivery channels:
 
 `agent-mux steer <dispatch_id> <action> [args]` accepts a full dispatch ID or
 a unique prefix.
+
+### Steering delivery by engine
+
+| Engine | Primary mechanism | Behavior |
+|--------|-------------------|----------|
+| Codex | FIFO (`stdin.pipe`) when `stdin_pipe_ready=true` | Soft steering via stdin bridge; falls back to inbox |
+| Claude | Inbox + session resume | Loop restarts harness with `ResumeArgs()` when inbox messages are pending |
+| Gemini | Inbox + session resume | Same resume/restart pattern as Claude |
+
+For Claude and Gemini, steering is NOT passive inbox delivery — it actively
+resumes/restarts the session with the steering message. If a tool is currently
+executing, the restart is deferred until the tool completes (or until
+`max_steer_wait_seconds` is exceeded, whichever comes first).
 
 ### steer abort
 
@@ -141,7 +201,7 @@ agent-mux steer 01K... nudge "Summarize what you have so far"
 Delivery order:
 
 1. Codex stdin FIFO when the worker is running and `stdin_pipe_ready=true`
-2. inbox fallback for everything else
+2. inbox fallback for everything else (triggers resume for Claude/Gemini)
 
 Inbox fallback writes `[NUDGE] <message>`.
 
@@ -182,7 +242,7 @@ Response:
 | Mechanism | When used |
 |-----------|-----------|
 | `stdin_fifo` | Codex only, running state, stdin bridge ready, host PID alive |
-| `inbox` | Fallback path for `nudge` and `redirect` |
+| `inbox` | Fallback path for `nudge` and `redirect`; triggers resume for Claude/Gemini |
 | `sigterm` | `abort` when host PID is alive |
 | `control_file` | `abort` fallback and all `extend` requests |
 
