@@ -29,7 +29,7 @@ These flags are registered in normal dispatch mode.
 | `--engine` | `-E` | string | from profile | `codex`, `claude`, `gemini` |
 | `--cwd` | `-C` | string | current dir | Working directory |
 | `--model` | `-m` | string | from profile | Model override |
-| `--effort` | `-e` | string | resolved later | `low`, `medium`, `high`, `xhigh` |
+| `--effort` | `-e` | string | resolved later | `low`, `medium`, `high`, `xhigh`. Ignored by Gemini (warning logged); use model selection |
 | `--timeout` | `-t` | int | resolved later | Timeout seconds |
 | `--system-prompt` | `-s` | string | empty | Inline system prompt (overrides profile body) |
 | `--system-prompt-file` | | string | empty | System prompt file |

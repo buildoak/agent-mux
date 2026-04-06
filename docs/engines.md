@@ -161,6 +161,10 @@ gemini -p "<prompt>" -o stream-json [-m <model>] \
 - `--approval-mode` defaults to `yolo` when no `permission-mode` engine opt is configured. Valid values: `default`, `auto_edit`, `yolo`, `plan`.
 - joins additional directories into a single comma-separated `--include-directories` value
 
+### Effort / Reasoning
+
+Gemini CLI does not support an effort or reasoning effort flag. When `EngineOpts["reasoning"]` is set (via `--reasoning` flag or profile config), `BuildArgs()` logs a warning and ignores the value. The warning message directs users to model selection as the alternative for controlling thinking depth. This matches the pattern in `CodexAdapter` where `EngineOpts["reasoning"]` maps to `-c model_reasoning_effort=<level>` — except Gemini has no equivalent flag, so the value is discarded with a diagnostic.
+
 ### Stall Timeout Default
 
 `BuildArgs()` injects `stall_timeout_seconds: 60` into `engine_opts` for all Gemini dispatches unless already set. Runs that go silent for 60s are killed. Override by setting `stall_timeout_seconds` explicitly in `engine_opts`.

@@ -34,7 +34,7 @@ The YAML frontmatter sets dispatch defaults. The markdown body becomes the syste
 | --- | --- | --- | --- |
 | `engine` | string | no | `codex`, `claude`, or `gemini` |
 | `model` | string | no | Model name for the engine |
-| `effort` | string | no | `low`, `medium`, `high`, `xhigh` |
+| `effort` | string | no | `low`, `medium`, `high`, `xhigh`. Gemini ignores this (logs a warning); use model selection for thinking depth |
 | `timeout` | int | no | Timeout in seconds; must be > 0 when set |
 | `description` | string | no | Human-readable purpose line for `config prompts` |
 | `skills` | string[] | no | Skill names to inject automatically |

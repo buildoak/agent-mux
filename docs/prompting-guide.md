@@ -142,9 +142,11 @@ Keep the answer to 5 bullets max.
 
 Keep Gemini prompts narrower than Claude prompts.
 
-### Limitation
+### Limitations
 
 Gemini CLI supports tool calls (`read_file`, `write_file`, `replace`, `shell`), but tool reliability varies by task type. For implementation work, prefer Codex. For analysis and review, Gemini can read files and run commands.
+
+Gemini does not support the `--effort` / `--reasoning` flag. Setting it on a Gemini dispatch logs a warning and the value is ignored. To control thinking depth on Gemini, select an appropriate model (`gemini-3.1-pro-preview` for deeper reasoning, `gemini-3-flash-preview` for speed).
 
 ## Context-Loading Tools
 

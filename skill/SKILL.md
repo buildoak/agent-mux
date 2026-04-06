@@ -78,7 +78,7 @@ first, then dispatch the right worker with what you learned.
 | `-P` / `--profile` | `-P` | Load a prompt file by name. The primary dispatch flag |
 | `-E` / `--engine` | `-E` | Override engine: `codex`, `claude`, `gemini` |
 | `-m` / `--model` | `-m` | Override model |
-| `-e` / `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` |
+| `-e` / `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` (Gemini ignores; use model selection) |
 | `-C` / `--cwd` | `-C` | Working directory for the worker |
 | `-t` / `--timeout` | `-t` | Timeout in seconds |
 | `--async` | | Return ack immediately, run in current process |
