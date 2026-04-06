@@ -1475,3 +1475,250 @@ func writeSoftSteerFIFO(t *testing.T, artifactDir, action, message string) {
 		t.Fatalf("write FIFO payload: %v", err)
 	}
 }
+
+func TestStallTimeoutKillsOnSilence(t *testing.T) {
+	// With stall_timeout_seconds=3, a process that emits one event then goes
+	// silent should be killed with status stall_timeout after ~3s of silence.
+	// silence_kill_seconds is set much higher so it doesn't interfere.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:stall-test'",
+		"trap 'exit 0' TERM",
+		"while :; do sleep 0.1; done",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01STALL",
+		Engine:      "gemini",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  60,
+		EngineOpts: map[string]any{
+			"stall_timeout_seconds":  3,
+			"silence_warn_seconds":   60,
+			"silence_kill_seconds":   120,
+		},
+	}
+
+	var eventBuf strings.Builder
+	engine := NewLoopEngine(adapter, &eventBuf, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusStallTimeout {
+		t.Fatalf("status = %q, want stall_timeout; error = %+v", result.Status, result.Error)
+	}
+	if result.Error == nil || result.Error.Code != "stall_timeout" {
+		t.Fatalf("error = %+v, want stall_timeout", result.Error)
+	}
+	if !result.Partial {
+		t.Fatal("partial = false, want true")
+	}
+	if !result.Recoverable {
+		t.Fatal("recoverable = false, want true")
+	}
+	if !strings.Contains(result.Reason, "stall timeout") {
+		t.Fatalf("reason = %q, want to contain 'stall timeout'", result.Reason)
+	}
+	events := eventBuf.String()
+	if !strings.Contains(events, "stall_timeout") {
+		t.Fatalf("event stream missing stall_timeout; got:\n%s", events)
+	}
+}
+
+func TestStallTimeoutResetsOnOutput(t *testing.T) {
+	// Process emits events every 2s with stall_timeout_seconds=4. The stall
+	// timer should reset on each event, and the process should complete
+	// normally without triggering stall timeout. Total runtime ~8s.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:stall-reset'",
+		"sleep 2",
+		"echo 'PROGRESS:alive-1'",
+		"sleep 2",
+		"echo 'PROGRESS:alive-2'",
+		"sleep 2",
+		"echo 'PROGRESS:alive-3'",
+		"echo 'RESPONSE:stall-reset-ok'",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01STALLRESET",
+		Engine:      "gemini",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"stall_timeout_seconds":  4,
+			"silence_warn_seconds":   60,
+			"silence_kill_seconds":   120,
+		},
+	}
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "stall-reset-ok" {
+		t.Fatalf("response = %q, want stall-reset-ok", result.Response)
+	}
+}
+
+func TestStallTimeoutDisabledByDefault(t *testing.T) {
+	// Without stall_timeout_seconds set, the process should be killed by
+	// the normal frozen_killed mechanism, not stall_timeout.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:stall-disabled'",
+		"trap 'exit 0' TERM",
+		"while :; do sleep 0.1; done",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01STALLDISABLED",
+		Engine:      "codex",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"silence_warn_seconds": 1,
+			"silence_kill_seconds": 3,
+			// stall_timeout_seconds intentionally omitted — defaults to 0 (disabled)
+		},
+	}
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	// Should be frozen_killed, NOT stall_timeout
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed (frozen_killed)", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "frozen_killed" {
+		t.Fatalf("error = %+v, want frozen_killed", result.Error)
+	}
+}
+
+func TestStallTimeoutBeforeFrozenKilled(t *testing.T) {
+	// When stall_timeout_seconds < silence_kill_seconds, the stall timeout
+	// should fire first, producing stall_timeout status instead of frozen_killed.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:stall-priority'",
+		"trap 'exit 0' TERM",
+		"while :; do sleep 0.1; done",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01STALLPRIORITY",
+		Engine:      "gemini",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  60,
+		EngineOpts: map[string]any{
+			"stall_timeout_seconds":  3,
+			"silence_warn_seconds":   5,
+			"silence_kill_seconds":   10,
+		},
+	}
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	// stall_timeout should fire at ~3s, well before frozen_killed at ~10s
+	if result.Status != types.StatusStallTimeout {
+		t.Fatalf("status = %q, want stall_timeout; error = %+v", result.Status, result.Error)
+	}
+	if result.Error == nil || result.Error.Code != "stall_timeout" {
+		t.Fatalf("error = %+v, want stall_timeout", result.Error)
+	}
+}
+
+func TestStallTimeoutCompletedDoesNotTrigger(t *testing.T) {
+	// A process that completes quickly should not trigger stall timeout
+	// even when stall_timeout_seconds is configured.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:stall-complete'",
+		"echo 'RESPONSE:done-quickly'",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01STALLCOMPLETE",
+		Engine:      "gemini",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"stall_timeout_seconds": 3,
+		},
+	}
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "done-quickly" {
+		t.Fatalf("response = %q, want done-quickly", result.Response)
+	}
+}

@@ -8,9 +8,10 @@ import (
 type DispatchStatus string
 
 const (
-	StatusCompleted DispatchStatus = "completed"
-	StatusTimedOut  DispatchStatus = "timed_out"
-	StatusFailed    DispatchStatus = "failed"
+	StatusCompleted    DispatchStatus = "completed"
+	StatusTimedOut     DispatchStatus = "timed_out"
+	StatusFailed       DispatchStatus = "failed"
+	StatusStallTimeout DispatchStatus = "stall_timeout"
 )
 
 type DispatchResult struct {
@@ -188,6 +189,7 @@ type HarnessEvent struct {
 	Tokens        *TokenUsage // Set for TurnComplete
 	Turns         int         // Set for Response
 	ErrorCode     string      // Set for Error
+	ActualModel   string      // Set for Response when adapter resolves the real model (e.g. Gemini auto-routing)
 	Raw           []byte      // Always set (original harness line)
 }
 

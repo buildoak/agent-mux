@@ -230,6 +230,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		lastProgressText  string
 		sessionID         string
 		totalTokens       *types.TokenUsage
+		actualModel       string
 		turnCount         int
 		lastError         *types.HarnessEvent
 		lastActivity      = time.Now()
@@ -256,6 +257,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	silenceKill := intEngineOpt(spec, "silence_kill_seconds", 180)
 	longCommandSilence := intEngineOpt(spec, "long_command_silence_seconds", 540)
 	maxSteerWait := intEngineOpt(spec, "max_steer_wait_seconds", 120)
+	stallTimeout := intEngineOpt(spec, "stall_timeout_seconds", 0) // 0 = disabled
 	longCommandExtraPrefixes := parseLongCommandPrefixes(spec)
 	var (
 		activeCommand       string
@@ -353,6 +355,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			longCommandExtended = false
 			if evt.Tokens != nil {
 				totalTokens = evt.Tokens
+			}
+			if evt.ActualModel != "" {
+				actualModel = evt.ActualModel
 			}
 			if evt.Turns > 0 {
 				turnCount = evt.Turns
@@ -849,6 +854,19 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			mu.Unlock()
 			// Atomic status.json write for pull-based status.
 			_ = writeRunningStatus(spec.ArtifactDir, spec.DispatchID, sessionID, startTime, statusActivity, statusToolsUsed, statusFilesChanged, stdinPipeReady)
+			// Stall timeout: fires on sustained silence when configured, producing
+			// a distinct stall_timeout status. Checked before frozen_killed so the
+			// more specific status wins when stallTimeout < effectiveKill.
+			if stallTimeout > 0 && silence >= stallTimeout && setTerminal("stall_timeout") {
+				elapsed := int(time.Since(startTime).Seconds())
+				msg := fmt.Sprintf("No NDJSON output for %ds (stall timeout). Total elapsed: %ds. Process killed.", silence, elapsed)
+				_ = emitter.EmitError("stall_timeout", msg)
+				dispatchErr = dispatch.NewDispatchError("stall_timeout", msg, "Increase stall_timeout_seconds in engine_opts or investigate why the CLI is silent.")
+				_ = currentRun.proc.GracefulStop(5)
+				<-currentRun.streamDone
+				closeSoftBridge()
+				goto buildResult
+			}
 			if silence >= effectiveKill && setTerminal("failed") {
 				_ = emitter.EmitError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence))
 				dispatchErr = dispatch.NewDispatchError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence), "")
@@ -903,6 +921,7 @@ buildResult:
 	}
 	errEvt := lastError
 	tokens := totalTokens
+	resolvedModel := actualModel
 	turns := turnCount
 	sid := sessionID
 	act := activity
@@ -912,12 +931,22 @@ buildResult:
 	if tokens == nil {
 		tokens = &types.TokenUsage{}
 	}
-	metadata = &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: tokens, Turns: turns}
+	// Use the adapter-resolved actual model when available (e.g. Gemini auto-routing
+	// resolves "auto-gemini-3" to the real model from per-model stats). Fall back
+	// to the spec model otherwise.
+	model := spec.Model
+	if resolvedModel != "" {
+		model = resolvedModel
+	}
+	metadata = &types.DispatchMetadata{Engine: spec.Engine, Model: model, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: tokens, Turns: turns}
 	metadata.SessionID = sid
 
 	switch state {
 	case "timed_out":
 		return finalizeTimedOut(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
+
+	case "stall_timeout":
+		return finalizeStallTimeout(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
 
 	case "failed":
 		if dispatchErr != nil {
@@ -1005,6 +1034,33 @@ func finalizeTimedOut(spec *types.DispatchSpec, annotations types.DispatchAnnota
 	emitResponseTruncated(emitter, result)
 	if emitter != nil {
 		_ = emitter.EmitDispatchEnd("timed_out", durationMS)
+	}
+	return result
+}
+
+func finalizeStallTimeout(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, dispErr *types.DispatchError) *types.DispatchResult {
+	silenceSeconds := 0
+	if dispErr != nil {
+		// Extract silence duration from error message for the result builder.
+		fmt.Sscanf(dispErr.Message, "No NDJSON output for %ds", &silenceSeconds)
+	}
+	result := dispatch.BuildStallTimeoutResult(spec, response, silenceSeconds, dispErr, activity, metadata, durationMS)
+	if dispErr != nil {
+		dispErr.PartialArtifacts = result.Artifacts
+	}
+	persistDispatchRecord(spec, annotations, result, response, emitter)
+	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
+		State:          "stall_timeout",
+		ElapsedS:       int(durationMS / 1000),
+		LastActivity:   "stall_timeout",
+		ToolsUsed:      len(activity.ToolCalls),
+		FilesChanged:   len(activity.FilesChanged),
+		StdinPipeReady: false,
+		DispatchID:     spec.DispatchID,
+	})
+	emitResponseTruncated(emitter, result)
+	if emitter != nil {
+		_ = emitter.EmitDispatchEnd("stall_timeout", durationMS)
 	}
 	return result
 }

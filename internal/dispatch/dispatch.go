@@ -412,6 +412,15 @@ func BuildTimedOutResult(spec *types.DispatchSpec, response, reason string, acti
 	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
 	return result
 }
+func BuildStallTimeoutResult(spec *types.DispatchSpec, response string, silenceSeconds int, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
+	result := baseResult(spec, types.StatusStallTimeout, shapeTerminalResponse(response), activity, metadata, durationMS)
+	result.Partial = true
+	result.Recoverable = true
+	result.Reason = fmt.Sprintf("No NDJSON output for %ds. Process killed due to stall timeout.", silenceSeconds)
+	result.Error = dispatchErr
+	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
+	return result
+}
 func BuildFailedResult(spec *types.DispatchSpec, response string, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	// FM-9: Include accumulated partial response so callers can see what the
 	// worker accomplished before failure.
