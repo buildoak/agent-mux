@@ -141,9 +141,9 @@ agent-mux will attempt dispatch if any auth path is available --
 | Doc | What |
 |-----|------|
 | [docs/](docs/) | Full technical reference -- architecture, config, dispatch lifecycle |
-| [SKILL.md](SKILL.md) | Operational manual for AI agents using agent-mux |
+| [SKILL.md](skill/SKILL.md) | Operational manual for AI agents using agent-mux |
 | [BACKLOG.md](BACKLOG.md) | Open bugs, feature requests, spec gaps, and known limitations |
-| [references/](references/) | Engine comparison, prompting guide, output contract, config guides, installation |
+| [references/](skill/references/) | Engine comparison, prompting guide, output contract, config guides, installation |
 
 ## License
 
