@@ -196,7 +196,7 @@ agent-mux wait "$ID1" 2>/dev/null
 agent-mux result "$ID1" 2>/dev/null > /tmp/plan.md
 
 agent-mux -P=lifter --async --context-file=/tmp/plan.md -C=/repo \
-  'Implement the plan at $AGENT_MUX_CONTEXT' 2>/dev/null
+  'Implement the migration plan. Tests must pass before reporting done.' 2>/dev/null
 ```
 
 ### Parallel fan-out
