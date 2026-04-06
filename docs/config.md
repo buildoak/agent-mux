@@ -2,6 +2,8 @@
 
 agent-mux configuration is prompt-driven. Worker identity, engine defaults, and dispatch parameters live in markdown files with YAML frontmatter at `~/.agent-mux/prompts/`. There is no TOML config, no per-project config, no merge chain. One global directory, one file per worker.
 
+The binary uses prompt files and environment variables. `~/.agent-mux/config.toml` is a coordinator-layer configuration consumed by R. Jenkins for role routing, variant selection, and pipeline definitions. The binary does not parse TOML.
+
 ## Prompt Files
 
 Each prompt file is a markdown document at `~/.agent-mux/prompts/<name>.md`:
