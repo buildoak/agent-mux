@@ -12,9 +12,13 @@ Usage:
   agent-mux preview [flags] <prompt>
   agent-mux help
 
+  "dispatch" is the default subcommand — both forms are equivalent:
+    agent-mux -P=auditor "Review the code"
+    agent-mux dispatch -P=auditor "Review the code"
+
 Quickstart:
   agent-mux config prompts
-  agent-mux -P=lifter --async -C=/repo "Implement retries in client.ts"
+  agent-mux -P=lifter -E=codex -e=high -C=/repo "Implement retries in client.ts"
   agent-mux wait <dispatch_id>
   agent-mux result <dispatch_id> --json
 

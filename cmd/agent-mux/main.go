@@ -168,6 +168,13 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		return runConfigCommand(args, stdout)
 	}
 
+	// Pre-parse: catch single-dash long-form flags (e.g. -profile, -effort)
+	// that Go's flag parser would silently misparse into short flags.
+	if suggestion, ok := detectMisdashedFlag(args); ok {
+		emitResult(stdout, buildFailedResult(&types.DispatchSpec{}, "invalid_args", suggestion, "Use double-dash (--flag) for long flags, or the short alias (-X) shown above."))
+		return 2
+	}
+
 	var flagOutput bytes.Buffer
 	stdinMode := hasEnabledStdinFlag(args)
 	var (
@@ -419,6 +426,13 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	if flags.async {
 		return runAsyncDispatch(ctx, spec, req.DispatchAnnotations, stderr, stdout, flags.verbose, flags.stream, hookEval)
+	}
+
+	// Warn when stdout is not a terminal and --async is not set.
+	// This catches the common case where a dispatching agent backgrounds
+	// the process and gets empty output at poll time.
+	if isTerminal != nil && !isTerminal(stdout) {
+		fmt.Fprintf(stderr, "agent-mux: warning: stdout is not a terminal; output may be lost if this process is backgrounded. Consider --async for background dispatch.\n")
 	}
 
 	result, err := dispatchSync(ctx, spec, req.DispatchAnnotations, stderr, flags.verbose, flags.stream, hookEval)
@@ -1011,6 +1025,13 @@ func newCLIFlagSet(name string) (*flag.FlagSet, *cliFlags) {
 	bindBool(fs, &flags.stream, "Stream all events to stderr (default: silent)", false, "stream", "S")
 	fs.BoolVar(&flags.async, "async", false, "Return immediately with dispatch ID, run worker in background")
 
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage: agent-mux [dispatch] [flags] <prompt>\n\n")
+		fmt.Fprintf(fs.Output(), "Example:\n  agent-mux -P=auditor -E=codex -e=high -C=/repo \"Your prompt here\"\n\n")
+		fmt.Fprintf(fs.Output(), "Flags:\n")
+		fs.PrintDefaults()
+	}
+
 	return fs, flags
 }
 
@@ -1193,6 +1214,66 @@ func hasEnabledStdinFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+// misdashedFlags maps single-dash long-form flags that Go's flag parser would
+// silently misparse (e.g. -profile → -p with value "rofile") to the correct
+// double-dash form and short alias.
+var misdashedFlags = map[string]struct{ long, short string }{
+	"-profile":         {"--profile", "-P"},
+	"-effort":          {"--effort", "-e"},
+	"-engine":          {"--engine", "-E"},
+	"-cwd":             {"--cwd", "-C"},
+	"-model":           {"--model", "-m"},
+	"-timeout":         {"--timeout", "-t"},
+	"-system-prompt":   {"--system-prompt", "-s"},
+	"-reasoning":       {"--reasoning", "-r"},
+	"-verbose":         {"--verbose", "-v"},
+	"-stream":          {"--stream", "-S"},
+	"-full":            {"--full", "-f"},
+	"-skill":           {"--skill", ""},
+	"-context-file":    {"--context-file", ""},
+	"-artifact-dir":    {"--artifact-dir", ""},
+	"-recover":         {"--recover", ""},
+	"-signal":          {"--signal", ""},
+	"-prompt-file":     {"--prompt-file", ""},
+	"-max-depth":       {"--max-depth", ""},
+	"-permission-mode": {"--permission-mode", ""},
+	"-sandbox":         {"--sandbox", ""},
+	"-max-turns":       {"--max-turns", ""},
+	"-add-dir":         {"--add-dir", ""},
+	"-skip-skills":     {"--skip-skills", ""},
+	"-no-full":         {"--no-full", ""},
+}
+
+// detectMisdashedFlag scans args for single-dash flags longer than 2 chars
+// (excluding "--" long-form) that match known flag names. Returns a helpful
+// error message and true if a misdashed flag is found.
+func detectMisdashedFlag(args []string) (string, bool) {
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		// Strip =value suffix for matching.
+		name := arg
+		if idx := strings.Index(arg, "="); idx > 0 {
+			name = arg[:idx]
+		}
+		// Only check single-dash flags longer than 2 chars (e.g. "-profile")
+		// that are NOT already double-dash (e.g. "--profile" is fine).
+		if !strings.HasPrefix(name, "-") || strings.HasPrefix(name, "--") || len(name) <= 2 {
+			continue
+		}
+		if entry, ok := misdashedFlags[name]; ok {
+			hint := fmt.Sprintf("unknown flag %s; did you mean %s", name, entry.long)
+			if entry.short != "" {
+				hint += fmt.Sprintf(" (%s)", entry.short)
+			}
+			hint += "?"
+			return hint, true
+		}
+	}
+	return "", false
 }
 
 func explicitFlags(fs *flag.FlagSet) map[string]bool {

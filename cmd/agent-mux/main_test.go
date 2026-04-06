@@ -62,7 +62,7 @@ func TestUnknownFlagReturnsJSONError(t *testing.T) {
 	if !strings.Contains(result.Error.Message, "flag provided but not defined") {
 		t.Fatalf("error.message = %q, want parse failure", result.Error.Message)
 	}
-	if !strings.Contains(result.Error.Hint, "Usage of agent-mux") {
+	if !strings.Contains(result.Error.Hint, "Usage: agent-mux") {
 		t.Fatalf("error.hint = %q, want usage text", result.Error.Hint)
 	}
 }
