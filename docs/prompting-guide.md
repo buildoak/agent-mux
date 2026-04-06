@@ -144,7 +144,7 @@ Keep Gemini prompts narrower than Claude prompts.
 
 ### Limitation
 
-Gemini variants are reasoning-only on this machine. No file reads, no commands, no tool calls. All context must be embedded in the prompt or passed via `--context-file`.
+Gemini CLI supports tool calls (`read_file`, `write_file`, `replace`, `shell`), but tool reliability varies by task type. For implementation work, prefer Codex. For analysis and review, Gemini can read files and run commands.
 
 ## Context-Loading Tools
 

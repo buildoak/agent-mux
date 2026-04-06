@@ -65,7 +65,7 @@ CLI flags / --stdin JSON fields
 | `engine` | *(none -- required)* | `engine:` | `--engine` / `-E` / `"engine"` |
 | `model` | *(none)* | `model:` | `--model` / `-m` / `"model"` |
 | `effort` | `high` | `effort:` | `--effort` / `-e` / `"effort"` |
-| `timeout` | `1800` | `timeout:` | `--timeout` / `-t` / `"timeout_sec"` |
+| `timeout` | `900` | `timeout:` | `--timeout` / `-t` / `"timeout_sec"` |
 | `grace` | `timeout / 2` | *(not in frontmatter)* | `"grace_sec"` |
 | `max_depth` | `2` | *(not in frontmatter)* | `--max-depth` / `"max_depth"` |
 | `system_prompt` | *(none)* | markdown body | `--system-prompt` / `-s` |
@@ -128,7 +128,7 @@ When frontmatter and CLI leave a field unset:
 | Parameter | Default | Source |
 |-----------|---------|-------|
 | `effort` | `high` | hardcoded in `main.go` |
-| `timeout_sec` | `1800` | `config.DefaultTimeoutSec` |
+| `timeout_sec` | `900` | `config.DefaultTimeoutSec` |
 | `grace_sec` | `timeout_sec / 2` | proportional, minimum 1 |
 | `max_depth` | `2` | `config.MaxDepth()`, overridable via `AGENT_MUX_MAX_DEPTH` |
 

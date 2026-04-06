@@ -36,7 +36,7 @@ Implementation notes:
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | `codex` | Implementation, debugging, edits | `--json`, `-s` / `--dangerously-bypass-approvals-and-sandbox`, `-c model_reasoning_effort=...`, `--add-dir` | Yes, after `thread.started` | Full | `codex exec --json` NDJSON |
 | Claude | `claude` | Planning, synthesis, review | `-p`, `--output-format stream-json`, `--verbose`, `--permission-mode`, `--system-prompt`, `--max-turns` | Yes, after `system` `init` | Full | `stream-json` |
-| Gemini | `gemini` | Second opinion, contrast check | `-p`, `-o stream-json`, `-m`, `--approval-mode`, `--include-directories` | Yes, after `init` | Limited in practice; no comparable tool surface | `stream-json`, with non-JSON stdout ignored |
+| Gemini | `gemini` | Second opinion, contrast check | `-p`, `-o stream-json`, `-m`, `--approval-mode`, `--include-directories` | Yes, after `init` | Functional; `read_file`, `write_file`, `replace`, `shell` tracked | `stream-json`, with non-JSON stdout surfaced as raw passthrough |
 All three adapters plug into the same supervision loop:
 - process spawn and process-group shutdown
 - stdout event parsing into normalized harness events
@@ -174,7 +174,7 @@ Gemini parsing is intentionally defensive:
 Known limitations:
 
 - no tool calling surface comparable to Codex or Claude in actual dispatch use
-- non-JSON stdout is discarded instead of surfaced as raw passthrough
+- Non-JSON stdout lines are surfaced as `raw_passthrough` events.
 - system prompt handling depends on `ArtifactDir`; without it, the prompt is silently dropped
 The adapter still recognizes tool-like event shapes such as `read_file`, `write_file`, and `shell` if Gemini emits them, and it tracks `write_file` paths through `pendingFiles`. The practical limitation is upstream CLI capability, not the presence of parsing code.
 ### Resume
