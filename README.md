@@ -120,21 +120,22 @@ Engine CLIs must be installed separately -- agent-mux dispatches to them, it doe
 
 ## Authentication
 
-| Engine | Env Var | Fallback |
-|--------|---------|----------|
-| Codex | `OPENAI_API_KEY` | OAuth device auth via `codex auth` (`~/.codex/auth.json`) |
-| Claude | `ANTHROPIC_API_KEY` | Device OAuth (subscription login) -- **not recommended** |
-| Gemini | `GEMINI_API_KEY` | -- |
+| Engine | Personal use (OAuth) | Automated / CI (`env var`) |
+|--------|---------------------|---------------------------|
+| Codex | OAuth device auth via `codex auth` (`~/.codex/auth.json`) | `OPENAI_API_KEY` |
+| Claude | OAuth via `claude` binary login (subscription) | `ANTHROPIC_API_KEY` |
+| Gemini | `gcloud auth` application-default credentials | `GEMINI_API_KEY` |
 
-Both Codex and Claude support subscription-based OAuth as a fallback when no
-API key is set. agent-mux will attempt dispatch if any auth path is available --
+For personal use, OAuth tokens from your existing subscriptions are the primary
+auth path -- no API keys needed. API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY`) are for automated workflows, CI pipelines, and headless setups.
+agent-mux will attempt dispatch if any auth path is available --
 `MISSING_API_KEY` is a warning, not a hard failure.
 
-> **Anthropic ToS compliance:** The `claude` engine uses Claude Code SDK with
-> your API key (`ANTHROPIC_API_KEY`) -- this is the fully compliant path. Device
-> OAuth (subscription login) falls under Anthropic's Consumer ToS which
-> restricts automated/scripted access outside the API. **Always use
-> `ANTHROPIC_API_KEY` for the `claude` engine in automated workflows.**
+> **Note on the Claude engine:** agent-mux invokes the `claude` CLI binary
+> directly -- it is not an SDK or API wrapper. For personal use with your own
+> Claude Code subscription, OAuth login is the natural path. For automated or
+> headless workflows, set `ANTHROPIC_API_KEY` to use the API path instead.
 
 ## Documentation
 
