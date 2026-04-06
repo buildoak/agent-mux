@@ -25,12 +25,24 @@ Three patterns cover 95% of dispatches.
 agent-mux -P=lifter -C=/repo "Fix the retry logic in src/client/retry.go" 2>/dev/null
 ```
 
+**Profile dispatch with engine variant** (same profile, different engine):
+
+```bash
+agent-mux -P=researcher -V=gemini -C=/repo "Analyze the auth module for hidden coupling" 2>/dev/null
+```
+
 **Async dispatch** (fire, collect later):
 
 ```bash
 ID=$(agent-mux -P=scout --async -C=/repo "Find deprecated API usages" 2>/dev/null | jq -r .dispatch_id)
 agent-mux wait --poll 30s "$ID" 2>/dev/null
 agent-mux result --json "$ID" 2>/dev/null
+```
+
+**Direct engine override** (no profile, explicit engine+model):
+
+```bash
+agent-mux -E=gemini -m gemini-2.5-pro -C=/repo "Review this diff for rollout risks" 2>/dev/null
 ```
 
 **Structured dispatch via stdin** (canonical machine invocation):
@@ -42,6 +54,41 @@ printf '%s' '{"profile":"lifter","prompt":"Implement the fix","cwd":"/repo"}' \
 
 Parse stdout JSON. Every result has `status`, `response`,
 `activity.files_changed`, and `metadata.engine`. Always check `status` first.
+
+## Engine Selection
+
+Pick the engine before the profile:
+
+| Engine | Best for | Depth lever |
+|--------|----------|-------------|
+| **Codex** | Implementation, debugging, precise edits, bulk changes | `--effort` (`low`/`medium`/`high`/`xhigh`) |
+| **Claude** | Planning, synthesis, review, ambiguity reduction, parallel reasoning | `--effort` + model tier (Sonnet vs Opus) |
+| **Gemini** | Analysis, review, paper processing, second-opinion contrast, diversity pass | Model selection (`flash` vs `pro`); effort flag is ignored |
+
+**When to pick Gemini specifically:**
+
+- Second opinion on a Codex/Claude result (diversity of reasoning)
+- Paper or document analysis (strong at structured extraction)
+- Review pass where you want a different perspective from the primary engine
+- Lightweight reads and analysis where Flash models are cost-effective
+
+**Gemini dispatch patterns:**
+
+```bash
+# Via variant (preferred when variant exists in config)
+agent-mux -P=researcher -V=gemini -C=/repo "Synthesize findings"
+
+# Via direct engine override
+agent-mux -E=gemini -m gemini-2.5-pro -C=/repo "Review the migration plan"
+
+# Via --stdin JSON
+printf '%s' '{"engine":"gemini","model":"gemini-3.1-pro-preview","prompt":"...","cwd":"/repo"}' \
+  | agent-mux --stdin 2>/dev/null
+```
+
+Note: Gemini defaults to `yolo` approval mode (no confirmations). Override
+with `--permission-mode` when human supervision is needed. See
+[gemini-specifics.md](references/gemini-specifics.md) for full details.
 
 ## Profile Roster
 
@@ -71,14 +118,21 @@ Current profiles and when to pick each:
 plans, grunt for bulk edits, researcher for analysis. When in doubt, scout
 first, then dispatch the right worker with what you learned.
 
+**Gemini variants** exist for most roles (scout, explorer, researcher,
+architect, lifter, lifter-deep, grunt, auditor). Use `-V=gemini` to dispatch
+any of these on Gemini instead of their default engine. Flash models for
+quick work, Pro models for deep analysis -- the variant config handles this
+mapping.
+
 ## Essential Flags
 
 | Flag | Short | What it does |
 |------|-------|-------------|
 | `-P` / `--profile` | `-P` | Load a prompt file by name. The primary dispatch flag |
+| `-V` / `--variant` | `-V` | Select a role variant (e.g., `-V=gemini` for Gemini engine variant) |
 | `-E` / `--engine` | `-E` | Override engine: `codex`, `claude`, `gemini` |
 | `-m` / `--model` | `-m` | Override model |
-| `-e` / `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` (Gemini ignores; use model selection) |
+| `-e` / `--effort` | `-e` | `low`, `medium`, `high`, `xhigh`. Gemini ignores this (warns); use model selection instead |
 | `-C` / `--cwd` | `-C` | Working directory for the worker |
 | `-t` / `--timeout` | `-t` | Timeout in seconds |
 | `--async` | | Return ack immediately, run in current process |
@@ -187,7 +241,10 @@ Write your work log to $AGENT_MUX_ARTIFACT_DIR/review-notes.md.
 
 **Codex** -- implementation, debugging, precise edits. Narrow scope, exact paths.
 **Claude** -- planning, synthesis, review, ambiguity reduction.
-**Gemini** -- narrow contrast pass, second opinion.
+**Gemini** -- analysis, review, paper processing, second-opinion diversity.
+Keep Gemini prompts focused. For deep analysis, use Pro models (`gemini-2.5-pro`,
+`gemini-3.1-pro-preview`). For fast reads, use Flash (`gemini-2.5-flash`,
+`gemini-3-flash-preview`). See [gemini-specifics.md](references/gemini-specifics.md).
 
 ## `--stdin` Mode
 
@@ -223,3 +280,4 @@ Claude Code's Bash tool defaults to 120s (2 minutes). Agent-mux dispatches can r
 | [recovery-guide.md](references/recovery-guide.md) | recovery flow, runtime layout, watchdog |
 | [prompting-guide.md](references/prompting-guide.md) | prompt shapes, auto preamble, workflows |
 | [config-and-profiles.md](references/config-and-profiles.md) | profile discovery, frontmatter, hooks, skills |
+| [gemini-specifics.md](references/gemini-specifics.md) | Gemini approval mode, model selection, stall timeout, resume quirks, tool support |
