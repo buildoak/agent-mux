@@ -120,22 +120,21 @@ Engine CLIs must be installed separately -- agent-mux dispatches to them, it doe
 
 ## Authentication
 
-| Engine | Personal use (OAuth) | Automated / CI (`env var`) |
-|--------|---------------------|---------------------------|
+| Engine | Personal use (OAuth) | Otherwise (`env var`) |
+|--------|---------------------|----------------------|
 | Codex | OAuth device auth via `codex auth` (`~/.codex/auth.json`) | `OPENAI_API_KEY` |
 | Claude | OAuth via `claude` binary login (subscription) | `ANTHROPIC_API_KEY` |
 | Gemini | `gcloud auth` application-default credentials | `GEMINI_API_KEY` |
 
 For personal use, OAuth tokens from your existing subscriptions are the primary
-auth path -- no API keys needed. API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`GEMINI_API_KEY`) are for automated workflows, CI pipelines, and headless setups.
+auth path -- no API keys needed. Set the env var when OAuth is not available.
 agent-mux will attempt dispatch if any auth path is available --
 `MISSING_API_KEY` is a warning, not a hard failure.
 
 > **Note on the Claude engine:** agent-mux invokes the `claude` CLI binary
 > directly -- it is not an SDK or API wrapper. For personal use with your own
-> Claude Code subscription, OAuth login is the natural path. For automated or
-> headless workflows, set `ANTHROPIC_API_KEY` to use the API path instead.
+> Claude Code subscription, OAuth login is the natural path. Set
+> `ANTHROPIC_API_KEY` when OAuth is not an option.
 
 ## Documentation
 
