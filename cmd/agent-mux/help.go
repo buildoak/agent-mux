@@ -22,6 +22,30 @@ Quickstart:
   agent-mux wait <dispatch_id>
   agent-mux result <dispatch_id> --json
 
+Key flags:
+  -E, --engine       Engine: codex, claude, gemini
+  -P, --profile      Profile / prompt file
+  -e, --effort       Effort: low, medium, high (default when omitted)
+  -m, --model        Model override (engine-specific)
+  -C, --cwd          Working directory
+  -r, --reasoning    Reasoning effort: low, medium (default), high
+  --permission-mode  Permission mode: default, auto_edit, yolo, plan
+                     (Gemini defaults to yolo; Codex uses --sandbox instead)
+  --sandbox          Codex sandbox: danger-full-access (default), workspace-write
+  --context-file     File to prepend as context (for pipeline handoffs)
+  --prompt-file      Read prompt from file instead of positional arg
+  --async            Return dispatch ID immediately, run in background
+
+  Note: use double-dash for long flags (--engine) or short alias (-E).
+  Single-dash long flags (-engine) are rejected with a suggestion.
+
+Multi-step pipeline example:
+  # Gemini analysis → Codex writing via context-file handoff
+  ID=$(agent-mux -P=researcher -E=gemini --async "Analyze the paper")
+  agent-mux wait "$ID"
+  agent-mux result "$ID" > /tmp/analysis.md
+  agent-mux -P=writer -E=codex --context-file /tmp/analysis.md "Write a summary"
+
 Lifecycle:
   agent-mux list [--json]
   agent-mux status <dispatch_id> [--json]
