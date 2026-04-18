@@ -198,7 +198,7 @@ agent-mux steer abort <id>
 ```
 
 Delivery varies by engine:
-- **Codex**: FIFO pipe (`stdin.pipe`) when ready, else inbox
+- **Codex**: inbox + `codex exec resume` (FIFO soft-steer disabled since codex-cli 0.121 — see `docs/steering.md`)
 - **Claude/Gemini**: inbox triggers session resume via `ResumeArgs()`
 
 ## Recovery

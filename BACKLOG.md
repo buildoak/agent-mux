@@ -123,14 +123,17 @@ anywhere in `loop.go` or adapters.
 The current "recovery" path is inbox-based: write a file → watchdog polls →
 kill and relaunch with `ResumeArgs`. This is restart, not steering.
 
-**Implementation needed:**
-1. Add `cmd.StdinPipe()` in `startRun` (`loop.go:322-352`)
-2. At warn threshold (90s), write nudge to stdin
-3. Codex-first: `"\n"` or continuation prompt (stdin-driven by design)
-4. Claude/Gemini: lower feasibility, investigate later
+**Follow-up (codex-cli 0.121):** the FIFO `stdin.pipe` soft-steer channel is
+permanently disabled for codex as of the 0.121 stdin-drain fix. Future live
+out-of-band steering for codex needs a different transport: wire
+`/tmp/agent-mux-501/<dispatch_id>/inbox.md` as a watched live channel (either
+polled by codex itself via a prompt-side sentinel, or by an agent-mux sidecar
+that issues `codex exec resume` on write). Claude/Gemini retain inbox-driven
+`ResumeArgs()` and are unaffected.
 
 **Observed impact:** GSD session `a2608f024a0eb520b` lost a Codex worker that
-froze at 244s. A stdin nudge at 90s could have unblocked it without killing.
+froze at 244s. Today's path is inbox + resume; a future live channel would
+unblock without kill-and-relaunch.
 
 ---
 
