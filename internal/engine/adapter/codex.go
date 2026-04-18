@@ -44,6 +44,16 @@ type CodexSoftSteerEnvelope struct {
 func (a *CodexAdapter) Binary() string {
 	return "codex"
 }
+
+// BuildArgs builds argv for `codex exec [resume] [prompt]`. The prompt is
+// still passed as a positional argv so we don't depend on stdin for input —
+// necessary because codex ≥0.121 (upstream PR openai/codex#15917)
+// unconditionally reads stdin to EOF before processing the prompt whenever
+// stdin is non-TTY. `internal/engine/loop.go` wires the child's stdin to an
+// empty reader so the drain completes immediately and codex unblocks; this
+// also disables the FIFO → stdin soft-steer path for codex. A future version
+// of agent-mux will wire `<artifact_dir>/inbox.md` as a proper out-of-band
+// steering channel for running codex dispatches.
 func (a *CodexAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	args := []string{"exec", "--json"}
 

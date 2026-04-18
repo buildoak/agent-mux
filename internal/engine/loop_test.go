@@ -978,7 +978,12 @@ func TestSoftSteerFIFOInjectsWithoutResume(t *testing.T) {
 		"echo 'TURN:1,1,0'",
 	}, "\n"))
 
+	// Use a non-codex engine: codex ≥0.121 disables the FIFO→stdin bridge
+	// (see loop.go startRun) so this mechanism is only exercised for other
+	// engines today. The scripted adapter models a generic engine that
+	// reads from stdin.
 	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "claude"
 	var eventBuf strings.Builder
 	engine := NewLoopEngine(adapter, &eventBuf, nil)
 	engine.SetStreamMode(event.StreamNormal)
@@ -1041,7 +1046,9 @@ func TestSoftSteerFIFODeferredUntilToolEnd(t *testing.T) {
 		"echo 'TURN:1,1,0'",
 	}, "\n"))
 
+	// See TestSoftSteerFIFOInjectsWithoutResume for why we use a non-codex engine here.
 	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "claude"
 	var eventBuf strings.Builder
 	engine := NewLoopEngine(adapter, &eventBuf, nil)
 	engine.SetStreamMode(event.StreamNormal)
@@ -1237,6 +1244,66 @@ func TestFM9FailedDispatchPreservesPartialResponse(t *testing.T) {
 	}
 	if storedResponse != "partial work done" {
 		t.Fatalf("stored response = %q, want 'partial work done'", storedResponse)
+	}
+}
+
+// TestCodex0121StdinClosedImmediately verifies the fix for codex-cli ≥0.121
+// stdin drain (upstream PR openai/codex#15917). agent-mux must wire the
+// child's stdin to an already-EOF reader, otherwise codex blocks forever in
+// read(2) before processing the prompt.
+//
+// The scripted adapter mimics the codex behavior: it reads stdin to EOF via
+// `cat` before emitting any events. Under the pre-fix behavior the engine
+// attached an open, unwritten stdin pipe and this test would hang until the
+// context timed out. Under the fix, stdin hits EOF immediately and the
+// dispatch completes within milliseconds.
+func TestCodex0121StdinClosedImmediately(t *testing.T) {
+	artifactDir := t.TempDir()
+	adp := newScriptedAdapter(strings.Join([]string{
+		// Read stdin to EOF — same behavior codex 0.121 has. If the
+		// engine leaves stdin open, this blocks forever.
+		"cat >/dev/null",
+		"echo 'SESSION:codex-stdin-test'",
+		"echo 'RESPONSE:READY'",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+	adp.supportsResume = false
+
+	spec := testDispatchSpec(artifactDir)
+	// testDispatchSpec already sets Engine: "codex" — this is the path we want.
+	if spec.Engine != "codex" {
+		t.Fatalf("precondition: testDispatchSpec must use codex engine, got %q", spec.Engine)
+	}
+
+	engine := NewLoopEngine(adp, io.Discard, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "READY" {
+		t.Fatalf("response = %q, want READY", result.Response)
+	}
+
+	// For codex the FIFO bridge is skipped, so stdin.pipe must not exist.
+	if _, statErr := os.Stat(steer.Path(artifactDir)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("stdin.pipe stat error = %v, want not exists (codex skips FIFO bridge)", statErr)
+	}
+}
+
+// TestDeliverSoftSteerReturnsUnsupportedOnNilPipe verifies the deliverSoftSteer
+// helper surfaces ErrSoftSteerUnsupported (not a generic error) when stdinPipe
+// is nil — the condition we hit for codex ≥0.121 dispatches.
+func TestDeliverSoftSteerReturnsUnsupportedOnNilPipe(t *testing.T) {
+	run := &runHandle{stdinPipe: nil}
+	err := deliverSoftSteer(run, adapter.CodexSoftSteerEnvelope{Action: "nudge", Message: "x"})
+	if !errors.Is(err, ErrSoftSteerUnsupported) {
+		t.Fatalf("err = %v, want ErrSoftSteerUnsupported", err)
 	}
 }
 

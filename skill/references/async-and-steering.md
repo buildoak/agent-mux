@@ -160,9 +160,19 @@ a unique prefix. Both argument orderings work: `steer <id> <action>` and
 
 | Engine | Primary mechanism | Behavior |
 |--------|-------------------|----------|
-| Codex | FIFO (`stdin.pipe`) when `stdin_pipe_ready=true` | Soft steering via stdin bridge; falls back to inbox |
+| Codex | Inbox + session resume (via `codex exec resume`) | Soft-steer via FIFO is currently **disabled** for codex ≥0.121 — see note below. `stdin_pipe_ready` is always `false` for codex, so CLI routes to inbox automatically. |
 | Claude | Inbox + session resume | Loop restarts harness with `ResumeArgs()` when inbox messages are pending |
 | Gemini | Inbox + session resume | Same resume/restart pattern as Claude |
+
+> **Note (codex-cli 0.121+):** Soft-steer for codex dispatches is currently
+> unavailable. codex-cli 0.121+ drains stdin to EOF before processing the
+> prompt (upstream PR openai/codex#15917), making the stdin-based steering
+> channel unusable. A future version of agent-mux will wire
+> `/tmp/agent-mux-501/{dispatch_id}/inbox.md` as a proper out-of-band
+> steering channel for codex; until then, only `steer abort` works against
+> running codex dispatches with immediate effect. `steer nudge|redirect`
+> still works via inbox + `codex exec resume` (session-restart) but requires
+> the current turn to end first.
 
 For Claude and Gemini, steering is NOT passive inbox delivery — it actively
 resumes/restarts the session with the steering message. If a tool is currently

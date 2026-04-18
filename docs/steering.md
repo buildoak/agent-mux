@@ -89,9 +89,22 @@ agent-mux steer nudge 01JQXYZ "message"   # reversed: <action> <id> — auto-det
 
 ## FIFO Soft Steering For Codex
 
-On FIFO-capable platforms, `LoopEngine.Dispatch` creates `stdin.pipe` inside the artifact directory and keeps a read end plus keepalive writer open for the run lifetime. `agent-mux steer <id> nudge|redirect` resolves the artifact directory from the durable dispatch metadata and uses FIFO injection only when all of these are true:
+> **Note (codex-cli 0.121+):** Soft-steer for codex dispatches is currently
+> unavailable. codex-cli 0.121 (upstream PR
+> [openai/codex#15917](https://github.com/openai/codex/pull/15917)) drains
+> stdin to EOF before processing the prompt, making the stdin-based
+> steering channel unusable. agent-mux now skips the `stdin.pipe` FIFO
+> bridge for codex dispatches, reports `stdin_pipe_ready: false` in
+> `status.json`, and `agent-mux steer <id> nudge|redirect` automatically
+> falls back to inbox + session-resume. Only `steer abort` still works
+> against codex via its normal SIGTERM / `control.json` paths. A future
+> version of agent-mux will wire `<artifact_dir>/inbox.md` as a proper
+> out-of-band steering channel for live codex sessions; until then, use
+> inbox-driven resume.
 
-- dispatch metadata says the engine is `codex`
+On FIFO-capable platforms, `LoopEngine.Dispatch` creates `stdin.pipe` inside the artifact directory and keeps a read end plus keepalive writer open for the run lifetime **for non-codex engines**. `agent-mux steer <id> nudge|redirect` resolves the artifact directory from the durable dispatch metadata and uses FIFO injection only when all of these are true:
+
+- dispatch metadata says the engine is `codex` *(currently disabled — see note above)*
 - the platform supports FIFOs
 - `status.json` reports `state: "running"`
 - `status.json` reports `stdin_pipe_ready: true`

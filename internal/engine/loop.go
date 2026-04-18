@@ -34,6 +34,13 @@ type LoopEngine struct {
 	annotations types.DispatchAnnotations
 }
 
+// ErrSoftSteerUnsupported is returned by deliverSoftSteer when the running
+// adapter has no stdin channel (e.g. codex ≥0.121, which drains stdin to EOF
+// before processing — see upstream PR openai/codex#15917). Callers should
+// surface this via the normal inbox/resume steering path instead of the
+// FIFO → stdin bridge.
+var ErrSoftSteerUnsupported = errors.New("soft-steer via stdin is not supported by this engine run")
+
 type runHandle struct {
 	proc       *supervisor.Process
 	stdout     io.ReadCloser
@@ -405,16 +412,31 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		if err != nil {
 			return nil, nil, fmt.Errorf("set up stdout pipe for %s: %w", runBinary, err)
 		}
-		stdinPipe, err := cmd.StdinPipe()
-		if err != nil {
-			_ = stdout.Close()
-			return nil, nil, fmt.Errorf("set up stdin pipe for %s: %w", runBinary, err)
+		// codex ≥0.121 drains its stdin to EOF before processing the prompt
+		// (upstream PR openai/codex#15917). Attaching an open, unwritten pipe
+		// makes codex block forever in read(2). Wire an already-EOF reader so
+		// the drain completes immediately; skip the StdinPipe so nothing tries
+		// to write into a discarded channel. Soft-steer (FIFO → stdin) is
+		// therefore unavailable for codex; a future version of agent-mux will
+		// wire inbox.md as an out-of-band steering channel instead.
+		var stdinPipe io.WriteCloser
+		if spec.Engine == "codex" {
+			cmd.Stdin = strings.NewReader("")
+			stdinPipe = nil
+		} else {
+			stdinPipe, err = cmd.StdinPipe()
+			if err != nil {
+				_ = stdout.Close()
+				return nil, nil, fmt.Errorf("set up stdin pipe for %s: %w", runBinary, err)
+			}
 		}
 		var stderrBuf strings.Builder
 		cmd.Stderr = &stderrBuf
 		if err := proc.Start(); err != nil {
 			_ = stdout.Close()
-			_ = stdinPipe.Close()
+			if stdinPipe != nil {
+				_ = stdinPipe.Close()
+			}
 			return nil, &stderrBuf, fmt.Errorf("failed to start %s: %w", runBinary, err)
 		}
 
@@ -645,7 +667,21 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	}
 
 	deliverSoftSteer := func() bool {
-		if terminalState != "" || len(pendingSoftSteer) == 0 || currentRun == nil || currentRun.stdinPipe == nil {
+		if terminalState != "" || len(pendingSoftSteer) == 0 || currentRun == nil {
+			return false
+		}
+		if currentRun.stdinPipe == nil {
+			// Engine has no writable child stdin (codex ≥0.121). Drain any
+			// queued envelopes with a warning so we don't spin, and reset
+			// the steer-pending deadline.
+			for _, req := range pendingSoftSteer {
+				_ = emitter.EmitError("soft_steer_unsupported",
+					fmt.Sprintf("Dropping queued stdin steer envelope (%s): %v", req.Action, ErrSoftSteerUnsupported))
+			}
+			pendingSoftSteer = pendingSoftSteer[:0]
+			if len(pendingMessages) == 0 {
+				steerPendingSince = time.Time{}
+			}
 			return false
 		}
 
@@ -690,16 +726,22 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		stdinPipeReady = false
 	}
 
-	if bridge, err := startSoftStdinBridge(spec.ArtifactDir, signals); err == nil {
-		stdinBridge = bridge
-		stdinPipeReady = true
-	} else if !errors.Is(err, steer.ErrUnsupported) {
-		return buildFailureResult(
-			spec, e.annotations, metadata, startTime, emitter,
-			"startup_failed",
-			fmt.Sprintf("start stdin fifo bridge: %v", err),
-			"Check that the artifact directory is writable and supports FIFOs.",
-		), nil
+	// Skip the soft-stdin FIFO bridge for codex: there is no writable child
+	// stdin to forward envelopes into (see startRun above), and leaving
+	// stdin_pipe_ready=false correctly routes `steer nudge/redirect` through
+	// the inbox/resume fallback in cmd/agent-mux/steer.go tryFIFOInject.
+	if spec.Engine != "codex" {
+		if bridge, err := startSoftStdinBridge(spec.ArtifactDir, signals); err == nil {
+			stdinBridge = bridge
+			stdinPipeReady = true
+		} else if !errors.Is(err, steer.ErrUnsupported) {
+			return buildFailureResult(
+				spec, e.annotations, metadata, startTime, emitter,
+				"startup_failed",
+				fmt.Sprintf("start stdin fifo bridge: %v", err),
+				"Check that the artifact directory is writable and supports FIFOs.",
+			), nil
+		}
 	}
 
 	currentRun, currentStderr, err = startRun(currentGen, args)
@@ -1256,7 +1298,8 @@ func scanSoftStdinFIFO(r io.Reader, signals chan<- loopSignal) {
 
 func deliverSoftSteer(run *runHandle, req adapter.CodexSoftSteerEnvelope) error {
 	if run == nil || run.stdinPipe == nil {
-		return errors.New("stdin pipe unavailable")
+		// codex ≥0.121 has no writable child stdin — see ErrSoftSteerUnsupported.
+		return ErrSoftSteerUnsupported
 	}
 	_, err := run.stdinPipe.Write(adapter.FormatSoftSteerInput(req.Action, req.Message))
 	return err

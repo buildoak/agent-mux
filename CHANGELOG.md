@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **codex-cli 0.121 compatibility** — codex ≥0.121 (upstream PR [openai/codex#15917](https://github.com/openai/codex/pull/15917)) unconditionally reads stdin to EOF before processing the prompt whenever stdin is non-TTY. agent-mux previously attached an open, unwritten stdin pipe to the codex child, causing every `codex exec` dispatch to hang at init with 0% CPU, no rollout JSONL, and no network traffic. The engine now wires codex's child stdin to an already-EOF reader so the drain completes immediately. Applies to both `codex exec` and `codex exec resume` (recovery path). Claude and Gemini are unaffected.
+
+### Changed
+
+- **Soft-steer via stdin unavailable for codex** — as a consequence of the 0.121 stdin drain, the mid-flight FIFO → stdin soft-steer channel (`stdin.pipe`) is no longer wired for codex dispatches. `agent-mux steer <id> nudge|redirect` against a running codex dispatch now falls back to the inbox + session-resume path automatically; `stdin_pipe_ready` is reported as `false` in `status.json` for codex so the CLI routes correctly. `steer abort` and steering against running claude/gemini dispatches are unchanged. A future version will wire `<artifact_dir>/inbox.md` as a proper out-of-band steering channel for live codex sessions.
+
 ## [3.4.0] - 2026-04-08
 
 ### Removed
