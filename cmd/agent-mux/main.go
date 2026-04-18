@@ -31,7 +31,7 @@ import (
 	"golang.org/x/term"
 )
 
-const version = "agent-mux v3.3.0"
+const version = "agent-mux v3.4.1"
 const contextFilePromptPreamble = "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting."
 
 type cliCommand string

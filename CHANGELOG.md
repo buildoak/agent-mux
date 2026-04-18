@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.4.1] - 2026-04-19
+
 ### Fixed
 
 - **codex-cli 0.121 compatibility** — codex ≥0.121 (upstream PR [openai/codex#15917](https://github.com/openai/codex/pull/15917)) unconditionally reads stdin to EOF before processing the prompt whenever stdin is non-TTY. agent-mux previously attached an open, unwritten stdin pipe to the codex child, causing every `codex exec` dispatch to hang at init with 0% CPU, no rollout JSONL, and no network traffic. The engine now wires codex's child stdin to an already-EOF reader so the drain completes immediately. Applies to both `codex exec` and `codex exec resume` (recovery path). Claude and Gemini are unaffected.
