@@ -168,6 +168,17 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		return runConfigCommand(args, stdout)
 	}
 
+	// Pre-parse: catch anti-pattern verbs (kill, cancel, stop, terminate, signal)
+	// that would otherwise fall through to `dispatch` and become the PROMPT of a
+	// brand-new worker. Historical incident: `agent-mux kill <id>` allocated a
+	// Codex worker that burned 18.5K tokens answering the literal prompt "kill".
+	if !explicitCommand {
+		if msg, hint, ok := detectAntiPatternVerb(args); ok {
+			emitResult(stdout, buildFailedResult(&types.DispatchSpec{}, "unknown_command", msg, hint))
+			return 2
+		}
+	}
+
 	// Pre-parse: catch single-dash long-form flags (e.g. -profile, -effort)
 	// that Go's flag parser would silently misparse into short flags.
 	if suggestion, ok := detectMisdashedFlag(args); ok {
@@ -1211,6 +1222,42 @@ func hasEnabledStdinFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+// antiPatternVerbs maps natural-language abort/control verbs that coordinators
+// reach for but that agent-mux does NOT accept as top-level commands. Left
+// alone, these fall through to `dispatch` and become the prompt of a new
+// worker — one such incident burned 18.5K Codex tokens answering "kill".
+// The fix here is minimal: refuse them up front with a clear hint pointing
+// at the real abort path (`steer abort`). Promoting `abort` itself to a
+// top-level verb is explicitly out of scope (tracked separately).
+var antiPatternVerbs = map[string]string{
+	"kill":      "Use `agent-mux steer abort <id>` to kill a running dispatch.",
+	"cancel":    "Use `agent-mux steer abort <id>` to cancel a running dispatch.",
+	"stop":      "Use `agent-mux steer abort <id>` to stop a running dispatch.",
+	"terminate": "Use `agent-mux steer abort <id>` to terminate a running dispatch.",
+	"abort":     "Use `agent-mux steer abort <id>` to abort a running dispatch.",
+	"signal":    "Use `--signal <id>` (flag form) or `agent-mux steer <id> nudge|redirect` to steer a running dispatch.",
+}
+
+// detectAntiPatternVerb scans the first positional arg for a known
+// anti-pattern verb. It only matches when args[0] is a bare word (no leading
+// dash) so real dispatch prompts like `agent-mux "kill the retry loop"`
+// still reach the normal fallthrough. Returns (message, hint, true) on hit.
+func detectAntiPatternVerb(args []string) (string, string, bool) {
+	if len(args) == 0 {
+		return "", "", false
+	}
+	first := args[0]
+	if first == "" || strings.HasPrefix(first, "-") {
+		return "", "", false
+	}
+	hint, ok := antiPatternVerbs[strings.ToLower(first)]
+	if !ok {
+		return "", "", false
+	}
+	msg := fmt.Sprintf("%q is not a top-level agent-mux command.", first)
+	return msg, hint, true
 }
 
 // misdashedFlags maps single-dash long-form flags that Go's flag parser would

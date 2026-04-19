@@ -67,6 +67,89 @@ func TestUnknownFlagReturnsJSONError(t *testing.T) {
 	}
 }
 
+func TestAntiPatternVerbReturnsJSONErrorWithoutDispatching(t *testing.T) {
+	// No t.Parallel — subtests call t.Setenv via isolateHome.
+
+	cases := []struct {
+		verb    string
+		hintSub string
+	}{
+		{"kill", "steer abort"},
+		{"cancel", "steer abort"},
+		{"stop", "steer abort"},
+		{"terminate", "steer abort"},
+		{"abort", "steer abort"},
+		{"signal", "steer"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.verb, func(t *testing.T) {
+			isolateHome(t)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			exitCode := run([]string{tc.verb, "01KNVYKQABCDEFGH1234567890"}, strings.NewReader(""), &stdout, &stderr)
+			if exitCode != 2 {
+				t.Fatalf("exit code = %d, want 2; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty (no preview, no engine startup)", stderr.String())
+			}
+
+			result := decodeResult(t, stdout.Bytes())
+			if result.Error == nil || result.Error.Code != "unknown_command" {
+				t.Fatalf("error = %#v, want unknown_command", result.Error)
+			}
+			if !strings.Contains(result.Error.Message, tc.verb) {
+				t.Fatalf("error.message = %q, want the verb %q named in the message", result.Error.Message, tc.verb)
+			}
+			if !strings.Contains(result.Error.Hint, tc.hintSub) {
+				t.Fatalf("error.hint = %q, want substring %q", result.Error.Hint, tc.hintSub)
+			}
+			// Critical: no dispatch artifacts should exist, because no
+			// dispatch was ever allocated. The $HOME is isolated, so any
+			// side-effect would show up under ~/.agent-mux.
+			if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".agent-mux")); !os.IsNotExist(err) {
+				t.Fatalf(".agent-mux should not exist after anti-pattern verb rejection, stat err=%v", err)
+			}
+		})
+	}
+}
+
+func TestBarePromptStillDispatches(t *testing.T) {
+	// Regression guard: the anti-pattern block must NOT eat legitimate
+	// bare prompts that begin with a blocked word (e.g. multi-word prompts
+	// like "write a haiku about git" or prompts whose first word is not
+	// an anti-pattern verb). argv[0] is the full prompt string in that case
+	// (shells don't re-split quoted args).
+	isolateHome(t)
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	// "write a haiku..." — first word is not blocked. Confirm it reaches
+	// the dispatch path (fails at engine resolution, not at anti-pattern
+	// block).
+	exitCode := run([]string{"--engine", "codex", "write a haiku about git"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode == 2 {
+		// exit 2 would mean parser-level rejection; we want the dispatch
+		// path to have been entered.
+		result := decodeResult(t, stdout.Bytes())
+		if result.Error != nil && result.Error.Code == "unknown_command" {
+			t.Fatalf("bare prompt was wrongly blocked as anti-pattern verb; error=%#v", result.Error)
+		}
+	}
+	// The dispatch path will fail at binary_not_found (PATH is empty),
+	// but that's fine — the point is the anti-pattern block did not
+	// intercept this prompt.
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error != nil && result.Error.Code == "unknown_command" {
+		t.Fatalf("bare prompt wrongly classified as unknown_command; stdout=%q", stdout.String())
+	}
+}
+
 func TestHelpFlagReturnsJSON(t *testing.T) {
 	t.Parallel()
 
