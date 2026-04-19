@@ -445,6 +445,111 @@ needed, add them to `scripts/` using the new interface.
 
 ---
 
+## From 2026-04-19 agent-mux audit
+
+Empirical audit across 16 session transcripts (2026-04-05 → 2026-04-19) using axis-driven selection (heavy-async, recover, steering pre/post-v0.121, error-token, long-audit, subagent-pov, baseline) + one live self-audit. Produced 13 ranked findings plus tier-2 papercuts.
+
+- Audit folder: `~/thinking/pratchett-os/centerpiece/_workbench/2026-04-19-agent-mux-audit/`
+- Synthesis: `synthesis.md` in that folder (13 findings, verbatim evidence per item, rewrite directions)
+
+**Already fixed from the same audit:**
+- **F1 (phantom dispatches from unknown verbs)** — commit `eafd044` (2026-04-19). `kill`/`cancel`/`stop`/`terminate`/`abort`/`signal` now return structured `unknown_command` error rather than falling through to dispatch. Evidence: session `7ed8fbf0` had burned 18,590 Codex tokens on `agent-mux kill <id>` before the fix.
+- **Skill polish** — `coordinator/.claude/skills/agent-mux/references/pitfalls.md` added with 10 audit-grounded landmines (session-ID evidence per item). Quick-scan in SKILL.md points to it.
+
+---
+
+### F-16: Worker→coordinator signal primitive
+**Type:** feature | **Priority:** P1 | **Status:** open — design needed
+**Source:** Audit F3 (2026-04-19). Evidence: `de1486e5`, `ae55630a`, `6fb0b590`, `41cc2910`, `63d5d9bd`.
+
+Back-channel asymmetry: coordinator→worker delivery is microseconds (FIFO pre-`1fc0e0c`; inbox queue post-fix); worker→coordinator delivery does not exist. Workers silently absorb ambiguity and bake uncertainty into final output, or simulate progress through `sleep`+`tail` round-trips — `ae55630a` burned 20+ minutes of polling work and 24.4M cache-read tokens on what a single `wait` would have covered.
+
+**Intent:** add a worker-invokable signal/checkpoint primitive. Worker calls it → `agent-mux wait <id>` returns early with payload + `status: signaled`. Coordinator decides next action (acknowledge, steer, re-wait). Preserves worker judgment (LLMs decide when surfacing matters), delivers meaning not percent-done noise.
+
+**Cross-engine design question:** codex workers don't have a tool surface controlled by agent-mux. File-write convention (worker does `echo '{msg}' >> $AGENTMUX_SIGNAL_FILE`), shipped skill, or built-in agent-mux tool — evaluate. Claude subagents ride the Agent tool (separate channel entirely). Gemini similar to codex.
+
+**Does NOT solve:** stuck-dispatch detection (synthesis F10). Silent hangs by definition can't signal themselves — separate primitive needed there.
+
+**Effort:** design doc first, then phased per-engine adapter ship (codex first — tightest pain, biggest evidence base).
+
+---
+
+### F-17: Verb taxonomy — `--recover` → `--resume`, promote `result <id>` and `abort <id>` to top-level
+**Type:** feature | **Priority:** P1 | **Status:** open
+**Source:** Audit F4 (2026-04-19). Evidence: `94ccf371`, `053117e6`, `63d5d9bd`.
+
+Coordinators reach for `--recover` as a result-fetch verb. Actual semantic is "resume with new prompt." Both recover sessions in the audit burned 4+ attempts each, then abandoned the CLI entirely for `cat events.jsonl`. Separately, operators type `agent-mux abort <id>` as muscle memory — currently pre-F1-fix that would have become a phantom dispatch; post-F1-fix it returns an unknown-command error; neither is the right answer. Abort should be reachable at the top level.
+
+**Intent:**
+- Rename `--recover` → `--resume` (what it actually does). Keep `--recover` as deprecated alias for one release.
+- When `--resume` is called against a dispatch already in `completed` state, emit a specific error: *"dispatch X already completed, use `agent-mux result X`"*.
+- Inherit engine/model/cwd from the target dispatch's metadata by default (94ccf371 failed partly because engine wasn't inherited).
+- Promote `result <id>` and `abort <id>` to top-level verbs (in addition to `steer abort`). `steer abort` stays as an alias.
+
+**Behavior gate:** `agent-mux abort <id>` works at top level. `agent-mux --resume <completed-id>` returns the already-completed error with pointer to `result`. `agent-mux --resume <id> "<prompt>"` inherits engine from `meta.json`.
+
+**Effort:** medium. Parser + resume code path + help + docs. Single lifter run plausible.
+
+---
+
+### F-18: Honest queue-response for `steer nudge` / `steer redirect` on codex
+**Type:** feature | **Priority:** P1 | **Status:** open
+**Source:** Audit F5 (2026-04-19). Evidence: `63d5d9bd`.
+
+Commit `1fc0e0c` (2026-04-18) disabled codex FIFO soft-steer. The advertised `inbox+resume` fallback is NOT wired — `<artifact_dir>/inbox.md` is written by the CLI but nothing on the codex side reads it. So `steer nudge|redirect` are silent no-ops for codex dispatches today. `steer abort` is unchanged.
+
+**Decision:** do NOT invest in live inbox-wiring right now (would require codex-side sidecar or runtime tool; one documented session of value, `c9e65058`; engineering cost high). Instead, make the CLI honest.
+
+**Intent:**
+- On codex dispatches, `steer nudge <id> <msg>` / `steer redirect <id> <msg>` return `{"action":"nudge","delivered":"queued","mechanism":"inbox","read_on":"next_turn"}` instead of current silent-success.
+- `docs/steering.md` updated to frame nudge/redirect explicitly as queue-for-next-turn for codex.
+- Skill already documents this (pitfall #5).
+
+**Behavior gate:** codex `steer nudge` response payload contains `"delivered":"queued"` and `"read_on":"next_turn"`. No runtime behavior change for non-codex engines. No CLI surface changes for callers who key on `delivered` truthy.
+
+**Effort:** small. ~20-line change in `cmd/agent-mux/steer.go:177` + docs.
+
+---
+
+### F-19: Engine-capability warning on `steer nudge/redirect` for Gemini
+**Type:** feature | **Priority:** P2 | **Status:** open
+**Source:** Audit F6 (2026-04-19). Evidence: `e9e173ee`.
+
+Gemini CLI's `--resume` flag silently rewrites UUID session IDs to `'latest'`, destroying mid-generation state. Session `e9e173ee` lost a 5.5MB PDF decode this way at 13:48. Same verb, three mechanisms: codex = FIFO-or-inbox (pre/post-1fc0e0c), claude = graceful restart preserving conversation history, gemini = destructive restart losing generation state. CLI does not warn before firing.
+
+**Intent:**
+- `agent-mux steer <gemini-id> nudge|redirect` emits a warning to stderr: *"nudge/redirect on Gemini restarts the session and destroys mid-generation state — use `steer abort` + redispatch instead."*
+- Add `--safe` / `--if-live` flag that no-ops when the engine would need destructive restart; returns `{"delivered":"refused","reason":"would-destruct-session"}`.
+- Alternative (cleaner long-term): engine-capability matrix surfaced via `agent-mux status <id>` (`steer_semantics: live|queued|restart-destructive`) so callers self-gate.
+
+**Behavior gate:** `agent-mux steer <gemini-id> nudge "msg"` emits the warning before delivering. `--safe` variant refuses cleanly.
+
+**Effort:** small-to-medium. Touches `steer.go` + status output.
+
+---
+
+### F-20: Tier-2 papercuts from the 2026-04-19 audit
+**Type:** bundle | **Priority:** P2 | **Status:** open
+**Source:** Audit tier-2 section.
+
+Low-impact-but-cheap fixes. Ship opportunistically or bundle in one "audit papercut sweep" afternoon:
+
+- **`agent-mux last` / `recent`** — shortcut for "my most recent dispatch ID"; `list --limit 5 --json | jq` recovery becomes a single verb. Self-audit evidence.
+- **ULID-to-label pairing in `list`/`status`** — show readable context (ticket ID, prompt-file basename) next to the 26-char opaque ID.
+- **`preview` parity with `dispatch`** — confirm `preview` dry-runs apply full flag resolution so F-17 collisions surface before real dispatch.
+- **`config engines` fuzzy-match on model names** — `gemini-2.5-pro-preview` (a913f1dc) could return *"did you mean `gemini-3.1-pro-preview`?"*
+- **Surface abort instructions in `status` output** — include `"To stop: agent-mux steer abort <id>"` in human-formatted status.
+- **Help verb catalog** — `agent-mux help` should list top-level verbs in the first 20 lines (currently flags dominate; 80180115 clipped with `head -20` and missed `steer`).
+- **Distinguish killed-before-start vs killed-while-running** in abort output — c950d6d3 cancelled four not-yet-started dispatches and JSON was identical to live kills.
+- **`--async` advisory suppression** when caller is demonstrably a background shell (a913f1dc noisy with every-dispatch "consider using --async" advice).
+- **`result` vs `inspect` vs `status` disambiguation** — three verbs, overlapping surfaces. Document or consolidate. 6fb0b590 never reached for `inspect` despite it being the right verb for trace data.
+- **`wait` flag ordering accepts either side** — `wait <id> --json` should work, not just `wait --json <id>`. And add `--timeout` distinct from `--poll` (self-audit evidence).
+- **`-e` renamed away from `-E` collision** — effort as `-r` (rigor) or `-x` (exertion band), freeing `-e` as consistent with `--engine`. Fix error-message example too. Session `a913f1dc` abandoned slash-path `codex/gpt-5.4/xhigh` because the parser ate it.
+- **Scanner overflow in `events.jsonl`** — flagged in `de1486e5` drift list; also the reason `6fb0b590` kept raw-reading events.
+- **`--signal` flag hallucination** — four coordinator sessions reached for `--signal` as an abort alias. Either alias it or reject with explicit `did-you-mean: steer abort`.
+
+---
+
 ## Closed
 
 ### F-2: `--no-truncate` hard-disable flag — CLOSED
