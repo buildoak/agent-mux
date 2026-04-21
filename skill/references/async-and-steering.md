@@ -13,6 +13,25 @@ stdio, then runs the dispatch synchronously in the current process. It does
 NOT daemonize. The caller is expected to background the process (shell `&`,
 `run_in_background`, etc.) if true background execution is needed.
 
+### Lifecycle (detached semantics)
+
+`--async` means **detached**: the parent-death reaper is NOT armed on the
+async path. The caller's exit does not affect the worker. This fixed the
+short-lived-scheduler regression where callers (e.g. `tickets tick`) would
+dispatch async and exit within ~30s, causing the worker's process group to
+receive SIGKILL and die at ~22ms with `killed_by_user`.
+
+Under `--async`, the worker survives until one of:
+
+- its own completion (durable `result.json` appears),
+- its soft/hard timeout (`--timeout` / `--grace`), or
+- an explicit abort via `agent-mux steer abort <dispatch_id>`.
+
+Non-async (synchronous) dispatches still arm the reaper as an orphan guard.
+Interactive shell use (`agent-mux ... &`) is unaffected: Ctrl+C still kills
+the worker via the foreground process group, independent of the reaper.
+See agent-mux `docs/async.md` "Lifecycle" for the full rationale.
+
 ```json
 {
   "schema_version": 1,

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1304,6 +1305,78 @@ func TestDeliverSoftSteerReturnsUnsupportedOnNilPipe(t *testing.T) {
 	err := deliverSoftSteer(run, adapter.CodexSoftSteerEnvelope{Action: "nudge", Message: "x"})
 	if !errors.Is(err, ErrSoftSteerUnsupported) {
 		t.Fatalf("err = %v, want ErrSoftSteerUnsupported", err)
+	}
+}
+
+// TestDetachedSkipsParentDeathReaper verifies that `SetDetached(true)` (the
+// --async path) does NOT install the parent-death reaper. If it did, a short-
+// lived caller (e.g. a scheduler running `agent-mux --async` and exiting ~30s
+// later) would SIGKILL the worker's process group the moment it exits, which
+// is exactly the tickets/paper-ops `killed_by_user` regression this fix
+// closes. The complementary case — detached=false keeps the existing
+// interactive-shell behavior — is covered to prevent silent drift.
+func TestDetachedSkipsParentDeathReaper(t *testing.T) {
+	cases := []struct {
+		name       string
+		detached   bool
+		wantCalled bool
+	}{
+		{name: "detached_skips_reaper", detached: true, wantCalled: false},
+		{name: "attached_arms_reaper", detached: false, wantCalled: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var called atomic.Int32
+			done := make(chan struct{})
+			original := watchParentDeathFn
+			watchParentDeathFn = func(pgid int) {
+				called.Add(1)
+				close(done)
+			}
+			t.Cleanup(func() { watchParentDeathFn = original })
+
+			artifactDir := t.TempDir()
+			adp := newScriptedAdapter(strings.Join([]string{
+				"echo 'SESSION:reaper-test'",
+				"echo 'RESPONSE:ok'",
+				"echo 'TURN:1,1,0'",
+			}, "\n"))
+			adp.supportsResume = false
+
+			eng := NewLoopEngine(adp, io.Discard, nil)
+			eng.SetDetached(tc.detached)
+			eng.SetAnnotations(types.DispatchAnnotations{})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			result, err := eng.Dispatch(ctx, testDispatchSpec(artifactDir))
+			if err != nil {
+				t.Fatalf("Dispatch: %v", err)
+			}
+			if result.Status != types.StatusCompleted {
+				t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+			}
+
+			if tc.wantCalled {
+				// The reaper spawns in a goroutine; give it a tick to fire.
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					t.Fatalf("reaper was never invoked (detached=%v); expected 1 call", tc.detached)
+				}
+			} else {
+				// Let any would-be scheduling settle, then assert zero.
+				time.Sleep(100 * time.Millisecond)
+			}
+			got := called.Load()
+			want := int32(0)
+			if tc.wantCalled {
+				want = 1
+			}
+			if got != want {
+				t.Fatalf("watchParentDeathFn calls = %d, want %d (detached=%v)", got, want, tc.detached)
+			}
+		})
 	}
 }
 

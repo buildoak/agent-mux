@@ -78,8 +78,11 @@ func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, annotations
 		dispatchStderr = stderr
 	}
 
-	// Run the dispatch synchronously in this process.
-	result, err := dispatchSync(ctx, spec, annotations, dispatchStderr, verbose, stream, hookEval)
+	// Run the dispatch synchronously in this process. detached=true skips
+	// the parent-death reaper: --async means the caller has committed to
+	// exiting before the worker (see docs/async.md "Lifecycle"). Arming
+	// the reaper would SIGKILL the worker the moment the caller exits.
+	result, err := dispatchSync(ctx, spec, annotations, dispatchStderr, verbose, stream, hookEval, true)
 	if err != nil {
 		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 			State:        "failed",

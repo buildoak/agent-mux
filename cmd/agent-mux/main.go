@@ -440,7 +440,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "agent-mux: warning: stdout is not a terminal; output may be lost if this process is backgrounded. Consider --async for background dispatch.\n")
 	}
 
-	result, err := dispatchSync(ctx, spec, req.DispatchAnnotations, stderr, flags.verbose, flags.stream, hookEval)
+	result, err := dispatchSync(ctx, spec, req.DispatchAnnotations, stderr, flags.verbose, flags.stream, hookEval, false)
 	if err != nil {
 		return emitFailureResult(stdout, spec, 1, "startup_failed", err.Error(), "")
 	}
@@ -1358,7 +1358,7 @@ func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...stri
 	}
 }
 
-func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
+func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator, detached bool) (*types.DispatchResult, error) {
 	reg := adapter.NewRegistry(config.DefaultModels())
 
 	adp, err := reg.Get(spec.Engine)
@@ -1413,6 +1413,7 @@ func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations typ
 	eng := engine.NewLoopEngine(adp, stderr, hookEval)
 	eng.SetAnnotations(annotations)
 	eng.SetVerbose(verbose)
+	eng.SetDetached(detached)
 	switch {
 	case verbose:
 		eng.SetStreamMode(event.StreamVerbose)

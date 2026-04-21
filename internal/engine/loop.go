@@ -32,7 +32,18 @@ type LoopEngine struct {
 	streamMode  event.StreamMode
 	hookEval    *hooks.Evaluator
 	annotations types.DispatchAnnotations
+	// detached is set when the caller (e.g. --async) has committed to not
+	// being around for the lifetime of the dispatch. In that case the
+	// parent-death reaper must be skipped: arming it against a short-lived
+	// caller would SIGKILL the worker's process group the moment the caller
+	// exits. See docs/async.md "Lifecycle".
+	detached bool
 }
+
+// watchParentDeathFn is an indirection over supervisor.WatchParentDeath so
+// tests can observe and override the reaper install without resorting to
+// per-platform build tags. Production code never reassigns this.
+var watchParentDeathFn = supervisor.WatchParentDeath
 
 // ErrSoftSteerUnsupported is returned by deliverSoftSteer when the running
 // adapter has no stdin channel (e.g. codex ≥0.121, which drains stdin to EOF
@@ -142,6 +153,15 @@ func (e *LoopEngine) SetVerbose(v bool) {
 
 func (e *LoopEngine) SetStreamMode(m event.StreamMode) {
 	e.streamMode = m
+}
+
+// SetDetached marks this engine as running under a caller that will not
+// outlive the dispatch (e.g. `agent-mux --async` invoked from a short-lived
+// scheduler). When true, the parent-death reaper is not armed — otherwise
+// the caller's imminent exit would SIGKILL the worker's process group.
+// See docs/async.md "Lifecycle".
+func (e *LoopEngine) SetDetached(d bool) {
+	e.detached = d
 }
 
 func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*types.DispatchResult, error) {
@@ -448,7 +468,12 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			procDone:   make(chan error, 1),
 		}
 		// Best-effort orphan guard: kill child process group if coordinator dies.
-		go supervisor.WatchParentDeath(proc.Cmd().Process.Pid)
+		// Skipped in detached mode (--async) because the caller has committed
+		// to exiting before the worker; arming the reaper would kill the
+		// worker the moment the caller exits. See docs/async.md "Lifecycle".
+		if !e.detached {
+			go watchParentDeathFn(proc.Cmd().Process.Pid)
+		}
 		go func(run *runHandle) {
 			defer close(run.streamDone)
 			e.scanHarnessOutput(run.stdout, runGen, spec.ArtifactDir, signals)

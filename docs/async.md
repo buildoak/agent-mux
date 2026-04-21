@@ -16,6 +16,20 @@ After that ack, stdout and stderr are detached to `/dev/null`, and the dispatch 
 
 `--async` does not fork or daemonize a separate worker. If the caller needs shell control back immediately, it must background or supervise `agent-mux` itself.
 
+## Lifecycle
+
+`--async` means **detached**: the caller has declared that it will not remain alive for the duration of the dispatch.
+
+Concretely, the parent-death reaper (kqueue `EVFILT_PROC+NOTE_EXIT` on darwin, `PR_SET_PDEATHSIG` on linux) is **not armed** on the async path. Under `agent-mux --async`, the caller's exit does NOT affect the worker. The worker survives until one of:
+
+- its own completion (a `result.json` appears in the durable store),
+- its soft/hard timeout (`--timeout` / `--grace`), or
+- an explicit abort via `agent-mux steer abort <dispatch_id>`.
+
+This matters for short-lived callers (schedulers, `tickets tick`, cron jobs, one-shot shell wrappers) that fire `--async` and exit seconds later. In the interactive case (`agent-mux ... &` in a long-lived shell), Ctrl+C on the shell still kills the worker because the signal propagates through the foreground process group, independent of the reaper.
+
+Non-async dispatches (the default, synchronous path) continue to arm the reaper as an orphan guard: if the caller dies unexpectedly mid-dispatch, the worker's process group is SIGKILL'd.
+
 ## `async_started` Ack
 
 ```json
