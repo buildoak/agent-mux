@@ -153,6 +153,9 @@ NOT guaranteed before ack:
 
 - `_dispatch_ref.json` — written later during engine startup
 
+Consumers that run immediately after ack should use durable `meta.json` or the
+ack fields rather than assuming `_dispatch_ref.json` exists.
+
 ---
 
 ## Preview Output
@@ -171,8 +174,8 @@ NOT guaranteed before ack:
     "cwd": "/repo",
     "context_file": "/tmp/brief.md",
     "artifact_dir": "/tmp/agent-mux-501/01KM.../",
-    "timeout_sec": 1800,
-    "grace_sec": 60,
+    "timeout_sec": 900,
+    "grace_sec": 450,
     "max_depth": 2,
     "depth": 0,
     "full_access": true
@@ -227,7 +230,7 @@ Persistent dispatch metadata is written to `meta.json`.
   "cwd": "/repo",
   "artifact_dir": "/tmp/agent-mux-501/01KM.../",
   "started_at": "2026-04-03T10:30:00Z",
-  "timeout_sec": 1800,
+  "timeout_sec": 900,
   "prompt_hash": "sha256:deadbeefcafebabe"
 }
 ```
@@ -256,8 +259,9 @@ Persistent dispatch metadata is written to `meta.json`.
 
 ### DispatchRecord
 
-`list --json` emits one `DispatchRecord` per line. `status --json` may return
-either a `DispatchRecord` or a live `status.json` view.
+`list --json` emits one `DispatchRecord` per line. `status --json` returns a
+`DispatchRecord` for completed records and `LiveStatus` for live records. A dead
+live host can be synthesized as `orphaned`.
 
 ```json
 {
@@ -275,7 +279,7 @@ either a `DispatchRecord` or a live `status.json` view.
   "artifact_dir": "/tmp/agent-mux-501/01KM.../",
   "effort": "high",
   "profile": "planner",
-  "timeout_sec": 1800
+  "timeout_sec": 900
 }
 ```
 
@@ -284,7 +288,7 @@ normally `false`.
 
 ### result --json and wait --json
 
-Compact lifecycle JSON:
+`result --json` emits compact lifecycle JSON:
 
 ```json
 {
@@ -294,6 +298,11 @@ Compact lifecycle JSON:
   "status": "completed"
 }
 ```
+
+`wait --json` emits that same shape only after `result.json` exists. If no
+result appears and timeout or dead-host checks fire, `wait` emits
+`{"kind":"error","error":{...}}`. If live status is explicitly `orphaned`, it
+emits raw `LiveStatus` and exits 1.
 
 Possible extra fields:
 
@@ -342,7 +351,7 @@ artifact dir via `_dispatch_ref.json`.
   "last_activity": "tool:Edit",
   "tools_used": 12,
   "files_changed": 3,
-  "stdin_pipe_ready": true,
+  "stdin_pipe_ready": false,
   "ts": "2026-04-03T10:30:45Z",
   "dispatch_id": "01KMY...",
   "session_id": "thread_..."
@@ -356,7 +365,7 @@ artifact dir via `_dispatch_ref.json`.
 | `last_activity` | string | Most recent activity summary |
 | `tools_used` | int | Tool-call count |
 | `files_changed` | int | File-write count |
-| `stdin_pipe_ready` | bool | Codex stdin FIFO bridge ready |
+| `stdin_pipe_ready` | bool | true only when a soft-stdin bridge is active; current Codex runs keep it false |
 | `ts` | string | Timestamp of this status snapshot |
 | `dispatch_id` | string | Dispatch ID |
 | `session_id` | string | Harness session ID |
@@ -436,27 +445,32 @@ Default stderr mode is quiet; use `--stream` for the full event stream.
 
 | Code | Retryable | Meaning |
 |------|-----------|---------|
-| `abort_requested` | no | Dispatch aborted via `control.json` |
+| `abort_requested` | no | Dispatch aborted via steer or `control.json` |
 | `artifact_dir_unwritable` | no | Cannot create or write artifact/persistence paths |
 | `binary_not_found` | no | Harness binary not found on PATH |
 | `cancelled` | no | Dispatch cancelled at confirmation |
-| `config_error` | yes | Config, role, or control-path problem |
+| `config_error` | yes | Config, profile, or control-path problem |
 | `engine_not_found` | yes | Unknown engine |
 | `event_denied` | no | Hook denied a harness event |
-| `killed_by_user` | no | Process terminated by external signal (SIGTERM/SIGKILL) |
 | `internal_error` | no | Internal invariant failure |
 | `interrupted` | no | Context cancelled or signal received |
 | `invalid_args` | yes | Invalid arguments |
 | `invalid_input` | yes | Input validation failed |
+| `killed_by_user` | no | Process terminated by external signal classified as operator/user kill |
 | `max_depth_exceeded` | no | Recursive dispatch limit reached |
 | `model_not_found` | yes | Unknown model for engine |
+| `not_found` | no | Lifecycle or steer target was not found |
 | `output_parse_error` | no | Failed to parse streaming harness output |
 | `parse_error` | no | Malformed final harness output |
-| `process_killed` | no | Generic killed-process fallback |
+| `process_killed` | yes | Generic killed-process fallback |
 | `prompt_denied` | no | `pre_dispatch` hook blocked launch |
-| `recovery_failed` | yes | Previous dispatch state could not be recovered |
+| `recovery_failed` | no | Previous dispatch state could not be recovered |
 | `resume_session_missing` | no | No resumable session ID available |
-| `resume_start_failed` | yes | Resume process failed to start |
+| `resume_start_failed` | no | Resume process failed to start |
 | `resume_unsupported` | no | Adapter does not support resume |
-| `signal_killed` | no | Harness killed by OS signal |
+| `signal_killed` | yes | Harness killed by OS signal |
 | `startup_failed` | yes | Harness process failed to start |
+| `store_error` | no | Lifecycle persistence read/write failure |
+| `timed_out` | no | Lifecycle wait timed out |
+| `unknown_command` | no | Top-level anti-pattern command rejected before dispatch |
+| `write_failed` | no | Steer/signal write failed |

@@ -21,7 +21,7 @@ Every dispatch has:
 | `host.pid` | PID of the async host process |
 | `control.json` | Abort requests |
 | `inbox.md` | NDJSON coordinator inbox |
-| `stdin.pipe` | Unix FIFO for soft Codex steering |
+| `stdin.pipe` | Unix FIFO only when a soft-stdin bridge is created; current Codex runs skip it |
 | worker files | Any artifacts written by the worker |
 
 `_dispatch_ref.json` replaces `_dispatch_meta.json` as the runtime control
@@ -53,16 +53,16 @@ Use `--recover <id>` or `"recover": "<id>"` in stdin JSON.
 
 ### Flow
 
-1. resolve the artifact directory via `ResolveArtifactDir`:
+1. resolve the artifact directory via `ResolveArtifactDir`, which checks durable metadata first:
    - persistent meta's `artifact_dir` (first priority)
    - current secure artifact root
    - legacy `/tmp/agent-mux/<id>` (fallback)
-2. read dispatch metadata from the artifact dir (`_dispatch_ref.json` or
-   `_dispatch_meta.json`); if that fails, fall back to persistent meta at
-   `~/.agent-mux/dispatches/<id>/`
-3. scan the artifact directory for worker-written files
-4. build a continuation prompt with dispatch ID, engine, model, prior status, artifact list, and prompt hash
-5. run a new dispatch with that continuation prompt prepended
+2. read dispatch metadata from the artifact dir; `ReadDispatchMeta` uses
+   `_dispatch_ref.json` first and falls back to legacy `_dispatch_meta.json`
+3. if artifact meta fails, recovery falls back to durable `meta.json`
+4. scan the artifact directory for worker-written files
+5. build a continuation prompt with dispatch ID, engine, model, prior status, artifact list, and prompt hash
+6. run a new dispatch with that continuation prompt prepended
 
 The added recovery prompt already says "continue from where the previous run
 left off." Your prompt should only state what remains.
@@ -124,7 +124,7 @@ That is why steer and `--signal` are not tied to a single polling path.
 ## Liveness
 
 The global dispatch timeout (`timeout_sec` + `grace_sec`) is the hard backstop.
-There is no automatic silence-based kill. Use `ax steer <id> abort` for manual
+There is no automatic silence-based kill. Use `agent-mux steer <id> abort` for manual
 kill when a worker appears stuck.
 
 ### Heartbeats
@@ -140,13 +140,7 @@ Heartbeat interval default: `15s`.
 
 ### Worker Diagnostics
 
-When a worker goes silent, operators diagnose through these steps:
-
-1. **Check `status.json`** — the `last_activity` field shows what the worker was last doing
-2. **Check `events.jsonl`** — the last events show the state before silence began
-3. **Use `ax steer <id> nudge "are you still working?"`** to probe the worker
-4. **Use `ax steer <id> abort`** to manually kill if needed
-5. **Check Codex/Gemini session files** for internal state (reasoning events happen internally even when NDJSON is silent)
+For silent-worker triage, see `worker-diagnostics.md`.
 
 ---
 
@@ -154,15 +148,16 @@ When a worker goes silent, operators diagnose through these steps:
 
 Soft steering is unified under `internal/steer`:
 
-- **Codex**: FIFO delivery via `stdin.pipe` when `stdin_pipe_ready=true`,
-  otherwise inbox
+- **Codex**: nudge/redirect currently falls back to inbox + resume because the
+  loop disables child-stdin soft steering
 - **Claude/Gemini**: inbox delivery triggers session resume/restart via
   `ResumeArgs()` — the loop restarts the harness with the pending inbox
   messages as the resume prompt
 
 If a steer message arrives while a tool is still active, agent-mux defers
-the resume/restart until the tool finishes. If the tool takes longer than
-`max_steer_wait_seconds` (default 120s), the steer is force-delivered.
+the resume/restart until the tool finishes. If a tool remains active past
+`engine_opts.max_steer_wait_seconds` (default 120s), the steer is
+force-delivered.
 
 ---
 

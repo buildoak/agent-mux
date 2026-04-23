@@ -60,9 +60,9 @@ Key fields to examine:
 | `files_changed` | How many files have been written |
 | `state` | `running`, `completed`, `failed`, `timed_out` |
 
-If `last_activity` is `initializing` and `elapsed_s` is under 120, the worker
-is probably still in its first API roundtrip. This is normal for large system
-prompts or context files.
+If `last_activity` is `initializing`, the worker may still be in its first API
+roundtrip. This can be normal; the threshold depends on timeout, context size,
+and model.
 
 ### 2. Read events.jsonl
 
@@ -91,10 +91,10 @@ Each engine maintains internal state that may show activity even when the
 NDJSON stream is silent.
 
 **Codex:**
-- Session files at `~/.codex/sessions/YYYY/MM/DD/*.jsonl`
-- Codex writes internal reasoning events to these files even during API
-  roundtrips when the NDJSON adapter stream is silent
-- A growing session file means the model is actively working
+- Inspect harness-native session logs under `~/.codex/sessions/YYYY/MM/DD/`
+  when available
+- These logs can expose activity that is not visible in the adapter NDJSON
+  stream, but they are not guaranteed for every run
 
 **Gemini:**
 - Check if the process is still alive: `agent-mux status <id> --json` will
@@ -115,8 +115,8 @@ agent-mux steer <id> nudge "Status check -- are you still working?"
 ```
 
 If the worker responds (you'll see new events in `events.jsonl` or the nudge
-triggers a resume), it's alive. If nothing happens after 60 seconds, the
-worker is likely stuck.
+triggers a resume), it's alive. A nudge may queue until a turn boundary or
+resume path; no response after 60 seconds is suggestive, not definitive.
 
 Both argument orderings work:
 
@@ -134,9 +134,9 @@ agent-mux steer <id> abort
 agent-mux steer abort <id>
 ```
 
-This sends SIGTERM to the host process. The worker's exit will be classified
-as `killed_by_user` (not generic `failed`), making it clear in the result
-record that this was a deliberate operator action.
+`agent-mux steer <id> abort` first tries SIGTERM via `host.pid`; if no live host
+exists it writes `control.json`. Check `result --json` and `events.jsonl`
+afterward for the actual classification.
 
 ---
 
@@ -160,14 +160,14 @@ Worker is silent. What do I do?
 
 3. Nudge response?
    New events appeared       -> Alive. Let it work.
-   No response after 60s     -> Dead or truly stuck. Abort.
+   No response after 60s     -> Suggestive, not definitive. Re-check status/events before aborting.
 ```
 
 ---
 
 ## Common False-Alarm Patterns
 
-These silence durations are normal and should not trigger concern:
+These empirical silence durations are common examples, not guarantees:
 
 | Pattern | Expected silence | Why |
 |---------|------------------|-----|
@@ -193,7 +193,8 @@ automatic kill mechanism. It works like this:
 1. At `timeout_sec`, emit `timeout_warning` event
 2. Write a wrap-up message to the worker's inbox
 3. Start the grace timer
-4. If grace expires, stop the worker and return `timed_out`
+4. If grace expires, stop the worker and return `timed_out`; hard kill uses at
+   least 10s final stop grace even if `grace_sec` is smaller
 
 The timeout is a contract: "this task should complete within N seconds." It
 doesn't care about silence patterns -- it cares about total wall time. This

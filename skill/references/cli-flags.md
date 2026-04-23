@@ -18,7 +18,7 @@ and `agent-mux preview ...`.
 | `--cwd` | `-C` | string | current dir | Working directory for the harness |
 | `--model` | `-m` | string | from profile | Model override |
 | `--effort` | `-e` | string | from profile | `low`, `medium`, `high`, `xhigh` |
-| `--timeout` | `-t` | int | effort-mapped | Timeout in seconds |
+| `--timeout` | `-t` | int | resolved later; hardcoded fallback 900s | Timeout in seconds |
 | `--system-prompt` | `-s` | string | unset | Extra system prompt text |
 | `--system-prompt-file` | | string | unset | Read system prompt text from file |
 | `--prompt-file` | | string | unset | Read prompt from file instead of positional arg |
@@ -29,7 +29,7 @@ and `agent-mux preview ...`.
 | `--recover` | | string | unset | Continue from a prior dispatch ID |
 | `--signal` | | string | unset | Dispatch ID to send a message to; message is the first positional arg |
 | `--stream` | `-S` | bool | `false` | Stream full NDJSON events to stderr |
-| `--async` | | bool | `false` | Return ack immediately, continue in background |
+| `--async` | | bool | `false` | Emit ack early; process continues in current process, so use shell `&` for true backgrounding |
 | `--full` | `-f` | bool | `true` | Codex full-access mode |
 | `--no-full` | | bool | `false` | Disable Codex full-access mode |
 | `--max-depth` | | int | `2` | Maximum recursive dispatch depth |
@@ -43,10 +43,10 @@ and `agent-mux preview ...`.
 | Flag | Short | Type | Default | Applies to | Notes |
 |------|-------|------|---------|-----------|-------|
 | `--sandbox` | | string | `danger-full-access` | Codex | `danger-full-access`, `workspace-write`, `read-only` |
-| `--reasoning` | `-r` | string | `medium` | Codex | Passed as Codex reasoning effort |
-| `--permission-mode` | | string | from config | Codex, Claude, Gemini | Codex: takes precedence over sandbox. Claude: passed through. Gemini: maps to approval mode. |
+| `--reasoning` | `-r` | string | empty unless set | Codex | Maps to `-c model_reasoning_effort=<value>` |
+| `--permission-mode` | | string | from `AGENT_MUX_PERMISSION_MODE` when set; otherwise empty | Codex, Claude, Gemini | Codex: takes precedence over sandbox. Claude: passed through. Gemini: maps to approval mode and defaults to `yolo`. |
 | `--max-turns` | | int | `0` | Claude | Maximum conversation turns |
-| `--add-dir` | | string[] | `[]` | All engines | Repeatable additional writable/include directories |
+| `--add-dir` | | string[] | `[]` | All engines | Codex/Claude forward repeated `--add-dir`; Gemini joins as `--include-directories` and also includes `$HOME,/tmp` |
 
 ### --stdin mode
 
@@ -105,8 +105,8 @@ or similar dispatch flags. Put those fields in the JSON object.
 | `result` | `--artifacts` | bool | `false` | List non-internal artifact files |
 | `result` | `--no-wait` | bool | `false` | Error if still running |
 | `inspect` | `--json` | bool | `false` | Combined JSON payload |
-| `wait` | `--poll` | string | config or `60s` | Go duration string |
-| `wait` | `--json` | bool | `false` | Compact JSON; orphaned dispatches emit raw `LiveStatus` instead |
+| `wait` | `--poll` | string | `60s` hardcoded (`config.DefaultAsyncPollInterval`) | Go duration string; minimum effective interval 1s |
+| `wait` | `--json` | bool | `false` | JSON output |
 | `wait` | `--cwd` | string | unset | Project root for config discovery |
 | `config` | `--cwd` | string | unset | Project root for config discovery |
 
@@ -147,8 +147,8 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 |----------|------|---------|-------|
 | `dispatch_id` | string | auto ULID | Must be a valid dispatch ID if supplied |
 | `artifact_dir` | string | auto | Runtime artifact directory |
-| `timeout_sec` | int | effort-mapped | Must be `> 0` when present |
-| `grace_sec` | int | `60` | Must be `> 0` when present |
+| `timeout_sec` | int | 900s hardcoded fallback after profile/JSON resolution | Must be `> 0` when present |
+| `grace_sec` | int | `timeout_sec / 2`, minimum 1, when omitted | Must be `> 0` when present |
 | `max_depth` | int | `2` or config default | Recursive dispatch limit |
 | `depth` | int | `0` | Current recursion depth |
 | `full_access` | bool | `true` | Codex full-access toggle |
@@ -164,7 +164,6 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 | `max-turns` | int | Claude turn cap |
 | `add-dir` | string[] | Extra writable/include directories |
 | `heartbeat_interval_sec` | int | Override heartbeat cadence (default 15s) |
-| `max_steer_wait_seconds` | int | Maximum seconds to wait for a tool to finish before force-delivering a steer message (default 120s) |
 
 ---
 
@@ -180,7 +179,7 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 | `<artifact_dir>/host.pid` | async host PID |
 | `<artifact_dir>/control.json` | abort requests |
 | `<artifact_dir>/inbox.md` | NDJSON coordinator inbox |
-| `<artifact_dir>/stdin.pipe` | Unix FIFO for soft Codex steering |
+| `<artifact_dir>/stdin.pipe` | Unix FIFO only when a soft-stdin bridge is active; current Codex runs skip it |
 | `<artifact_dir>/*` | worker-created artifact files |
 
 Default artifact root comes from the secure runtime root chosen by agent-mux.
@@ -211,7 +210,7 @@ For `timeout`:
 ```
 explicit CLI --timeout
   > profile frontmatter timeout
-  > hardcoded default (1800s)
+  > hardcoded default (900s)
 ```
 
 ### Dispatch fields in --stdin mode
@@ -229,23 +228,14 @@ For `timeout`:
 ```
 explicit JSON timeout_sec
   > profile frontmatter timeout
-  > hardcoded default (1800s)
+  > hardcoded default (900s)
 ```
-
-### Poll interval
-
-```
-wait --poll
-  > 60s hardcoded default
-```
-
----
 
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `1` | Error |
+| `1` | runtime/config/lifecycle/signal/recovery failure |
 | `2` | Usage or parse error |
 | `130` | Cancelled at TTY confirmation |

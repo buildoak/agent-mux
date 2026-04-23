@@ -14,7 +14,7 @@ directory. No per-project config, no TOML, no merge chain.
 engine: codex
 model: gpt-5.4
 effort: high
-timeout: 1800
+timeout: 900
 description: "Scoped implementation with built-in verification"
 ---
 
@@ -48,7 +48,8 @@ flags or JSON fields.
 ## Resolution Order
 
 CLI flags and JSON fields always win. Frontmatter wins over hardcoded
-defaults.
+defaults. In standard CLI mode this is based on flag presence; in `--stdin`
+mode it is based on JSON field presence.
 
 ```text
 hardcoded defaults
@@ -79,8 +80,8 @@ Key behaviors:
   validation error.
 - **Grace period is proportional.** `grace_sec = timeout_sec / 2` (minimum
   1) when not set explicitly.
-- **Skills merge.** Frontmatter skills prepended, request skills follow.
-  Duplicates removed.
+- **Skills merge.** Profile/frontmatter skills are prepended before request
+  skills. Duplicate skill names are skipped by `LoadSkills`.
 - **System prompt from frontmatter is the default.** An explicit
   `--system-prompt` or `system_prompt` JSON field replaces it entirely.
 
@@ -98,7 +99,7 @@ Example output:
 ```
 NAME              ENGINE  MODEL             EFFORT  TIMEOUT  DESCRIPTION
 architect         claude  claude-opus-4-6   high    900      Strategic plans with verification gates
-lifter            codex   gpt-5.4           high    1800     Scoped implementation with built-in verification
+lifter            codex   gpt-5.4           high    900      Scoped implementation with built-in verification
 scout             codex   gpt-5.4-mini      low     180      Quick read-only probe -- existence checks, single-fact lookups, status reads
 ```
 
@@ -113,7 +114,7 @@ JSON shape:
     "engine": "codex",
     "model": "gpt-5.4",
     "effort": "high",
-    "timeout": 1800,
+    "timeout": 900,
     "description": "Scoped implementation with built-in verification"
   }
 ]
@@ -205,18 +206,22 @@ blocked event kills the dispatch (`kill`) or downgrades to a warning (`warn`).
 
 ### Resolution order
 
-1. `<cwd>/.claude/skills/<name>/SKILL.md`
-2. Each configured search path: `<search_path>/<name>/SKILL.md`
+1. `AGENT_MUX_SKILL_PATH` entries
+2. `<cwd>/.agent-mux/skills`
+3. `<cwd>/.claude/skills`
+4. `~/.agent-mux/skills`
+5. `~/.claude/skills`
 
 First readable match wins.
 
 ### Behavior
 
-- Skill content is wrapped in `<skill name="...">` blocks and prepended to
-  the prompt
-- If `<skillRoot>/<name>/scripts/` exists, that directory is added to the
-  dispatch
-- Duplicate skill names are removed
+- agent-mux prepends a compact `Available skills...` reference block containing
+  skill name, description, and `SKILL.md` path. It does not inline full skill
+  bodies.
+- `scripts/` directories from resolved skills are prepended to
+  `EngineOpts["add-dir"]`
+- Duplicate skill names are skipped
 - `--skip-skills` disables skill injection but does not disable profile
   resolution
 

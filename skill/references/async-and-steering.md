@@ -52,31 +52,23 @@ NOT guaranteed before ack:
 - `<artifact_dir>/_dispatch_ref.json` — written later during engine startup
   in `internal/engine/loop.go`. Do not read it immediately after the ack.
 
-`_dispatch_ref.json` is a thin pointer to the durable store:
-
-```json
-{
-  "dispatch_id": "01K...",
-  "store_dir": "/Users/alice/.agent-mux/dispatches/01K..."
-}
-```
-
-The durable store is always `~/.agent-mux/dispatches/<id>/`.
+`_dispatch_ref.json` is a thin pointer to the durable store, but it is not
+ack-gated. Consumers that run immediately after ack should use the ack fields or
+durable `~/.agent-mux/dispatches/<id>/meta.json`.
 
 ### Fan-out and startup latency
 
-`--async` returns control after the ack, but the ack itself is not
-instantaneous — the engine must initialize before emitting it. Measured
-startup latency: Codex ~15-20s, Claude and Gemini vary. Sequential fan-out
-(dispatching N workers one after another in a loop) pays this cost serially:
-5 Codex workers means ~80-100s of blocked waiting before any worker is
-running.
+`--async` writes the ack before engine startup, but the `agent-mux` process
+keeps running until dispatch completion unless the caller backgrounds it. The
+ack is emitted after artifact dir creation, durable meta registration, fsynced
+`host.pid`, and initial `status.json`; it should not wait for harness init.
+Sequential fan-out without shell backgrounding still serializes those ack waits.
 
-Use shell `&` to parallelize the startup cost across all workers, then
-`agent-mux wait` to synchronize on completion:
+Use shell `&` around each `agent-mux --async` invocation to parallelize startup,
+then `agent-mux wait` to synchronize on completion:
 
 ```bash
-# Fan-out: shell & parallelizes engine startup
+# Fan-out: shell & backgrounds each agent-mux process
 for svc in auth billing orders; do
   { agent-mux --async -P=scout -C="/repo/$svc" "Audit $svc" 2>/dev/null | jq -r .dispatch_id > "/tmp/$svc.id"; } &
 done
@@ -87,8 +79,8 @@ for svc in auth billing orders; do
 done
 ```
 
-This is the recommended pattern for any batch fan-out. Workers DO run
-concurrently once started — the only serial cost is startup.
+This is the recommended pattern for any batch fan-out because `--async` does not
+daemonize by itself.
 
 ### Collecting results
 
@@ -102,10 +94,9 @@ agent-mux wait --json 01K... 2>/dev/null
 
 - `wait` blocks until `result.json` exists
 - stderr gets periodic status lines while waiting
-- `wait --json` normally prints the same compact lifecycle JSON shape as
-  `result --json`
-- **Exception:** if the dispatch is orphaned (dead `host.pid`, no result),
-  `wait --json` emits raw `LiveStatus` JSON and exits nonzero
+- `wait --json` matches `result --json` only after `result.json` exists
+- before `result.json`, timeout and dead-host paths emit structured errors
+- only an explicit live `orphaned` state emits raw `LiveStatus` and exits 1
 
 `result` reads the durable result:
 
@@ -129,13 +120,16 @@ Current source of truth: `~/.agent-mux/dispatches/<id>/result.json`.
 
 ```
 CLI --poll
-  > 60s hardcoded default
+  > config.DefaultAsyncPollInterval (60s)
 ```
+
+No env or TOML config is read for the current poll default.
 
 ### status.json
 
-`<artifact_dir>/status.json` is updated on the 5-second watchdog tick, not on
-every event. For near-immediate session ID visibility, read `meta.json` instead.
+The initial `<artifact_dir>/status.json` is written before async ack. Running
+updates happen on the 5-second watchdog tick and when session start is
+persisted.
 
 | Field | Type | Meaning |
 |-------|------|---------|
@@ -144,7 +138,7 @@ every event. For near-immediate session ID visibility, read `meta.json` instead.
 | `last_activity` | string | Most recent activity summary |
 | `tools_used` | int | Tool-call count seen so far |
 | `files_changed` | int | File-write count seen so far |
-| `stdin_pipe_ready` | bool | Codex stdin FIFO bridge is ready |
+| `stdin_pipe_ready` | bool | true only when a soft-stdin bridge is active; current Codex runs keep it false |
 | `ts` | string | RFC3339 timestamp |
 | `dispatch_id` | string | Dispatch ID |
 | `session_id` | string | Harness session ID (available once engine emits init event) |
@@ -156,10 +150,9 @@ there is no `"initializing"` state value.
 `agent-mux status` may synthesize `orphaned` if `host.pid` exists but the
 process is no longer alive.
 
-`session_id` is captured early — as soon as the engine emits its init event.
-However, it appears in `status.json` only on the next 5s watchdog tick.
-`meta.json` updates immediately when the session ID is first seen. For async
-dispatches, prefer reading `meta.json` for early session ID access.
+`session_id` is captured when the engine emits its init event. Durable
+`meta.json` gets `session_id` via `UpdatePersistentMetaSessionID`; `status.json`
+is also refreshed when the session is observed, then again on watchdog ticks.
 
 ---
 
@@ -179,24 +172,18 @@ a unique prefix. Both argument orderings work: `steer <id> <action>` and
 
 | Engine | Primary mechanism | Behavior |
 |--------|-------------------|----------|
-| Codex | Inbox + session resume (via `codex exec resume`) | Soft-steer via FIFO is currently **disabled** for codex ≥0.121 — see note below. `stdin_pipe_ready` is always `false` for codex, so CLI routes to inbox automatically. |
-| Claude | Inbox + session resume | Loop restarts harness with `ResumeArgs()` when inbox messages are pending |
-| Gemini | Inbox + session resume | Same resume/restart pattern as Claude |
+| Codex | Inbox + `codex exec resume` | FIFO disabled because child stdin is an EOF reader; `stdin_pipe_ready` is false, so CLI routes to inbox |
+| Claude | Inbox + resume/restart through `ResumeArgs()` | Loop restarts harness when inbox messages are pending |
+| Gemini | Inbox + resume/restart through `ResumeArgs()` | Same resume/restart pattern as Claude |
 
-> **Note (codex-cli 0.121+):** Soft-steer for codex dispatches is currently
-> unavailable. codex-cli 0.121+ drains stdin to EOF before processing the
-> prompt (upstream PR openai/codex#15917), making the stdin-based steering
-> channel unusable. A future version of agent-mux will wire
-> `/tmp/agent-mux-501/{dispatch_id}/inbox.md` as a proper out-of-band
-> steering channel for codex; until then, only `steer abort` works against
-> running codex dispatches with immediate effect. `steer nudge|redirect`
-> still works via inbox + `codex exec resume` (session-restart) but requires
-> the current turn to end first.
+> **Note (codex-cli 0.121+):** Codex FIFO delivery is disabled. `steer
+> nudge|redirect` falls back to inbox + `codex exec resume`, which can only be
+> delivered after the current turn reaches a safe boundary or the run exits.
 
 For Claude and Gemini, steering is NOT passive inbox delivery — it actively
 resumes/restarts the session with the steering message. If a tool is currently
 executing, the restart is deferred until the tool completes (or until
-`max_steer_wait_seconds` is exceeded, whichever comes first).
+`engine_opts.max_steer_wait_seconds` is exceeded, whichever comes first).
 
 ### steer abort
 
@@ -230,8 +217,10 @@ agent-mux steer 01K... nudge "Summarize what you have so far"
 
 Delivery order:
 
-1. Codex stdin FIFO when the worker is running and `stdin_pipe_ready=true`
-2. inbox fallback for everything else (triggers resume for Claude/Gemini)
+1. `stdin_fifo` only when `status.stdin_pipe_ready=true` and host PID is live
+2. inbox fallback for everything else
+
+Current Codex runs keep `stdin_pipe_ready=false`, so nudge uses inbox.
 
 Inbox fallback writes `[NUDGE] <message>`.
 
@@ -257,8 +246,8 @@ Typical JSON response:
 
 | Mechanism | When used |
 |-----------|-----------|
-| `stdin_fifo` | Codex only, running state, stdin bridge ready, host PID alive |
-| `inbox` | Fallback path for `nudge` and `redirect`; triggers resume for Claude/Gemini |
+| `stdin_fifo` | Live runs with `stdin_pipe_ready=true`; current Codex does not enable it |
+| `inbox` | Fallback path for `nudge` and `redirect`; triggers resume/restart for Codex, Claude, and Gemini |
 | `sigterm` | `abort` when host PID is alive |
 | `control_file` | `abort` fallback |
 

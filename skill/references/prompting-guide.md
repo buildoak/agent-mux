@@ -169,7 +169,7 @@ Use for stable coordinator personas with default engine/model/skills.
 
 When using `--stdin`, put dispatch fields in JSON. The CLI is only carrying
 transport flags like `--stdin`, `--async`, `--stream`, `--verbose`, `--yes`,
-and `--config`.
+and lifecycle output control.
 
 ---
 
@@ -185,7 +185,7 @@ agent-mux wait --poll 30s "$ID1" 2>/dev/null
 PLAN=$(agent-mux result --json "$ID1" 2>/dev/null | jq -r .response)
 
 printf '%s' "{\"profile\":\"lifter\",\"prompt\":\"Implement this plan:\\n$PLAN\",\"cwd\":\"/repo\"}" \
-  | agent-mux --stdin --async 2>/dev/null
+  | agent-mux --stdin 2>/dev/null
 ```
 
 ### Handoff via context file
@@ -202,13 +202,18 @@ agent-mux -P=lifter --async --context-file=/tmp/plan.md -C=/repo \
 ### Parallel fan-out
 
 ```bash
-ID1=$(agent-mux -P=scout --async -C=/repo "Scan auth module" 2>/dev/null | jq -r .dispatch_id)
-ID2=$(agent-mux -P=scout --async -C=/repo "Scan API layer" 2>/dev/null | jq -r .dispatch_id)
-ID3=$(agent-mux -P=scout --async -C=/repo "Scan DB layer" 2>/dev/null | jq -r .dispatch_id)
+agent-mux -P=scout --async -C=/repo "Scan auth module" > /tmp/auth.json 2>/dev/null &
+agent-mux -P=scout --async -C=/repo "Scan API layer" > /tmp/api.json 2>/dev/null &
+agent-mux -P=scout --async -C=/repo "Scan DB layer" > /tmp/db.json 2>/dev/null &
+wait
 
-agent-mux wait "$ID1" 2>/dev/null
-agent-mux wait "$ID2" 2>/dev/null
-agent-mux wait "$ID3" 2>/dev/null
+ID1=$(jq -r .dispatch_id /tmp/auth.json)
+ID2=$(jq -r .dispatch_id /tmp/api.json)
+ID3=$(jq -r .dispatch_id /tmp/db.json)
+
+for id in "$ID1" "$ID2" "$ID3"; do
+  agent-mux wait "$id" 2>/dev/null
+done
 ```
 
 `wait` is the completion primitive. Do not poll `status --json` in a loop.
@@ -237,7 +242,7 @@ Signals and steer messages should be short.
 
 ## Flag Hygiene
 
-1. Put flags before positional args. `agent-mux wait --poll 30s <id>`, not `agent-mux wait <id> --poll 30s`.
+1. Put flags before positional args, including lifecycle commands. `agent-mux wait --poll 30s <id>`, not `agent-mux wait <id> --poll 30s`.
 2. In `--stdin` mode, put dispatch fields in JSON rather than mixing in CLI dispatch flags.
 3. Escape worker env vars in coordinator-shell prompts when needed. Use `\$AGENT_MUX_CONTEXT` or single quotes so your shell does not expand them early.
 4. When you need machine-readable output, redirect stderr away and parse stdout JSON. Example: `2>/dev/null`.

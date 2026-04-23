@@ -14,25 +14,22 @@ behavior.
 | `-m <model>` | `-m <model>` | Required for explicit model control |
 | `--permission-mode <mode>` | `--approval-mode <mode>` | Renamed; defaults to `yolo` |
 | `--add-dir <dir>` | `--include-directories <dir1,dir2,...>` | Joined into comma-separated value |
-| `--effort` / `-e` | *(not supported)* | Logged warning, value discarded |
-| `--reasoning` / `-r` | *(not supported)* | Same as effort -- discarded with warning |
+| `--effort` / `-e` | *(not supported)* | Resolved on `spec.Effort` but not passed as a Gemini CLI flag |
+| `--reasoning` / `-r` | *(not supported)* | Gemini ignores `EngineOpts["reasoning"]` |
 | prompt (positional) | `-p "<prompt>"` | Always passed via `-p` flag |
 | *(output format)* | `-o stream-json` | Always set by adapter |
 
 ### Default `--include-directories`
 
-Gemini dispatches automatically include `$HOME,/tmp` in `--include-directories`.
-This gives Gemini workers broad filesystem read access for context files,
-artifacts, and any file under the home directory -- fixing the previous issue
-where `--context-file` content was blocked by the workspace sandbox.
-
-Additional directories from `--add-dir` are appended to this default set.
+Gemini dispatches append the home directory when available and `/tmp` in
+`--include-directories`. Additional directories from `--add-dir` come before
+those defaults in the comma-separated include list.
 
 Invocation shape produced by the adapter:
 
 ```bash
 gemini -p "<prompt>" -o stream-json [-m <model>] \
-  --approval-mode <mode> --include-directories $HOME,/tmp[,<extra-dirs>]
+  --approval-mode <mode> --include-directories <extra-dirs>,$HOME,/tmp
 ```
 
 ---
@@ -56,12 +53,12 @@ or `default` only when a human is supervising.
 
 ## Effort and Reasoning Depth
 
-Gemini CLI has no effort or reasoning-effort flag. When set (via `--effort`,
-`--reasoning`, or profile frontmatter), the adapter logs a warning and
-discards the value:
+Gemini CLI has no effort or reasoning-effort flag. `--effort` and profile
+frontmatter resolve onto `spec.Effort` but are not passed as CLI flags. A
+reasoning override in `EngineOpts["reasoning"]` logs a warning and is ignored:
 
 ```
-[gemini] Gemini CLI does not support effort flag; ignoring effort=high — use model selection for thinking depth control
+[gemini] Gemini CLI does not support effort flag; ignoring effort=high -- use model selection for thinking depth control
 ```
 
 **Model selection is the depth lever:**
@@ -109,9 +106,9 @@ logs a warning and substitutes `"latest"`:
 [gemini] session ID "550e8400-..." looks like a UUID; using "latest" for --resume
 ```
 
-This means recovery and steering resumes target the most recent Gemini
-session, not a specific one. Acceptable for single-worker dispatches;
-potentially ambiguous if multiple Gemini dispatches overlap.
+This means recovery and steering resumes can target the most recent Gemini
+session rather than a specific one. Avoid Gemini steering/resume when multiple
+Gemini sessions overlap or when preserving loaded context matters.
 
 ---
 
@@ -156,22 +153,23 @@ adapters. File-write attribution depends on correlating `tool_use` and
 
 ## Configured Models
 
-From `~/.agent-mux/config.toml`:
+Fallback models come from `config.DefaultModels()`:
 
-```toml
-gemini = ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"]
-```
+- `gemini-2.5-flash`
+- `gemini-2.5-pro`
+- `gemini-3-flash-preview`
+- `gemini-3.1-pro-preview`
 
-Dispatching a model not in this list fails with `model_not_found` (with fuzzy
-match suggestion).
+Dispatching a model not in this list fails with `model_not_found`.
 
 ---
 
 ## Dispatching Profiles on Gemini
 
 Any profile can be dispatched on Gemini by overriding the engine and model
-via CLI flags. The profile's system prompt, skills, and timeout still apply;
-only the engine and model change.
+via CLI flags. Profile frontmatter/body and skills still apply unless explicit
+CLI or JSON fields override them; Gemini receives system prompt via
+`GEMINI_SYSTEM_MD`.
 
 ```bash
 # Use researcher profile on Gemini Pro
@@ -181,13 +179,5 @@ agent-mux -P=researcher -E=gemini -m gemini-3.1-pro-preview -C=/repo "Synthesize
 agent-mux -P=scout -E=gemini -m gemini-3-flash-preview -C=/repo "Quick status check"
 ```
 
-Recommended model pairings:
-
-| Task type | Suggested model | Notes |
-|-----------|-----------------|-------|
-| Quick checks, light reads | `gemini-3-flash-preview` | Fast and cheap |
-| Codebase exploration | `gemini-3-flash-preview` | Good breadth coverage |
-| Deep research, synthesis | `gemini-3.1-pro-preview` | Strong reasoning |
-| Strategic planning | `gemini-3.1-pro-preview` | Complex multi-step |
-| Implementation | `gemini-3-flash-preview` | Adequate for scoped edits |
-| Adversarial review | `gemini-3.1-pro-preview` | Thorough analysis |
+Use Gemini primarily for analysis and second-opinion passes; prefer Codex for
+implementation work unless you have a narrow Gemini-specific reason.
