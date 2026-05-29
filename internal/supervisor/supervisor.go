@@ -20,10 +20,27 @@ type Process struct {
 	waitOnce sync.Once
 }
 
+// ProcessOpts configures optional Process behavior.
+type ProcessOpts struct {
+	// Setsid creates a new session, detaching from the controlling terminal.
+	// Use for async dispatches that must survive caller exit / LaunchAgent teardown.
+	Setsid bool
+}
+
 func NewProcess(name string, args []string, dir string, env []string) *Process {
+	return NewProcessWithOpts(name, args, dir, env, ProcessOpts{})
+}
+
+func NewProcessWithOpts(name string, args []string, dir string, env []string, opts ProcessOpts) *Process {
 	cmd := exec.Command(name, args...)
 	cmd.Dir, cmd.Env = dir, env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Setsid creates a new session AND process group, so Setpgid is redundant.
+	// Using both together causes "operation not permitted" on macOS.
+	if opts.Setsid {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	} else {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	return &Process{cmd: cmd, waitDone: make(chan struct{})}
 }
 

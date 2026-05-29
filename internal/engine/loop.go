@@ -426,7 +426,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 	startRun := func(runGen uint64, runArgs []string) (*runHandle, *strings.Builder, error) {
 		runBinary := e.adapter.Binary()
-		proc := supervisor.NewProcess(runBinary, runArgs, spec.Cwd, env)
+		proc := supervisor.NewProcessWithOpts(runBinary, runArgs, spec.Cwd, env, supervisor.ProcessOpts{
+			Setsid: e.detached, // Create new session so async workers survive caller exit
+		})
 		cmd := proc.Cmd()
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {

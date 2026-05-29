@@ -31,7 +31,7 @@ import (
 	"golang.org/x/term"
 )
 
-const version = "agent-mux v3.4.1"
+const version = "agent-mux v3.4.2"
 const contextFilePromptPreamble = "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting."
 
 type cliCommand string
@@ -64,13 +64,13 @@ func (s *stringSlice) Set(value string) error {
 }
 
 type cliFlags struct {
-	engine, profile, cwd, model, effort, systemPrompt, systemPromptFile string
-	contextFile, artifactDir, promptFile, recover                       string
-	signal                                                              string
-	permissionMode, sandbox, reasoning                                  string
-	timeout, maxDepth, maxTurns                                         int
+	engine, profile, cwd, model, effort, systemPrompt, systemPromptFile   string
+	contextFile, artifactDir, promptFile, recover                         string
+	signal                                                                string
+	permissionMode, sandbox, reasoning                                    string
+	timeout, maxDepth, maxTurns                                           int
 	full, noFull, skipSkills, stdin, version, verbose, yes, stream, async bool
-	skills, addDirs                                                      stringSlice
+	skills, addDirs                                                       stringSlice
 }
 
 type previewResult struct {
@@ -1424,4 +1424,3 @@ func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations typ
 	}
 	return eng.Dispatch(ctx, spec)
 }
-

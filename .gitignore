@@ -5,6 +5,7 @@
 
 # Go build cache
 .tmp/
+.tmpbin/
 
 # Legacy TS artifacts (should not reappear)
 node_modules/

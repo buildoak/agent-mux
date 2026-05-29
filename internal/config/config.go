@@ -81,7 +81,7 @@ func HeartbeatIntervalSec() int {
 // DefaultModels returns the built-in model registry per engine.
 func DefaultModels() map[string][]string {
 	return map[string][]string{
-		"codex":  {"gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2-codex"},
+		"codex":  {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2-codex"},
 		"claude": {"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"},
 		"gemini": {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview"},
 	}
