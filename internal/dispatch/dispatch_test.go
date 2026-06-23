@@ -272,6 +272,40 @@ func TestNewDispatchError(t *testing.T) {
 	}
 }
 
+func TestNewDispatchErrorAgyCatalogEntries(t *testing.T) {
+	tests := []struct {
+		code      string
+		retryable bool
+		wantHint  string
+	}{
+		{"harness_empty_output", true, "provider process failed"},
+		{"harness_failed", true, "non-zero exit"},
+		{"output_capture_failed", false, "persist or read"},
+		{"steer_unsupported", false, "does not support live steering"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.code, func(t *testing.T) {
+			err := NewDispatchError(tt.code, "", "")
+			if err.Code != tt.code {
+				t.Fatalf("code = %q, want %q", err.Code, tt.code)
+			}
+			if err.Message == "" {
+				t.Fatalf("message is empty for %s", tt.code)
+			}
+			if err.Hint == "" || !strings.Contains(err.Hint, tt.wantHint) {
+				t.Fatalf("hint = %q, want substring %q", err.Hint, tt.wantHint)
+			}
+			if err.Example == "" {
+				t.Fatalf("example is empty for %s", tt.code)
+			}
+			if err.Retryable != tt.retryable {
+				t.Fatalf("retryable = %v, want %v", err.Retryable, tt.retryable)
+			}
+		})
+	}
+}
+
 func TestBuildCompletedResult(t *testing.T) {
 	dir := t.TempDir()
 	spec := &types.DispatchSpec{
@@ -421,6 +455,34 @@ func TestScanArtifactsRecursive(t *testing.T) {
 	artifacts := ScanArtifacts(dir)
 	if len(artifacts) != 1 || artifacts[0] != filepath.Join(nested, "result.txt") {
 		t.Fatalf("ScanArtifacts = %#v, want nested artifact only", artifacts)
+	}
+}
+
+func TestScanArtifactsExcludesPrivateProviderDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	publicArtifact := filepath.Join(nested, "result.txt")
+	for _, path := range []string{
+		filepath.Join(dir, "agy.log"),
+		filepath.Join(dir, "stdout.log"),
+		filepath.Join(dir, "stderr.txt"),
+		filepath.Join(dir, "raw_stdout.txt"),
+		filepath.Join(dir, "provider-internal.trace"),
+		filepath.Join(dir, "harness-private.json"),
+		publicArtifact,
+	} {
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+
+	artifacts := ScanArtifacts(dir)
+	if len(artifacts) != 1 || artifacts[0] != publicArtifact {
+		t.Fatalf("ScanArtifacts = %#v, want public artifact only %q", artifacts, publicArtifact)
 	}
 }
 

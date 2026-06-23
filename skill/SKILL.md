@@ -2,7 +2,7 @@
 name: agent-mux
 description: |
   Cross-engine dispatch layer for AI coding agents. Use when you need to:
-  launch a worker on Codex/Claude/Gemini, recover a timed-out dispatch, steer
+  launch a worker on Codex/Claude/Gemini/agy, recover a timed-out dispatch, steer
   a running agent, or fan out parallel work. Profiles live in ~/.agent-mux/prompts/.
 ---
 
@@ -14,6 +14,7 @@ description: |
 ```bash
 agent-mux config prompts        # live roster with effort defaults
 agent-mux config prompts --json # structured
+agent-mux config engines --json # engine capabilities + model allowlists
 ```
 Selection: scout for reads, lifter for writes, architect for plans, grunt for bulk edits.
 
@@ -68,13 +69,14 @@ agent-mux -P=researcher -E=gemini -m gemini-3.1-pro-preview -C=/repo "Analyze au
 - **Codex**: implementation, debugging, precise edits
 - **Claude**: planning, synthesis, review
 - **Gemini**: analysis, second opinion (models: `gemini-3-flash-preview`, `gemini-3.1-pro-preview`)
+- **agy**: experimental CLI-first model access. Plain stdout; agent-mux internally invokes the local agy CLI with its fixed `--sandbox`, discovers Antigravity conversation IDs from `agy.log`, and uses inbox + `--conversation` for nudge/redirect resume. Operator-supplied sandbox/permission/reasoning/max-turn/full-access options are rejected. This does not imply plugins, MCP, browser automation, Google services, or provider service actions.
 
 Gemini ignores `-e` -- use model selection for depth control.
 
 **2. Steering:**
 - `steer abort <id>` -- SIGTERMs async host when live; otherwise writes control.json for watchdog
-- `steer redirect <id> "new direction"` -- Codex uses inbox + session resume; may defer while tool is active
-- `steer nudge <id>` -- inbox + resume on both engines; Gemini may interrupt generation
+- `steer redirect <id> "new direction"` -- requires live FIFO or a resume-capable engine; `agy` uses inbox + conversation resume
+- `steer nudge <id>` -- requires live FIFO or a resume-capable engine; `agy` uses inbox + conversation resume
 
 **3. Data model (3 paths):**
 - `~/.agent-mux/dispatches/<ULID>/` -- durable (meta.json, result.json)
@@ -102,6 +104,7 @@ agent-mux -P=lifter --recover=<id> -C=/repo "Finish remaining parser tests"
 - `--async` does NOT daemonize -- use shell `&`
 - `status: completed` does not mean task success -- check `response`
 - `-e` is effort, `-E` is engine (case matters)
+- agy rejects explicit portable sandbox, permission, reasoning, max-turn, and full-access options; use model/add-dir/prompt only
 - `--recover` resumes with NEW prompt, does not fetch result (use `result <id>`)
 - `-e=high` on xhigh profiles is a downgrade, not a floor
 - `wait` has no `--timeout` — only `--poll` for cadence (e.g., `wait --poll 30s <id>`)

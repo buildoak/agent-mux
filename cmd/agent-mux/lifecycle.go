@@ -33,7 +33,7 @@ func runListCommand(args []string, stdout io.Writer) int {
 
 	fs.IntVar(&limit, "limit", limit, "Maximum records to print (0 = all)")
 	fs.StringVar(&statusFilter, "status", "", "Filter by status: completed, failed, timed_out")
-	fs.StringVar(&engineFilter, "engine", "", "Filter by engine: codex, claude, gemini")
+	fs.StringVar(&engineFilter, "engine", "", "Filter by engine: "+validEngineCSV())
 	fs.BoolVar(&jsonOutput, "json", false, "Emit NDJSON")
 
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
@@ -52,7 +52,7 @@ func runListCommand(args []string, stdout io.Writer) int {
 	}
 	engineFilter = strings.TrimSpace(engineFilter)
 	if engineFilter != "" && !isValidEngine(engineFilter) {
-		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid engine %q: want codex, claude, or gemini", engineFilter), "")
+		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid engine %q: want one of %s", engineFilter, validEngineBracketed()), "")
 	}
 
 	records, err := dispatch.ListDispatchRecords(0)
@@ -426,12 +426,12 @@ func filterRecordsByEngine(records []dispatch.DispatchRecord, engine string) []d
 }
 
 func isValidEngine(engine string) bool {
-	switch engine {
-	case "codex", "claude", "gemini":
-		return true
-	default:
-		return false
+	for _, valid := range validEngineNames() {
+		if engine == valid {
+			return true
+		}
 	}
+	return false
 }
 
 // --- B3: inspect subcommand ---

@@ -20,6 +20,7 @@ func NewRegistry(models map[string][]string) *Registry {
 	r.Register("codex", &CodexAdapter{})
 	r.Register("claude", &ClaudeAdapter{})
 	r.Register("gemini", &GeminiAdapter{})
+	r.Register("agy", &AgyAdapter{})
 	return r
 }
 

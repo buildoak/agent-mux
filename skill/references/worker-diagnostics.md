@@ -106,6 +106,12 @@ NDJSON stream is silent.
 - Subagent JSONL files show internal activity
 - Claude sessions resume cleanly, so a nudge is low-cost for diagnosis
 
+**agy:**
+- Inspect `<artifact_dir>/agy.log` for provider diagnostics and Antigravity conversation IDs.
+- `session_id` appears only after agent-mux discovers a conversation ID from `agy.log`.
+- `tools_used`, `files_changed`, token usage, cache usage, and cost are not reliable live signals for agy because the adapter receives plain stdout, not structured events.
+- Generated files are surfaced by final artifact scanning; they are not emitted as `file_write` events.
+
 ### 4. Probe the Worker
 
 If passive checks are inconclusive, send a nudge:
@@ -191,10 +197,12 @@ The global dispatch timeout (`timeout_sec` + `grace_sec`) is the only
 automatic kill mechanism. It works like this:
 
 1. At `timeout_sec`, emit `timeout_warning` event
-2. Write a wrap-up message to the worker's inbox
+2. For adapters with soft-timeout wrap-up enabled, write a wrap-up message to the worker's inbox
 3. Start the grace timer
 4. If grace expires, stop the worker and return `timed_out`; hard kill uses at
    least 10s final stop grace even if `grace_sec` is smaller
+
+Agy caveat: agy uses plain stdout and `SoftTimeoutNoWrapup`; agent-mux does not send an agy wrap-up prompt at soft timeout. Use `steer nudge` before timeout if you want a resumed summary, or use `--recover=<id>` after timeout.
 
 The timeout is a contract: "this task should complete within N seconds." It
 doesn't care about silence patterns -- it cares about total wall time. This

@@ -2,7 +2,7 @@
 name: agent-mux
 description: |
   Cross-engine dispatch layer for AI coding agents. Use when you need to:
-  launch a worker on Codex/Claude/Gemini, recover a timed-out dispatch, steer
+  launch a worker on Codex/Claude/Gemini/agy, recover a timed-out dispatch, steer
   a running worker mid-flight, or coordinate multi-model work. Trigger on:
   agent-mux, dispatch, spawn worker, codex worker, profile dispatch, async
   dispatch, steer agent, recover timeout, multi-engine.
@@ -10,7 +10,7 @@ description: |
 
 # agent-mux
 
-One CLI, three engines (Codex, Claude, Gemini), one JSON contract. Worker
+Legacy reference. Current agent-mux supports Codex, Claude, Gemini, and experimental agy under one JSON contract. Worker
 identity lives in prompt files at `~/.agent-mux/prompts/` -- markdown with
 YAML frontmatter that sets engine, model, effort, timeout, and system prompt.
 No config files, no role tables. The prompt IS the worker.

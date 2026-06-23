@@ -26,7 +26,7 @@ These flags are registered in normal dispatch mode.
 | Flag | Short | Type | Default | Notes |
 | --- | --- | --- | --- | --- |
 | `--profile` | `-P` | string | empty | Profile name -- loads `~/.agent-mux/prompts/<name>.md` |
-| `--engine` | `-E` | string | from profile | `codex`, `claude`, `gemini` |
+| `--engine` | `-E` | string | from profile | `agy`, `claude`, `codex`, `gemini` |
 | `--cwd` | `-C` | string | current dir | Working directory |
 | `--model` | `-m` | string | from profile | Model override |
 | `--effort` | `-e` | string | resolved later | `low`, `medium`, `high`, `xhigh`. Ignored by Gemini (warning logged); use model selection |
@@ -38,7 +38,7 @@ These flags are registered in normal dispatch mode.
 | `--context-file` | | string | empty | Context file path |
 | `--artifact-dir` | | string | auto | Runtime artifact directory |
 | `--recover` | | string | empty | Previous dispatch ID to continue |
-| `--signal` | | string | empty | Deliver a message to a running dispatch |
+| `--signal` | | string | empty | Deliver a message to a running resume-capable dispatch |
 | `--full` | `-f` | bool | `true` | Full access mode |
 | `--no-full` | | bool | `false` | Disable full access |
 | `--max-depth` | | int | `2` | Recursive dispatch limit |
@@ -58,8 +58,8 @@ These flags are registered in normal dispatch mode.
 | --- | --- | --- | --- | --- | --- |
 | `--sandbox` | | Codex | string | `danger-full-access` | Sandbox mode |
 | `--reasoning` | `-r` | Codex | string | `medium` | Reasoning effort |
-| `--add-dir` | | Codex | string[] | empty | Repeatable writable directory |
-| `--permission-mode` | | Claude/Gemini | string | empty | Adapter-specific permission or approval mode |
+| `--add-dir` | | All engines | string[] | empty | Codex/Claude/agy forward repeated `--add-dir`; Gemini joins directories |
+| `--permission-mode` | | Codex/Claude/Gemini | string | empty | Adapter-specific permission or approval mode; explicit values are rejected for agy |
 | `--max-turns` | | Claude | int | `0` | Maximum turns |
 
 ## `--stdin` Mode
@@ -169,6 +169,7 @@ agent-mux preview [dispatch flags] <prompt>
 
 ```bash
 agent-mux config [--cwd <dir>]
+agent-mux config engines [--json] [--refresh-models]
 agent-mux config prompts [--json]
 agent-mux config skills [--cwd <dir>] [--json]
 ```
@@ -176,8 +177,13 @@ agent-mux config skills [--cwd <dir>] [--json]
 Implemented subcommands are exactly:
 
 - `config`
+- `config engines`
 - `config prompts`
 - `config skills`
+
+`config engines` reports one entry per engine, including model source/status and conservative capability flags: `supports_resume`, `steer_semantics`, `event_stream`, `activity_tracking`, `token_usage`, `cost_usage`, `artifact_scan`, `multimodal_input`, `image_generation`, and `notes`.
+
+`config engines --refresh-models` refreshes only the agy model cache by running `agy models` with a short timeout, then writes `~/.agent-mux/cache/agy-models.json`. Normal `config engines` and dispatch validation read that cache when present and otherwise use the built-in fallback; they do not call `agy models`.
 
 `config prompts` reports one entry per prompt file in `~/.agent-mux/prompts/`, including engine, model, effort, timeout, and description from frontmatter.
 
@@ -197,7 +203,7 @@ Implemented subcommands are exactly:
 | `agent-mux wait <id>` | lifecycle wait |
 | `agent-mux steer <id> <action> ...` | steering |
 | `agent-mux config ...` | config introspection |
-| `agent-mux --signal <id> "<message>"` | inbox signal path |
+| `agent-mux --signal <id> "<message>"` | inbox signal path for resume-capable engines |
 | `agent-mux --stdin < spec.json` | stdin dispatch |
 | `agent-mux --version` | version output |
 | `agent-mux -- help` | literal prompt `help` |

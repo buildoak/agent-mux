@@ -99,14 +99,28 @@ func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, annotations
 	} else if result.Status == types.StatusTimedOut {
 		finalState = "timed_out"
 	}
-	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
-		State:        finalState,
-		ElapsedS:     int(result.DurationMS / 1000),
-		LastActivity: "done",
-		DispatchID:   spec.DispatchID,
-	})
+	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, finalAsyncStatus(spec, result, finalState))
 
 	return 0
+}
+
+func finalAsyncStatus(spec *types.DispatchSpec, result *types.DispatchResult, finalState string) dispatch.LiveStatus {
+	status := dispatch.LiveStatus{}
+	if existing, err := dispatch.ReadStatusJSON(spec.ArtifactDir); err == nil && existing != nil {
+		status = *existing
+	}
+	status.State = finalState
+	status.ElapsedS = int(result.DurationMS / 1000)
+	status.LastActivity = "done"
+	status.DispatchID = spec.DispatchID
+	if status.SessionID == "" && result.Metadata != nil {
+		status.SessionID = result.Metadata.SessionID
+	}
+	if result.Activity != nil {
+		status.FilesChanged = len(result.Activity.FilesChanged)
+		status.ToolsUsed = len(result.Activity.ToolCalls) + len(result.Activity.CommandsRun)
+	}
+	return status
 }
 
 // writeAndSync writes data to path with an explicit fsync to guarantee

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
 	"github.com/buildoak/agent-mux/internal/sanitize"
@@ -186,6 +187,18 @@ func deliverSteer(idPrefix, artifactDir, action, message string, stdout io.Write
 		return 0
 	}
 
+	supported, engineName, supportErr := supportsInboxSteer(artifactDir)
+	if supportErr != nil {
+		return emitSteerError(stdout, 1, "steer_unsupported",
+			supportErr.Error(),
+			"Use `agent-mux steer <id> abort` to stop it, or wait for completion and rerun with updated instructions.")
+	}
+	if !supported {
+		return emitSteerError(stdout, 1, "steer_unsupported",
+			fmt.Sprintf("engine %q has no live steering channel and does not support resume-based inbox delivery", engineName),
+			"Use `agent-mux steer <id> abort` to stop it, or wait for completion and rerun with updated instructions.")
+	}
+
 	if err := writeInboxSteer(artifactDir, action, message); err != nil {
 		return emitSteerError(stdout, 1, "write_failed",
 			fmt.Sprintf("write inbox: %v", err), "")
@@ -231,6 +244,24 @@ func tryFIFOInject(artifactDir, action, message string) (mechanism string, deliv
 		return "", false, err
 	}
 	return "stdin_fifo", true, nil
+}
+
+func supportsInboxSteer(artifactDir string) (supported bool, engineName string, err error) {
+	meta, err := dispatch.ReadDispatchMeta(artifactDir)
+	if err != nil {
+		return false, "", fmt.Errorf("read dispatch metadata: %w", err)
+	}
+	if meta == nil || strings.TrimSpace(meta.Engine) == "" {
+		return false, "", fmt.Errorf("dispatch metadata does not identify an engine")
+	}
+	engineName = strings.TrimSpace(meta.Engine)
+
+	reg := adapter.NewRegistry(config.DefaultModels())
+	adp, err := reg.Get(engineName)
+	if err != nil {
+		return false, engineName, err
+	}
+	return adp.SupportsResume(), engineName, nil
 }
 
 func writeInboxSteer(artifactDir, action, message string) error {

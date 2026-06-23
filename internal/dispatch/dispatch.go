@@ -181,13 +181,13 @@ var ErrorCatalog = map[string]ErrorInfo{
 	},
 	"engine_not_found": {
 		Message:   "Unknown engine name.",
-		Hint:      "agent-mux only supports the built-in engines codex, claude, and gemini.",
+		Hint:      "agent-mux only supports the built-in engines agy, claude, codex, and gemini.",
 		Example:   "Retry with a valid engine. Example: agent-mux -e codex --cwd /repo \"<prompt>\".",
 		Retryable: true,
 	},
 	"binary_not_found": {
 		Hint:      "The requested harness binary is not installed or is not on PATH for this shell.",
-		Example:   "Install the harness, confirm `codex`, `claude`, or `gemini` resolves on PATH, then retry the same agent-mux command.",
+		Example:   "Install the harness, confirm `agy`, `claude`, `codex`, or `gemini` resolves on PATH, then retry the same agent-mux command.",
 		Retryable: false,
 	},
 	"killed_by_user": {
@@ -250,6 +250,24 @@ var ErrorCatalog = map[string]ErrorInfo{
 		Example:   "Retry once. If it repeats, inspect `events.jsonl` or raw harness output in the artifact directory.",
 		Retryable: false,
 	},
+	"harness_empty_output": {
+		Message:   "Harness produced no terminal output.",
+		Hint:      "The harness exited without a usable final response. This usually means the provider process failed before agent-mux could capture a public worker result.",
+		Example:   "Inspect provider diagnostics such as `agy.log`, fix the harness startup or capture issue, then retry once.",
+		Retryable: true,
+	},
+	"harness_failed": {
+		Message:   "Harness process failed.",
+		Hint:      "The provider harness returned a non-zero exit or equivalent failure before agent-mux received a completed worker result.",
+		Example:   "Inspect the private provider log and stderr capture, fix the underlying harness error, then retry the same dispatch.",
+		Retryable: true,
+	},
+	"output_capture_failed": {
+		Message:   "Failed to capture harness output.",
+		Hint:      "agent-mux could not persist or read the provider output stream, so the final worker response may be incomplete or unavailable.",
+		Example:   "Check artifact directory permissions and disk space, then retry after output capture is writable.",
+		Retryable: false,
+	},
 	"artifact_dir_unwritable": {
 		Message:   "Artifact directory is not writable.",
 		Hint:      "agent-mux could not create or write files in the artifact directory.",
@@ -296,6 +314,12 @@ var ErrorCatalog = map[string]ErrorInfo{
 		Message:   "agent-mux hit an internal error.",
 		Hint:      "agent-mux hit an internal invariant failure while building the result or command response.",
 		Example:   "Retry once. If it repeats, capture the full JSON result and artifact directory for debugging.",
+		Retryable: false,
+	},
+	"steer_unsupported": {
+		Message:   "Steering unsupported by harness adapter.",
+		Hint:      "The selected harness adapter does not support live steering for this dispatch.",
+		Example:   "Let the current dispatch finish, then rerun with the updated instruction or choose an adapter with steering support.",
 		Retryable: false,
 	},
 	"resume_unsupported": {
@@ -432,7 +456,7 @@ func ScanArtifacts(dir string) []string {
 			return nil
 		}
 		name := d.Name()
-		if name == "_dispatch_meta.json" || name == "_dispatch_ref.json" || name == "events.jsonl" || name == "inbox.md" || name == "status.json" || name == "host.pid" || name == "control.json" {
+		if isPrivateArtifactFile(name) {
 			return nil
 		}
 		artifacts = append(artifacts, path)
@@ -445,6 +469,57 @@ func ScanArtifacts(dir string) []string {
 		return empty
 	}
 	return artifacts
+}
+
+func isPrivateArtifactFile(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if lower == "" {
+		return true
+	}
+
+	switch lower {
+	case "_dispatch_meta.json",
+		"_dispatch_ref.json",
+		"events.jsonl",
+		"inbox.md",
+		"status.json",
+		"host.pid",
+		"control.json",
+		"agy.log",
+		"agy.stdout",
+		"agy.stderr",
+		"agy.stdout.log",
+		"agy.stderr.log",
+		"stdout",
+		"stderr",
+		"stdout.log",
+		"stderr.log",
+		"stdout.txt",
+		"stderr.txt",
+		"raw_stdout",
+		"raw_stderr",
+		"raw_stdout.log",
+		"raw_stderr.log",
+		"raw_stdout.txt",
+		"raw_stderr.txt",
+		"harness.stdout",
+		"harness.stderr",
+		"harness.stdout.log",
+		"harness.stderr.log",
+		"provider.stdout",
+		"provider.stderr",
+		"provider.stdout.log",
+		"provider.stderr.log":
+		return true
+	}
+
+	return strings.HasPrefix(lower, "raw-stdout.") ||
+		strings.HasPrefix(lower, "raw-stderr.") ||
+		strings.HasPrefix(lower, "provider-internal.") ||
+		strings.HasPrefix(lower, "provider_diagnostic.") ||
+		strings.HasPrefix(lower, "provider-diagnostic.") ||
+		strings.HasPrefix(lower, "harness-debug.") ||
+		strings.HasPrefix(lower, "harness-private.")
 }
 
 func truncateAtBoundary(s string, maxChars int) string {

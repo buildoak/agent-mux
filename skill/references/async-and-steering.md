@@ -138,7 +138,7 @@ persisted.
 | `last_activity` | string | Most recent activity summary |
 | `tools_used` | int | Tool-call count seen so far |
 | `files_changed` | int | File-write count seen so far |
-| `stdin_pipe_ready` | bool | true only when a soft-stdin bridge is active; current Codex runs keep it false |
+| `stdin_pipe_ready` | bool | true only when a soft-stdin bridge is active; current Codex and agy runs keep it false |
 | `ts` | string | RFC3339 timestamp |
 | `dispatch_id` | string | Dispatch ID |
 | `session_id` | string | Harness session ID (available once engine emits init event) |
@@ -175,12 +175,13 @@ a unique prefix. Both argument orderings work: `steer <id> <action>` and
 | Codex | Inbox + `codex exec resume` | FIFO disabled because child stdin is an EOF reader; `stdin_pipe_ready` is false, so CLI routes to inbox |
 | Claude | Inbox + resume/restart through `ResumeArgs()` | Loop restarts harness when inbox messages are pending |
 | Gemini | Inbox + resume/restart through `ResumeArgs()` | Same resume/restart pattern as Claude |
+| agy | Inbox + `agy --conversation <id>` | Conversation ID is discovered from `<artifact_dir>/agy.log`; no FIFO/live stdin; nudge/redirect are resume-backed restarts, not live interrupts |
 
 > **Note (codex-cli 0.121+):** Codex FIFO delivery is disabled. `steer
 > nudge|redirect` falls back to inbox + `codex exec resume`, which can only be
 > delivered after the current turn reaches a safe boundary or the run exits.
 
-For Claude and Gemini, steering is NOT passive inbox delivery — it actively
+For Claude, Gemini, and agy, steering is NOT passive inbox delivery — it actively
 resumes/restarts the session with the steering message. If a tool is currently
 executing, the restart is deferred until the tool completes (or until
 `engine_opts.max_steer_wait_seconds` is exceeded, whichever comes first).
@@ -217,10 +218,10 @@ agent-mux steer 01K... nudge "Summarize what you have so far"
 
 Delivery order:
 
-1. `stdin_fifo` only when `status.stdin_pipe_ready=true` and host PID is live
-2. inbox fallback for everything else
+1. `stdin_fifo` only when a Codex run has `status.stdin_pipe_ready=true` and host PID is live
+2. inbox fallback only when the engine supports resume
 
-Current Codex runs keep `stdin_pipe_ready=false`, so nudge uses inbox.
+Current Codex and agy runs keep `stdin_pipe_ready=false`; both fall back to inbox/resume once a resumable session ID is available. For agy, that session ID is the Antigravity conversation ID discovered from `agy.log`.
 
 Inbox fallback writes `[NUDGE] <message>`.
 
@@ -246,8 +247,8 @@ Typical JSON response:
 
 | Mechanism | When used |
 |-----------|-----------|
-| `stdin_fifo` | Live runs with `stdin_pipe_ready=true`; current Codex does not enable it |
-| `inbox` | Fallback path for `nudge` and `redirect`; triggers resume/restart for Codex, Claude, and Gemini |
+| `stdin_fifo` | Live Codex runs with `stdin_pipe_ready=true`; current Codex does not enable it |
+| `inbox` | Fallback path for `signal`, `nudge`, and `redirect` only when the engine supports resume |
 | `sigterm` | `abort` when host PID is alive |
 | `control_file` | `abort` fallback |
 
@@ -255,7 +256,7 @@ Typical JSON response:
 
 ## Signal Flag
 
-`--signal` is a convenience write to the inbox:
+`--signal` is a convenience write to the inbox for resume-capable engines:
 
 ```bash
 agent-mux --signal 01K... "Focus on auth paths only" 2>/dev/null

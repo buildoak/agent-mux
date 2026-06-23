@@ -23,7 +23,7 @@ Quickstart:
   agent-mux result <dispatch_id> --json
 
 Key flags:
-  -E, --engine       Engine: codex, claude, gemini
+  -E, --engine       Engine: {{VALID_ENGINES}}
   -P, --profile      Profile / prompt file
   -e, --effort       Effort: low, medium, high (default when omitted)
   -m, --model        Model override (engine-specific)
@@ -59,8 +59,8 @@ Steer actions (both arg orderings work):
 
   Actions:
     abort                     Kill the running dispatch
-    nudge ["message"]         Send a wrap-up nudge
-    redirect "<instructions>" Redirect the worker mid-flight
+    nudge ["message"]         Send a wrap-up nudge (resume-capable engines only)
+    redirect "<instructions>" Redirect the worker mid-flight (resume-capable engines only)
 
 Other control paths:
   agent-mux --signal <dispatch_id> "<message>"
@@ -72,9 +72,10 @@ Literal prompt escape:
 `
 
 func emitTopLevelHelp(stdout io.Writer) int {
+	usage := strings.ReplaceAll(topLevelHelpText, "{{VALID_ENGINES}}", validEngineCSV())
 	emitResult(stdout, map[string]any{
 		"kind":  "help",
-		"usage": strings.TrimSpace(topLevelHelpText),
+		"usage": strings.TrimSpace(usage),
 	})
 	return 0
 }

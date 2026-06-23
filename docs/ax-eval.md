@@ -166,6 +166,46 @@ go test -tags axeval -timeout 600s ./tests/axeval/
 go test -tags axeval -timeout 300s -run 'TestAxEval/complete-simple' ./tests/axeval/
 go test -tags axeval -timeout 300s -run TestLifecycleListStatusInspect ./tests/axeval/
 ```
+### Deterministic Agy Contract Tests
+The agy AX contract tests install a fake `agy` binary at the front of `PATH`.
+They do not call a live provider and are safe to run without credentials:
+```bash
+go test -tags axeval -timeout 120s -run 'TestAgyFakeBinary|TestAgyLiveContractRequiresExplicitOptIn' ./tests/axeval/
+```
+These tests cover plain stdout success, empty stdout failure classification
+(`harness_empty_output`), session ID discovery from `agy.log`, and resume
+delivery via `--conversation` after `agent-mux steer nudge`.
+Live agy provider contract checks are deny-by-default and require the explicit
+`AX_EVAL_AGY_LIVE=1` opt-in. The live test refreshes the agy model cache with
+`agent-mux config engines --refresh-models --json`, verifies the selected model
+is listed, runs a live agy dispatch, checks session persistence in `metadata`
+and `status.json`, and then probes native `agy --conversation` resume. The
+default live model is `Gemini 3.5 Flash (Low)`; override with
+`AX_EVAL_AGY_MODEL='<model name>'`.
+
+```bash
+AX_EVAL_AGY_LIVE=1 go test -tags axeval -timeout 300s -run TestAgyLiveContractRequiresExplicitOptIn ./tests/axeval/
+```
+
+Two higher-cost live agy gates are separate because they are more provider- and
+tool-behavior-sensitive:
+
+```bash
+AX_EVAL_AGY_LIVE_ASYNC=1 go test -tags axeval -timeout 300s -run TestAgyLiveAsyncSteerRequiresExplicitOptIn ./tests/axeval/
+AX_EVAL_AGY_LIVE_MULTIMODAL=1 go test -tags axeval -timeout 420s -run TestAgyLiveMultimodalAndImageGenerationRequiresExplicitOptIn ./tests/axeval/
+```
+
+The async gate starts a real `agent-mux --async` agy dispatch, waits for a
+conversation ID in `agy.log`, sends `steer nudge`, waits for the resumed result,
+and checks final `status.json.session_id`. The multimodal/image gate creates a
+PDF and PNG fixture in the dispatch cwd, asks agy to read them, asks agy to
+generate `generated-banana.png`, and verifies the file exists.
+
+Live agy prerequisites: local `agy` binary installed, authenticated, network/provider access available, and expected provider cost/quota accepted. `AX_EVAL_AGY_LIVE_ASYNC` and `AX_EVAL_AGY_LIVE_MULTIMODAL` do not refresh the model cache themselves; run the base live gate or `agent-mux config engines --refresh-models --json` first when using `AX_EVAL_AGY_MODEL`.
+
+The multimodal/image gate is a smoke test: it verifies the exact sentinel response and that `generated-banana.png` exists and is non-empty. It does not validate visual quality or structured image-generation telemetry.
+
+The deterministic suite intentionally does not set any live agy opt-in variable.
 ### Reports
 ```bash
 AX_EVAL_REPORT_DIR=./eval-reports go test -tags axeval ./tests/axeval/

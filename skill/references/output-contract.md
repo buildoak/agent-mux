@@ -80,7 +80,7 @@ Present when `status` is `failed`.
 {
   "code": "engine_not_found",
   "message": "Engine \"bogus\" not found.",
-  "hint": "Valid engines: [codex, claude, gemini]",
+  "hint": "Valid engines: [agy, claude, codex, gemini]",
   "example": "",
   "retryable": true,
   "partial_artifacts": []
@@ -113,6 +113,8 @@ Present when `status` is `failed`.
 | `model` | string | Model used |
 | `profile` | string | Profile name (from `DispatchAnnotations`) |
 | `skills` | string[] | Injected skill names |
+
+Engine caveat: agy does not expose structured activity, token, cache, or cost telemetry through agent-mux. For agy, expect empty activity arrays, zero/omitted token fields, and `cost_usd: 0`. Multimodal and image-generation outputs are verified through final artifact scanning or named files, not through tool/file events.
 | `tokens` | object | Token usage |
 | `turns` | int | Conversation turns |
 | `cost_usd` | float | Estimated cost |
@@ -365,7 +367,7 @@ artifact dir via `_dispatch_ref.json`.
 | `last_activity` | string | Most recent activity summary |
 | `tools_used` | int | Tool-call count |
 | `files_changed` | int | File-write count |
-| `stdin_pipe_ready` | bool | true only when a soft-stdin bridge is active; current Codex runs keep it false |
+| `stdin_pipe_ready` | bool | true only when a soft-stdin bridge is active; current Codex and agy runs keep it false |
 | `ts` | string | Timestamp of this status snapshot |
 | `dispatch_id` | string | Dispatch ID |
 | `session_id` | string | Harness session ID |
@@ -377,7 +379,7 @@ artifact dir via `_dispatch_ref.json`.
 
 ## Signal Ack
 
-`agent-mux --signal <id> "message"` returns:
+`agent-mux --signal <id> "message"` returns this acknowledgement when the target engine supports resume-based inbox delivery:
 
 ```json
 {

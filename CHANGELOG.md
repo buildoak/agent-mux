@@ -2,7 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [3.5.0] - 2026-06-23
+
+### Added
+
+- **Agy engine support** — added experimental CLI-first dispatch through the local `agy` binary with plain-stdout response handling, private `agy.log` diagnostics, artifact scanning, and fixed internal `agy --sandbox` invocation.
+- **Agy resume and steering** — agent-mux now discovers Antigravity conversation IDs from `agy.log`, persists them into result/status metadata, and delivers agy `nudge`, `redirect`, and `--signal` through inbox + `agy --conversation` resume. This is resume-backed delivery, not a live interrupt.
+- **Agy model discovery cache** — `agent-mux config engines --refresh-models --json` explicitly refreshes the agy model allowlist from `agy models` and writes `~/.agent-mux/cache/agy-models.json` atomically. Normal config/preflight/dispatch paths use a valid cache when present and otherwise fall back to deterministic built-ins without invoking `agy`.
+- **Agy AX coverage** — added deterministic fake-`agy` tests plus opt-in live gates for live dispatch/resume, live async steer/resume, and PDF/PNG multimodal plus image-generation smoke coverage.
+- **Agy documentation surface** — added `docs/agy.md` and updated README, architecture, config, engines, steering, prompting, AX, skill, and operator references with the agy contract and caveats.
+
+### Changed
+
+- **Async terminal status preservation** — async finalization now preserves richer loop-written `status.json` fields such as `session_id`, activity counters, and stdin readiness instead of overwriting them with a minimal terminal status.
+
+### Fixed
+
+- **Agy preflight and option handling** — agy dispatches now preflight before preview or launch, reject explicit unsupported portable sandbox/permission/reasoning/max-turn/full-access options, and keep provider diagnostics out of user-visible structured errors.
 
 ## [3.4.1] - 2026-04-19
 

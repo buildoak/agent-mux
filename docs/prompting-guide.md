@@ -1,6 +1,6 @@
 # Prompting Guide
 
-agent-mux dispatch quality is a direct function of prompt specificity. This guide covers how to write prompts that produce clean results across all three engines.
+agent-mux dispatch quality is a direct function of prompt specificity. This guide covers how to write prompts that produce clean results across Codex, Claude, Gemini, and experimental agy.
 
 The core rule: prompt the task, not the tool. The worker already has the harness, the artifact directory, and any injected skills. Your prompt should specify what to do, with what scope, and how to prove it worked.
 
@@ -148,6 +148,31 @@ Gemini CLI supports tool calls (`read_file`, `write_file`, `replace`, `shell`), 
 
 Gemini does not support the `--effort` / `--reasoning` flag. Setting it on a Gemini dispatch logs a warning and the value is ignored. To control thinking depth on Gemini, select an appropriate model (`gemini-3.1-pro-preview` for deeper reasoning, `gemini-3-flash-preview` for speed).
 
+## Agy Prompting
+
+Agy is CLI-first model access through Antigravity. Treat it as a plain-stdout worker with local file access, not as a structured event stream.
+
+### Best uses
+
+- Access to the local agy model roster, including non-Gemini models exposed by `agy models`
+- Multimodal or image-generation smoke tasks where the local agy provider/model supports them
+- Contrast checks through an engine that differs from Codex/Claude/Gemini CLI
+
+### Recommended shape
+
+```text
+Read sample.pdf and inspect red.png in the current working directory.
+Create generated-banana.png in the current working directory.
+Reply exactly:
+AGY_DONE <short finding>
+```
+
+Use exact model names from `agent-mux config engines --json`. If image generation matters, ask for a named output file and verify that file exists. If the task needs files outside cwd, use `--add-dir` or set an appropriate cwd.
+
+### Limitations
+
+Agy output is captured as plain stdout. Do not expect structured tool calls, file-read/file-write events, token usage, cache usage, or cost telemetry. Agy does not support portable `--permission-mode`, `--reasoning`, `--max-turns`, full-access toggles, or operator-supplied sandbox values through agent-mux. Steering is resume-backed inbox delivery after a conversation ID appears in `agy.log`, not live stdin.
+
 ## Context-Loading Tools
 
 ### --skill (JSON: "skills")
@@ -194,11 +219,11 @@ Re-explain the entire project and restate the old run from scratch.
 
 ## Signal Phrasing
 
-`--signal` always writes to the steering inbox. Keep the message to one crisp sentence.
+`--signal` writes to the steering inbox only for resume-capable engines. Keep the message to one crisp sentence.
 
 The ack confirms the inbox write, not delivery. Consumption waits for an event boundary or inbox poll tick, and on resume-capable adapters the next injection becomes a resumed turn.
 
-For stronger mid-flight steering, use `steer redirect`. On live Codex runs on FIFO-capable platforms it prefers `stdin.pipe`; otherwise it falls back to the same inbox/resume path.
+For stronger mid-flight steering, use `steer redirect`. On live Codex runs on FIFO-capable platforms it prefers `stdin.pipe`; otherwise it falls back to the same inbox/resume path when the engine supports resume.
 
 Good:
 

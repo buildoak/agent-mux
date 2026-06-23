@@ -24,11 +24,11 @@ import (
 
 // errorScenario defines a realistic error scenario for L1 testing.
 type errorScenario struct {
-	Name             string
-	ErrorCode        string
-	OriginalCommand  string
-	ErrorJSON        string // pre-built error JSON the agent sees
-	ChecklistItems   string // what the judge checks for in the corrected command
+	Name            string
+	ErrorCode       string
+	OriginalCommand string
+	ErrorJSON       string // pre-built error JSON the agent sees
+	ChecklistItems  string // what the judge checks for in the corrected command
 }
 
 // buildErrorScenarios constructs test scenarios from the ErrorCatalog.
@@ -37,12 +37,12 @@ func buildErrorScenarios() []errorScenario {
 		{
 			Name:            "engine-not-found",
 			ErrorCode:       "engine_not_found",
-			OriginalCommand: `agent-mux -e openai --cwd /repo "Fix the bug in parser.go"`,
+			OriginalCommand: `agent-mux -E openai --cwd /repo "Fix the bug in parser.go"`,
 			ErrorJSON: mustMarshalError("engine_not_found", "Unknown engine name.",
-				"agent-mux only supports the built-in engines codex, claude, and gemini.",
-				"Retry with a valid engine. Example: agent-mux -e codex --cwd /repo \"<prompt>\".",
+				"agent-mux only supports the built-in engines agy, claude, codex, and gemini.",
+				"Retry with a valid engine. Example: agent-mux -E codex --cwd /repo \"<prompt>\".",
 				true),
-			ChecklistItems: `1. Does the corrected command use a valid engine (codex, claude, or gemini)?
+			ChecklistItems: `1. Does the corrected command use a valid engine (agy, claude, codex, or gemini)?
 2. Does the corrected command preserve the original prompt intent?
 3. Does the corrected command include --cwd?
 4. Is the corrected command syntactically valid?
@@ -51,10 +51,10 @@ func buildErrorScenarios() []errorScenario {
 		{
 			Name:            "model-not-found",
 			ErrorCode:       "model_not_found",
-			OriginalCommand: `agent-mux -e codex -m gpt-4-turbo --cwd /repo "Scan for SQL injection"`,
+			OriginalCommand: `agent-mux -E codex -m gpt-4-turbo --cwd /repo "Scan for SQL injection"`,
 			ErrorJSON: mustMarshalError("model_not_found", "Unknown model for engine.",
 				"The selected model is not available for the current engine.",
-				"Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
+				"Retry with a supported model. Example: agent-mux -E codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
 				true),
 			ChecklistItems: `1. Does the corrected command use a valid model for the codex engine (e.g., gpt-5.4, gpt-5.4-mini)?
 2. Does the corrected command keep the same engine (codex)?
@@ -65,10 +65,10 @@ func buildErrorScenarios() []errorScenario {
 		{
 			Name:            "invalid-args-missing-cwd",
 			ErrorCode:       "invalid_args",
-			OriginalCommand: `agent-mux -e codex "Fix failing tests"`,
+			OriginalCommand: `agent-mux -E codex "Fix failing tests"`,
 			ErrorJSON: mustMarshalError("invalid_args", "Invalid dispatch arguments.",
 				"The dispatch request is missing required fields or contains invalid flag combinations.",
-				"Provide a valid engine, prompt, and working directory. Example: agent-mux -e codex --cwd /repo \"Fix failing test\".",
+				"Provide a valid engine, prompt, and working directory. Example: agent-mux -E codex --cwd /repo \"Fix failing test\".",
 				true),
 			ChecklistItems: `1. Does the corrected command include --cwd with a directory path?
 2. Does the corrected command preserve the original engine and prompt?
@@ -78,7 +78,7 @@ func buildErrorScenarios() []errorScenario {
 		{
 			Name:            "killed-by-user-rerun",
 			ErrorCode:       "killed_by_user",
-			OriginalCommand: `agent-mux -e codex --cwd /repo "Analyze every file in this repository and write comprehensive documentation"`,
+			OriginalCommand: `agent-mux -E codex --cwd /repo "Analyze every file in this repository and write comprehensive documentation"`,
 			ErrorJSON: mustMarshalError("killed_by_user",
 				"Process was terminated by an external signal.",
 				"Process was terminated by an external signal (SIGTERM/SIGKILL). This is not a worker failure — the process was killed by the operator or the OS.",
@@ -106,7 +106,7 @@ func buildErrorScenarios() []errorScenario {
 		{
 			Name:            "max-depth-exceeded",
 			ErrorCode:       "max_depth_exceeded",
-			OriginalCommand: `agent-mux -e codex --cwd /repo --allow-subdispatch "Recursively analyze all modules"`,
+			OriginalCommand: `agent-mux -E codex --cwd /repo --allow-subdispatch "Recursively analyze all modules"`,
 			ErrorJSON: mustMarshalError("max_depth_exceeded",
 				"Max dispatch depth reached.",
 				"This task tried to spawn more nested dispatches than the configured safety limit allows.",
@@ -120,7 +120,7 @@ func buildErrorScenarios() []errorScenario {
 		{
 			Name:            "startup-failed",
 			ErrorCode:       "startup_failed",
-			OriginalCommand: `agent-mux -e gemini --cwd /repo "Research market trends"`,
+			OriginalCommand: `agent-mux -E gemini --cwd /repo "Research market trends"`,
 			ErrorJSON: mustMarshalError("startup_failed",
 				"Harness process failed to start.",
 				"The harness process failed before a working session started.",
@@ -183,11 +183,11 @@ Write the corrected command on its own line starting with "CORRECTED: ".`, sc.Or
 
 			// Step 2: Judge whether the correction is valid.
 			materials := &AXMaterials{
-				AgentPrompt:    agentPrompt,
-				AgentResponse:  agentResponse,
-				ReferenceDoc:   contract,
+				AgentPrompt:     agentPrompt,
+				AgentResponse:   agentResponse,
+				ReferenceDoc:    contract,
 				OriginalCommand: sc.OriginalCommand,
-				ErrorPayload:   sc.ErrorJSON,
+				ErrorPayload:    sc.ErrorJSON,
 			}
 
 			checklist := fmt.Sprintf(`Error code: %s

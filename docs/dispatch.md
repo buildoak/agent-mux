@@ -13,9 +13,13 @@ The current CLI path is:
 6. Inject default `engine_opts` values for liveness and `permission-mode` when they were not set explicitly.
 7. Load skill prompts and skill `scripts/` directories unless `skip_skills` is true.
 8. Validate the context file path when `context_file` is set.
-9. If `recover` or `--recover` is set, replace `spec.Prompt` with `BuildRecoveryPrompt(...)`.
-10. Build preview output and, for interactive TTY use, optionally confirm before launch.
-11. Resolve the adapter, ensure the artifact directory exists, persist `meta.json`, write `_dispatch_ref.json`, and run the loop engine.
+9. Run engine preflight: adapter lookup, model whitelist validation, engine-specific option validation, and agy unsupported-option rejection.
+10. If `recover` or `--recover` is set, replace `spec.Prompt` with `BuildRecoveryPrompt(...)`.
+11. Evaluate pre-dispatch hooks.
+12. Build preview output and, for interactive TTY use, optionally confirm before launch.
+13. Ensure the artifact directory exists, persist `meta.json`, write `_dispatch_ref.json`, and run the loop engine.
+
+Preflight intentionally happens before preview output, confirmation, artifact persistence, event emission, and process launch. That means invalid engines, models, sandbox values, Gemini approval modes, or explicit unsupported agy options return structured failures without creating dispatch artifacts or starting a harness.
 
 Inside the loop engine, `dispatch.WithPromptPreamble` prepends runtime instructions for `$AGENT_MUX_CONTEXT` and `$AGENT_MUX_ARTIFACT_DIR` just before the adapter command is built.
 
@@ -50,7 +54,7 @@ These are the structured fields decoded directly into `types.DispatchSpec`, incl
 | JSON key | Type | Meaning |
 | --- | --- | --- |
 | `dispatch_id` | `string` | Stable dispatch identifier |
-| `engine` | `string` | `codex`, `claude`, or `gemini` |
+| `engine` | `string` | `agy`, `claude`, `codex`, or `gemini` |
 | `model` | `string` | Model override |
 | `effort` | `string` | Effort bucket |
 | `prompt` | `string` | Required user prompt |

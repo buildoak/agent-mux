@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -56,6 +57,7 @@ type runHandle struct {
 	proc       *supervisor.Process
 	stdout     io.ReadCloser
 	stdinPipe  io.WriteCloser
+	rawStdout  *bytes.Buffer
 	streamDone chan struct{}
 	procDone   chan error
 }
@@ -125,6 +127,15 @@ func (e *LoopEngine) scanHarnessOutput(stdout io.Reader, runGen uint64, artifact
 	}
 }
 
+func (e *LoopEngine) captureRawStdout(stdout io.Reader, rawStdout *bytes.Buffer, runGen uint64, signals chan<- loopSignal) {
+	if rawStdout == nil {
+		rawStdout = &bytes.Buffer{}
+	}
+	if _, err := io.Copy(rawStdout, stdout); err != nil && !isIgnorableStreamScanErr(err) {
+		signals <- loopSignal{kind: loopSignalScanError, runGen: runGen, err: err}
+	}
+}
+
 func isIgnorableStreamScanErr(err error) bool {
 	if err == nil {
 		return false
@@ -172,6 +183,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	}
 	dispatchSpec := *spec
 	dispatchSpec.Prompt = dispatch.WithPromptPreamble(dispatchSpec.Prompt, &dispatchSpec)
+	runtimePolicy := types.ResolveAdapterRuntimePolicy(spec.Engine, e.adapter)
 
 	metadata := &types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Profile: e.annotations.Profile, Skills: append([]string(nil), e.annotations.Skills...), Tokens: &types.TokenUsage{}}
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
@@ -434,23 +446,16 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		if err != nil {
 			return nil, nil, fmt.Errorf("set up stdout pipe for %s: %w", runBinary, err)
 		}
-		// codex ≥0.121 drains its stdin to EOF before processing the prompt
-		// (upstream PR openai/codex#15917). Attaching an open, unwritten pipe
-		// makes codex block forever in read(2). Wire an already-EOF reader so
-		// the drain completes immediately; skip the StdinPipe so nothing tries
-		// to write into a discarded channel. Soft-steer (FIFO → stdin) is
-		// therefore unavailable for codex; a future version of agent-mux will
-		// wire inbox.md as an out-of-band steering channel instead.
 		var stdinPipe io.WriteCloser
-		if spec.Engine == "codex" {
-			cmd.Stdin = strings.NewReader("")
-			stdinPipe = nil
-		} else {
+		if runtimePolicy.HasWritableStdin() {
 			stdinPipe, err = cmd.StdinPipe()
 			if err != nil {
 				_ = stdout.Close()
 				return nil, nil, fmt.Errorf("set up stdin pipe for %s: %w", runBinary, err)
 			}
+		} else {
+			cmd.Stdin = strings.NewReader("")
+			stdinPipe = nil
 		}
 		var stderrBuf strings.Builder
 		cmd.Stderr = &stderrBuf
@@ -466,6 +471,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			proc:       proc,
 			stdout:     stdout,
 			stdinPipe:  stdinPipe,
+			rawStdout:  &bytes.Buffer{},
 			streamDone: make(chan struct{}),
 			procDone:   make(chan error, 1),
 		}
@@ -478,6 +484,10 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		}
 		go func(run *runHandle) {
 			defer close(run.streamDone)
+			if runtimePolicy.UsesPlainStdout() {
+				e.captureRawStdout(run.stdout, run.rawStdout, runGen, signals)
+				return
+			}
 			e.scanHarnessOutput(run.stdout, runGen, spec.ArtifactDir, signals)
 		}(run)
 		go func() {
@@ -634,7 +644,21 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		mu.Lock()
 		sid := sessionID
+		statusToolsUsed := toolsUsedCount
+		statusFilesChanged := filesChangedCount
 		mu.Unlock()
+		if sid == "" {
+			discoveredSessionID, err := discoverAdapterSessionID(e.adapter, spec)
+			if err != nil {
+				_ = emitter.EmitError("session_discovery_failed", fmt.Sprintf("Discover resumable session ID: %v", err))
+			} else if discoveredSessionID != "" {
+				sid = discoveredSessionID
+				mu.Lock()
+				sessionID = discoveredSessionID
+				mu.Unlock()
+				persistObservedSession(spec.ArtifactDir, spec.DispatchID, startTime, discoveredSessionID, "session discovered", statusToolsUsed, statusFilesChanged, stdinPipeReady)
+			}
+		}
 		if sid == "" {
 			if alreadyExited {
 				startRestartFailure("resume_session_missing", "Coordinator injection arrived before the harness reported a resumable session ID.", "Ensure the harness emits a session start event before becoming idle or exiting.")
@@ -688,6 +712,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		restarting = false
 		mu.Lock()
 		lastActivity = time.Now()
+		if runtimePolicy.UsesPlainStdout() {
+			runReadyForRestart = true
+		}
 		mu.Unlock()
 		updateActivity("resumed session")
 		return true
@@ -753,11 +780,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		stdinPipeReady = false
 	}
 
-	// Skip the soft-stdin FIFO bridge for codex: there is no writable child
-	// stdin to forward envelopes into (see startRun above), and leaving
-	// stdin_pipe_ready=false correctly routes `steer nudge/redirect` through
-	// the inbox/resume fallback in cmd/agent-mux/steer.go tryFIFOInject.
-	if spec.Engine != "codex" {
+	if runtimePolicy.HasWritableStdin() {
 		if bridge, err := startSoftStdinBridge(spec.ArtifactDir, signals); err == nil {
 			stdinBridge = bridge
 			stdinPipeReady = true
@@ -780,6 +803,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			err.Error(),
 			"Check that the binary is installed and accessible.",
 		), nil
+	}
+	if runtimePolicy.UsesPlainStdout() {
+		runReadyForRestart = true
 	}
 
 	watchdogTicker := time.NewTicker(5 * time.Second)
@@ -832,7 +858,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		case <-softTimer:
 			softTimedOut = true
 			_ = emitter.EmitTimeoutWarning(fmt.Sprintf("Soft timeout reached. Grace period: %ds.", spec.GraceSec))
-			_ = steer.WriteInbox(spec.ArtifactDir, "Soft timeout reached. Wrap up your current work, write any final artifacts to $AGENT_MUX_ARTIFACT_DIR, and return a summary of what you completed and what remains.")
+			if runtimePolicy.SupportsSoftTimeoutWrapup() {
+				_ = steer.WriteInbox(spec.ArtifactDir, "Soft timeout reached. Wrap up your current work, write any final artifacts to $AGENT_MUX_ARTIFACT_DIR, and return a summary of what you completed and what remains.")
+			}
 			if gracePeriod > 0 {
 				softTimer = nil
 				hardTimer = time.After(gracePeriod)
@@ -921,6 +949,9 @@ buildResult:
 	if response == "" {
 		response = lastProgressText
 	}
+	if runtimePolicy.UsesPlainStdout() && currentRun != nil && currentRun.rawStdout != nil {
+		response = currentRun.rawStdout.String()
+	}
 	errEvt := lastError
 	tokens := totalTokens
 	resolvedModel := actualModel
@@ -929,6 +960,18 @@ buildResult:
 	act := activity
 	haveFinalResponse := sawResponse
 	mu.Unlock()
+
+	if sid == "" {
+		discoveredSessionID, err := discoverAdapterSessionID(e.adapter, spec)
+		if err != nil {
+			if emitter != nil {
+				_ = emitter.EmitError("session_discovery_failed", fmt.Sprintf("Discover completed session ID: %v", err))
+			}
+		} else if discoveredSessionID != "" {
+			sid = discoveredSessionID
+			_ = dispatch.UpdateDispatchSessionID(spec.ArtifactDir, discoveredSessionID)
+		}
+	}
 
 	if tokens == nil {
 		tokens = &types.TokenUsage{}
@@ -951,7 +994,7 @@ buildResult:
 		if dispatchErr != nil {
 			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
 		}
-		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), false)), nil
+		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), false, runtimePolicy.FailureContextMode)), nil
 
 	case "interrupted":
 		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError("interrupted", "Dispatch interrupted by caller cancellation.", "")), nil
@@ -959,6 +1002,13 @@ buildResult:
 	default:
 		if dispatchErr != nil {
 			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
+		}
+		if runtimePolicy.RequireNonEmptyResponse && strings.TrimSpace(response) == "" {
+			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError(
+				"harness_empty_output",
+				"Harness exited successfully but produced no stdout response.",
+				"Ensure the adapter writes the final response to stdout, or disable the non-empty response policy for this engine.",
+			)), nil
 		}
 		if parseErrorCount > 0 && missingFinalResponse(response, haveFinalResponse) {
 			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError(
@@ -968,6 +1018,9 @@ buildResult:
 			)), nil
 		}
 		if softTimedOut {
+			if !runtimePolicy.SupportsSoftTimeoutWrapup() {
+				return finalizeTimedOut(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
+			}
 			return finalizeCompleted(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
 		}
 
@@ -976,7 +1029,7 @@ buildResult:
 		}
 
 		if procErr != nil {
-			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), true)), nil
+			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), true, runtimePolicy.FailureContextMode)), nil
 		}
 		return finalizeCompleted(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
 	}
@@ -1009,6 +1062,7 @@ func finalizeCompleted(spec *types.DispatchSpec, annotations types.DispatchAnnot
 		FilesChanged:   len(activity.FilesChanged),
 		StdinPipeReady: false,
 		DispatchID:     spec.DispatchID,
+		SessionID:      metadataSessionID(metadata),
 	})
 	emitResponseTruncated(emitter, result)
 	if emitter != nil {
@@ -1029,6 +1083,7 @@ func finalizeTimedOut(spec *types.DispatchSpec, annotations types.DispatchAnnota
 		FilesChanged:   len(activity.FilesChanged),
 		StdinPipeReady: false,
 		DispatchID:     spec.DispatchID,
+		SessionID:      metadataSessionID(metadata),
 	})
 	emitResponseTruncated(emitter, result)
 	if emitter != nil {
@@ -1051,6 +1106,7 @@ func finalizeFailed(spec *types.DispatchSpec, annotations types.DispatchAnnotati
 		FilesChanged:   len(activity.FilesChanged),
 		StdinPipeReady: false,
 		DispatchID:     spec.DispatchID,
+		SessionID:      metadataSessionID(metadata),
 	})
 	emitResponseTruncated(emitter, result)
 	if emitter != nil {
@@ -1123,7 +1179,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func failureFromEventOrProcess(errEvt *types.HarnessEvent, proc *supervisor.Process, stderr string, includeExitPrefix bool) *types.DispatchError {
+func failureFromEventOrProcess(errEvt *types.HarnessEvent, proc *supervisor.Process, stderr string, includeExitPrefix bool, failureContext types.AdapterFailureContextMode) *types.DispatchError {
 	if errEvt != nil {
 		return dispatch.NewDispatchError(errEvt.ErrorCode, errEvt.Text, "")
 	}
@@ -1133,7 +1189,7 @@ func failureFromEventOrProcess(errEvt *types.HarnessEvent, proc *supervisor.Proc
 		base = fmt.Sprintf("Exit code %d.", exitCode)
 	}
 	tail := ""
-	if strings.TrimSpace(stderr) != "" {
+	if failureContext != types.AdapterFailureContextPrivateDiagnostics && strings.TrimSpace(stderr) != "" {
 		lines := strings.Split(stderr, "\n")
 		if len(lines) > 5 {
 			lines = lines[len(lines)-5:]
@@ -1351,6 +1407,25 @@ func persistObservedSession(artifactDir, dispatchID string, startTime time.Time,
 	}
 	_ = dispatch.UpdateDispatchSessionID(artifactDir, sessionID)
 	_ = writeRunningStatus(artifactDir, dispatchID, sessionID, startTime, lastActivity, toolsUsed, filesChanged, stdinPipeReady)
+}
+
+func discoverAdapterSessionID(adapter types.HarnessAdapter, spec *types.DispatchSpec) (string, error) {
+	discoverer, ok := adapter.(types.AdapterSessionDiscoverer)
+	if !ok {
+		return "", nil
+	}
+	sessionID, err := discoverer.DiscoverSessionID(spec)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(sessionID), nil
+}
+
+func metadataSessionID(metadata *types.DispatchMetadata) string {
+	if metadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(metadata.SessionID)
 }
 
 func bytesTrimSpace(line []byte) []byte {

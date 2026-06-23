@@ -15,7 +15,7 @@ Successful output is human-readable by default. Failures are emitted as JSON env
 ## `list`
 
 ```bash
-agent-mux list [--limit N] [--status completed|failed|timed_out] [--engine codex|claude|gemini] [--json]
+agent-mux list [--limit N] [--status completed|failed|timed_out] [--engine agy|claude|codex|gemini] [--json]
 ```
 
 - Reads dispatch records from `DispatchesDir()`, which resolves to `~/.agent-mux/dispatches/`.

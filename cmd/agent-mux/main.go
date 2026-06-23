@@ -31,7 +31,7 @@ import (
 	"golang.org/x/term"
 )
 
-const version = "agent-mux v3.4.2"
+const version = "agent-mux v3.5.0"
 const contextFilePromptPreamble = "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting."
 
 type cliCommand string
@@ -247,6 +247,15 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 			return 1
 		}
 		msg := positional[0]
+		supported, engineName, supportErr := supportsInboxSteer(resolved.ArtifactDir)
+		if supportErr != nil {
+			emitResult(stdout, buildSignalErrorAck(flags.signal, "steer_unsupported", supportErr.Error(), "Use `agent-mux steer <id> abort` to stop it, or wait for completion and rerun with updated instructions."))
+			return 1
+		}
+		if !supported {
+			emitResult(stdout, buildSignalErrorAck(flags.signal, "steer_unsupported", fmt.Sprintf("engine %q does not support resume-based inbox delivery", engineName), "Use `agent-mux steer <id> abort` to stop it, or wait for completion and rerun with updated instructions."))
+			return 1
+		}
 		if err := steer.WriteInbox(resolved.ArtifactDir, msg); err != nil {
 			emitResult(stdout, buildSignalErrorAck(flags.signal, "config_error", err.Error(), "Ensure the inbox path is writable and retry."))
 			return 1
@@ -279,7 +288,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		if err := validateDispatchFlags(flags, flagsSet); err != nil {
 			return emitFailureResult(stdout, &types.DispatchSpec{}, 1, "invalid_input", err.Error(), "")
 		}
-		req, err = buildDispatchSpecE(flags, positional)
+		req, err = buildDispatchSpecE(flags, positional, flagsSet)
 		if err != nil {
 			return emitFailureResult(stdout, &types.DispatchSpec{}, 1, "invalid_args", err.Error(), "")
 		}
@@ -289,12 +298,15 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	applyPreset := func(engine, model, effort string) {
 		if !flagsSet["engine"] && !flagsSet["E"] && engine != "" {
 			spec.Engine = engine
+			setOptionSource(spec, "engine", "profile")
 		}
 		if !flagsSet["model"] && !flagsSet["m"] && model != "" {
 			spec.Model = model
+			setOptionSource(spec, "model", "profile")
 		}
 		if !flagsSet["effort"] && !flagsSet["e"] && effort != "" {
 			spec.Effort = effort
+			setOptionSource(spec, "effort", "profile")
 		}
 	}
 
@@ -307,21 +319,26 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		if flags.stdin {
 			if spec.Engine == "" && coordSpec.Engine != "" {
 				spec.Engine = coordSpec.Engine
+				setOptionSource(spec, "engine", "profile")
 			}
 			if spec.Model == "" && coordSpec.Model != "" {
 				spec.Model = coordSpec.Model
+				setOptionSource(spec, "model", "profile")
 			}
 			if spec.Effort == "" && coordSpec.Effort != "" {
 				spec.Effort = coordSpec.Effort
+				setOptionSource(spec, "effort", "profile")
 			}
 		} else {
 			applyPreset(coordSpec.Engine, coordSpec.Model, coordSpec.Effort)
 		}
 		if ((flags.stdin && spec.TimeoutSec == 0) || (!flags.stdin && !flagsSet["timeout"] && !flagsSet["t"])) && coordSpec.Timeout > 0 {
 			spec.TimeoutSec = coordSpec.Timeout
+			setOptionSource(spec, "timeout_sec", "profile")
 		}
 		if spec.SystemPrompt == "" && coordSpec.SystemPrompt != "" {
 			spec.SystemPrompt = coordSpec.SystemPrompt
+			setOptionSource(spec, "system_prompt", "profile")
 		}
 		req.DispatchAnnotations.Skills = append(coordSpec.Skills, req.DispatchAnnotations.Skills...)
 	}
@@ -329,18 +346,22 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	// Apply hardcoded defaults.
 	if spec.Effort == "" {
 		spec.Effort = "high"
+		setOptionSource(spec, "effort", "default")
 	}
 	if spec.MaxDepth == 0 {
 		spec.MaxDepth = config.MaxDepth()
+		setOptionSource(spec, "max_depth", "default")
 	}
 	if spec.TimeoutSec == 0 {
 		spec.TimeoutSec = config.DefaultTimeoutSec
+		setOptionSource(spec, "timeout_sec", "default")
 	}
 	if spec.GraceSec == 0 {
 		spec.GraceSec = spec.TimeoutSec / 2
 		if spec.GraceSec < 1 {
 			spec.GraceSec = 1
 		}
+		setOptionSource(spec, "grace_sec", "default")
 	}
 	if err := validateResolvedDispatchTimeouts(spec); err != nil {
 		return failResult(spec, "invalid_input", err.Error(), "")
@@ -352,12 +373,14 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	// Apply liveness defaults (hardcoded + env) when not set by dispatch spec.
 	if _, ok := spec.EngineOpts["heartbeat_interval_sec"]; !ok {
 		spec.EngineOpts["heartbeat_interval_sec"] = config.HeartbeatIntervalSec()
+		setOptionSource(spec, "heartbeat_interval_sec", "default")
 	}
 	// Apply default permission mode from env if not set by CLI.
 	if _, ok := spec.EngineOpts["permission-mode"]; !ok || spec.EngineOpts["permission-mode"] == "" {
 		if !flagsSet["permission-mode"] {
 			if pm := config.PermissionMode(); pm != "" {
 				spec.EngineOpts["permission-mode"] = pm
+				setOptionSource(spec, "permission-mode", "env")
 			}
 		}
 	}
@@ -373,11 +396,12 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		if len(pathDirs) > 0 {
 			existing := anySliceOrEmpty(spec.EngineOpts["add-dir"])
 			spec.EngineOpts["add-dir"] = append(pathDirs, existing...)
+			setOptionSource(spec, "add-dir", "skill")
 		}
 	}
 
 	if spec.Engine == "" {
-		return failResult(spec, "invalid_args", "No engine specified.", "Use --engine codex, --engine claude, or --engine gemini.")
+		return failResult(spec, "invalid_args", "No engine specified.", "Use --engine with one of: "+validEngineCSV()+".")
 	}
 
 	if spec.ContextFile != "" {
@@ -390,6 +414,21 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 			return failResult(spec, "config_error",
 				fmt.Sprintf("cannot stat context file %s: %v", spec.ContextFile, err), "")
 		}
+	}
+
+	if preflightErr := preflightDispatchSpec(spec); preflightErr != nil {
+		emitResult(stdout, dispatch.BuildFailedResult(
+			spec,
+			"",
+			preflightErr,
+			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
+			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Profile: req.DispatchAnnotations.Profile, Skills: append([]string(nil), req.DispatchAnnotations.Skills...), Tokens: &types.TokenUsage{}},
+			0,
+		))
+		if command == commandPreview {
+			return 1
+		}
+		return 0
 	}
 
 	recoverDispatchID := req.RecoverDispatchID
@@ -463,6 +502,45 @@ func anySliceOrEmpty(v any) []string {
 		return out
 	default:
 		return nil
+	}
+}
+
+func setOptionSource(spec *types.DispatchSpec, key, source string) {
+	if spec == nil || key == "" || source == "" {
+		return
+	}
+	if spec.OptionSources == nil {
+		spec.OptionSources = map[string]string{}
+	}
+	if _, exists := spec.OptionSources[key]; exists {
+		return
+	}
+	spec.OptionSources[key] = source
+}
+
+func setOptionSourceForce(spec *types.DispatchSpec, key, source string) {
+	if spec == nil || key == "" || source == "" {
+		return
+	}
+	if spec.OptionSources == nil {
+		spec.OptionSources = map[string]string{}
+	}
+	spec.OptionSources[key] = source
+}
+
+func optionSource(spec *types.DispatchSpec, key string) string {
+	if spec == nil || spec.OptionSources == nil {
+		return ""
+	}
+	return spec.OptionSources[key]
+}
+
+func optionSourceIsExplicit(spec *types.DispatchSpec, key string) bool {
+	switch optionSource(spec, key) {
+	case "cli", "stdin", "profile", "skill":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -698,6 +776,33 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 	if spec.DispatchID == "" {
 		spec.DispatchID = ulid.Make().String()
 	}
+	if spec.OptionSources == nil {
+		spec.OptionSources = map[string]string{}
+	}
+	for _, field := range []string{
+		"engine",
+		"model",
+		"effort",
+		"prompt",
+		"system_prompt",
+		"cwd",
+		"context_file",
+		"artifact_dir",
+		"timeout_sec",
+		"grace_sec",
+		"max_depth",
+		"depth",
+		"full_access",
+	} {
+		if jsonFieldSet(fields, field) {
+			setOptionSourceForce(spec, field, "stdin")
+		}
+	}
+	if jsonFieldSet(fields, "engine_opts") {
+		for key := range spec.EngineOpts {
+			setOptionSourceForce(spec, key, "stdin")
+		}
+	}
 
 	if strings.TrimSpace(spec.Prompt) == "" {
 		return errors.New("missing prompt: DispatchSpec.prompt is required in --stdin mode")
@@ -723,6 +828,7 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 
 	if !jsonFieldSet(fields, "full_access") {
 		spec.FullAccess = true
+		setOptionSourceForce(spec, "full_access", "default")
 	}
 	if jsonFieldSet(fields, "timeout_sec") {
 		if err := validatePositiveDispatchValue("timeout_sec", spec.TimeoutSec); err != nil {
@@ -999,7 +1105,7 @@ func newCLIFlagSet(name string) (*flag.FlagSet, *cliFlags) {
 	flags := newCLIFlags()
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 
-	bindStr(fs, &flags.engine, "Engine: codex, claude, gemini", "", "engine", "E")
+	bindStr(fs, &flags.engine, "Engine: "+validEngineCSV(), "", "engine", "E")
 	bindStr(fs, &flags.profile, "Profile / prompt file", "", "profile", "P")
 	bindStr(fs, &flags.cwd, "Working directory", "", "cwd", "C")
 	bindStr(fs, &flags.model, "Model override (engine-specific)", "", "model", "m")
@@ -1033,7 +1139,7 @@ func newCLIFlagSet(name string) (*flag.FlagSet, *cliFlags) {
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: agent-mux [dispatch] [flags] <prompt>\n\n")
 		fmt.Fprintf(fs.Output(), "Example:\n  agent-mux -P=auditor -E=codex -e=high -C=/repo \"Your prompt here\"\n\n")
-		fmt.Fprintf(fs.Output(), "Engines: codex, claude, gemini\n\n")
+		fmt.Fprintf(fs.Output(), "Engines: %s\n\n", validEngineCSV())
 		fmt.Fprintf(fs.Output(), "Note: use double-dash for long flags (--engine) or short alias (-E).\n")
 		fmt.Fprintf(fs.Output(), "The flag listing below shows Go's single-dash format, but both work.\n\n")
 		fmt.Fprintf(fs.Output(), "Flags:\n")
@@ -1049,7 +1155,11 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	return fs, flags
 }
 
-func buildDispatchSpecE(flags cliFlags, args []string) (*dispatchRequest, error) {
+func buildDispatchSpecE(flags cliFlags, args []string, flagsSetOpt ...map[string]bool) (*dispatchRequest, error) {
+	flagsSet := map[string]bool{}
+	if len(flagsSetOpt) > 0 && flagsSetOpt[0] != nil {
+		flagsSet = flagsSetOpt[0]
+	}
 	if flags.promptFile != "" && len(args) > 0 {
 		return nil, errors.New("prompt must come from either the first positional arg or --prompt-file, not both")
 	}
@@ -1129,6 +1239,44 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*dispatchRequest, error)
 		MaxDepth:     flags.maxDepth,
 		EngineOpts:   engineOpts,
 		FullAccess:   fullAccess,
+	}
+	spec.OptionSources = map[string]string{
+		"sandbox":         "default",
+		"reasoning":       "default",
+		"max-turns":       "default",
+		"add-dir":         "default",
+		"permission-mode": "default",
+		"full_access":     "default",
+	}
+	if flagsSet["engine"] || flagsSet["E"] {
+		setOptionSourceForce(spec, "engine", "cli")
+	}
+	if flagsSet["model"] || flagsSet["m"] {
+		setOptionSourceForce(spec, "model", "cli")
+	}
+	if flagsSet["effort"] || flagsSet["e"] {
+		setOptionSourceForce(spec, "effort", "cli")
+	}
+	if flagsSet["timeout"] || flagsSet["t"] {
+		setOptionSourceForce(spec, "timeout_sec", "cli")
+	}
+	if flagsSet["sandbox"] {
+		setOptionSourceForce(spec, "sandbox", "cli")
+	}
+	if flagsSet["reasoning"] || flagsSet["r"] {
+		setOptionSourceForce(spec, "reasoning", "cli")
+	}
+	if flagsSet["max-turns"] {
+		setOptionSourceForce(spec, "max-turns", "cli")
+	}
+	if flagsSet["permission-mode"] {
+		setOptionSourceForce(spec, "permission-mode", "cli")
+	}
+	if flagsSet["add-dir"] {
+		setOptionSourceForce(spec, "add-dir", "cli")
+	}
+	if flagsSet["full"] || flagsSet["f"] || flagsSet["no-full"] {
+		setOptionSourceForce(spec, "full_access", "cli")
 	}
 
 	return &dispatchRequest{
@@ -1358,15 +1506,27 @@ func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...stri
 	}
 }
 
+func validEngineNames() []string {
+	return adapter.NewRegistry(config.DefaultModels()).ValidEngines()
+}
+
+func validEngineCSV() string {
+	return strings.Join(validEngineNames(), ", ")
+}
+
+func validEngineBracketed() string {
+	return "[" + validEngineCSV() + "]"
+}
+
 func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator, detached bool) (*types.DispatchResult, error) {
-	reg := adapter.NewRegistry(config.DefaultModels())
+	reg := adapter.NewRegistry(config.ModelsWithCachedAgy())
 
 	adp, err := reg.Get(spec.Engine)
 	if err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
 			"",
-			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]"),
+			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: "+validEngineBracketed()),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,
