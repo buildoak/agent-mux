@@ -1,7 +1,10 @@
 package adapter
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +15,10 @@ import (
 const defaultAgyPrintTimeoutSec = 300
 const agyPrintTimeoutBackstopGraceSec = 5
 
+const uuidPatternText = `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`
+
+var agyConversationPattern = regexp.MustCompile(`\b(?:Created conversation |Print mode: conversation=|Streaming conversation )(` + uuidPatternText + `)\b`)
+
 type AgyAdapter struct{}
 
 func (a *AgyAdapter) Binary() string {
@@ -19,6 +26,14 @@ func (a *AgyAdapter) Binary() string {
 }
 
 func (a *AgyAdapter) BuildArgs(spec *types.DispatchSpec) []string {
+	prompt := spec.Prompt
+	if spec.SystemPrompt != "" {
+		prompt = spec.SystemPrompt + "\n\n" + prompt
+	}
+	return a.buildPrintArgs(spec, "", prompt)
+}
+
+func (a *AgyAdapter) buildPrintArgs(spec *types.DispatchSpec, conversationID string, prompt string) []string {
 	args := []string{"--sandbox"}
 
 	timeoutSec := defaultAgyPrintTimeoutSec
@@ -40,10 +55,8 @@ func (a *AgyAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	for _, dir := range addDirs(spec) {
 		args = append(args, "--add-dir", dir)
 	}
-
-	prompt := spec.Prompt
-	if spec.SystemPrompt != "" {
-		prompt = spec.SystemPrompt + "\n\n" + prompt
+	if conversationID != "" {
+		args = append(args, "--conversation", conversationID)
 	}
 	args = append(args, "-p", prompt)
 
@@ -67,11 +80,25 @@ func (a *AgyAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {
 }
 
 func (a *AgyAdapter) SupportsResume() bool {
-	return false
+	return true
 }
 
-func (a *AgyAdapter) ResumeArgs(_ *types.DispatchSpec, _ string, _ string) []string {
-	return nil
+func (a *AgyAdapter) ResumeArgs(spec *types.DispatchSpec, sessionID string, message string) []string {
+	return a.buildPrintArgs(spec, sessionID, message)
+}
+
+func (a *AgyAdapter) DiscoverSessionID(spec *types.DispatchSpec) (string, error) {
+	if spec == nil || spec.ArtifactDir == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(filepath.Join(spec.ArtifactDir, "agy.log"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	return extractAgyConversationID(string(data)), nil
 }
 
 func (a *AgyAdapter) RuntimePolicy() types.AdapterRuntimePolicy {
@@ -82,4 +109,14 @@ func (a *AgyAdapter) RuntimePolicy() types.AdapterRuntimePolicy {
 		SoftTimeoutWrapupMode:   types.AdapterSoftTimeoutNoWrapup,
 		FailureContextMode:      types.AdapterFailureContextPrivateDiagnostics,
 	}
+}
+
+func extractAgyConversationID(logText string) string {
+	sessionID := ""
+	for _, match := range agyConversationPattern.FindAllStringSubmatch(logText, -1) {
+		if len(match) > 1 {
+			sessionID = match[1]
+		}
+	}
+	return sessionID
 }

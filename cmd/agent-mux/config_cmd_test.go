@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/buildoak/agent-mux/internal/config"
 )
 
 func TestConfigRoot_Summary(t *testing.T) {
@@ -30,6 +32,218 @@ func TestConfigRoot_Summary(t *testing.T) {
 	defaults, _ := result["defaults"].(map[string]any)
 	if defaults["effort"] != "high" {
 		t.Fatalf("defaults.effort = %v, want high", defaults["effort"])
+	}
+
+	engines, _ := result["engines"].([]any)
+	if len(engines) == 0 {
+		t.Fatalf("engines missing from config summary: %#v", result["engines"])
+	}
+}
+
+func TestConfigRoot_SummaryUsesCachedAgyModels(t *testing.T) {
+	isolateHome(t)
+
+	cachePath, err := config.AgyModelCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{"version":1,"source":"agy_models","status":"ok","models":["Gemini Cached Root 1.0"],"refreshed_at":"2026-06-23T00:00:00Z"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	exit := runConfigCommand(nil, &stdout)
+	if exit != 0 {
+		t.Fatalf("exit code = %d, want 0; output = %q", exit, stdout.String())
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout.String())
+	}
+	models, _ := result["models"].(map[string]any)
+	agyModels, _ := models["agy"].([]any)
+	if len(agyModels) != 1 || agyModels[0] != "Gemini Cached Root 1.0" {
+		t.Fatalf("models.agy = %#v, want cached root model", models["agy"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// config engines tests
+// ---------------------------------------------------------------------------
+
+func TestConfigEngines_Table(t *testing.T) {
+	isolateHome(t)
+
+	var stdout bytes.Buffer
+	exit := runConfigCommand([]string{"engines"}, &stdout)
+	if exit != 0 {
+		t.Fatalf("exit code = %d, want 0; output = %q", exit, stdout.String())
+	}
+
+	out := stdout.String()
+	for _, want := range []string{"ENGINE", "MODELS", "MODEL_SOURCE", "MODEL_STATUS", "RESUME", "STEER", "agy", "resume_inbox_or_abort", "Gemini 3.1 Pro (High)"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in output:\n%s", want, out)
+		}
+	}
+}
+
+func TestConfigEngines_JSON(t *testing.T) {
+	isolateHome(t)
+
+	var stdout bytes.Buffer
+	exit := runConfigCommand([]string{"engines", "--json"}, &stdout)
+	if exit != 0 {
+		t.Fatalf("exit code = %d, want 0; output = %q", exit, stdout.String())
+	}
+
+	var entries []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout.String())
+	}
+
+	if len(entries) != 4 {
+		t.Fatalf("expected 4 engines, got %d: %#v", len(entries), entries)
+	}
+
+	byEngine := make(map[string]map[string]any)
+	for _, e := range entries {
+		name, _ := e["engine"].(string)
+		byEngine[name] = e
+	}
+
+	agy := byEngine["agy"]
+	if agy == nil {
+		t.Fatalf("missing agy entry: %#v", entries)
+	}
+	if agy["supports_resume"] != true {
+		t.Fatalf("agy.supports_resume = %v, want true", agy["supports_resume"])
+	}
+	if agy["steer_semantics"] != "resume_inbox_or_abort" {
+		t.Fatalf("agy.steer_semantics = %v, want resume_inbox_or_abort", agy["steer_semantics"])
+	}
+	if agy["event_stream"] != false {
+		t.Fatalf("agy.event_stream = %v, want false", agy["event_stream"])
+	}
+	models, _ := agy["models"].([]any)
+	if len(models) == 0 {
+		t.Fatalf("agy.models missing: %#v", agy["models"])
+	}
+	if agy["model_source"] != "built_in" {
+		t.Fatalf("agy.model_source = %v, want built_in", agy["model_source"])
+	}
+	if agy["model_status"] != "fallback" {
+		t.Fatalf("agy.model_status = %v, want fallback", agy["model_status"])
+	}
+
+	codex := byEngine["codex"]
+	if codex == nil {
+		t.Fatalf("missing codex entry: %#v", entries)
+	}
+	if codex["supports_resume"] != true {
+		t.Fatalf("codex.supports_resume = %v, want true", codex["supports_resume"])
+	}
+	if codex["token_usage"] != true {
+		t.Fatalf("codex.token_usage = %v, want true", codex["token_usage"])
+	}
+	if codex["cost_usage"] != false {
+		t.Fatalf("codex.cost_usage = %v, want false", codex["cost_usage"])
+	}
+}
+
+func TestConfigEngines_UsesCachedAgyModels(t *testing.T) {
+	isolateHome(t)
+
+	cachePath, err := config.AgyModelCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{"version":1,"source":"agy_models","status":"ok","models":["Gemini Cached 1.0"],"refreshed_at":"2026-06-23T00:00:00Z"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	exit := runConfigCommand([]string{"engines", "--json"}, &stdout)
+	if exit != 0 {
+		t.Fatalf("exit code = %d, want 0; output = %q", exit, stdout.String())
+	}
+
+	var entries []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout.String())
+	}
+
+	var agy map[string]any
+	for _, e := range entries {
+		if e["engine"] == "agy" {
+			agy = e
+			break
+		}
+	}
+	if agy == nil {
+		t.Fatalf("missing agy entry: %#v", entries)
+	}
+	models, _ := agy["models"].([]any)
+	if len(models) != 1 || models[0] != "Gemini Cached 1.0" {
+		t.Fatalf("agy.models = %#v, want cached model", agy["models"])
+	}
+	if agy["model_source"] != "cache" || agy["model_status"] != "ok" {
+		t.Fatalf("agy source/status = %v/%v, want cache/ok", agy["model_source"], agy["model_status"])
+	}
+}
+
+func TestConfigEngines_RefreshModelsWritesCache(t *testing.T) {
+	isolateHome(t)
+	binDir := t.TempDir()
+	t.Setenv("PATH", binDir)
+
+	fakeAgy := filepath.Join(binDir, "agy")
+	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\nprintf '%s\\n' '- Gemini Refreshed 1.0' '- Claude Refreshed 2.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	exit := runConfigCommand([]string{"engines", "--refresh-models", "--json"}, &stdout)
+	if exit != 0 {
+		t.Fatalf("exit code = %d, want 0; output = %q", exit, stdout.String())
+	}
+
+	var entries []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout.String())
+	}
+
+	var agy map[string]any
+	for _, e := range entries {
+		if e["engine"] == "agy" {
+			agy = e
+			break
+		}
+	}
+	if agy == nil {
+		t.Fatalf("missing agy entry: %#v", entries)
+	}
+	if agy["model_source"] != "agy_models" || agy["model_status"] != "refreshed" {
+		t.Fatalf("agy source/status = %v/%v, want agy_models/refreshed", agy["model_source"], agy["model_status"])
+	}
+	models, _ := agy["models"].([]any)
+	if len(models) != 2 || models[0] != "Gemini Refreshed 1.0" {
+		t.Fatalf("agy.models = %#v, want refreshed models", agy["models"])
+	}
+
+	cachePath, err := config.AgyModelCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatalf("expected cache at %s: %v", cachePath, err)
 	}
 }
 

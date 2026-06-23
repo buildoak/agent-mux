@@ -15,7 +15,7 @@ func preflightDispatchSpec(spec *types.DispatchSpec) *types.DispatchError {
 		return dispatch.NewDispatchError("invalid_args", "Missing dispatch spec.", "")
 	}
 
-	reg := adapter.NewRegistry(config.DefaultModels())
+	reg := adapter.NewRegistry(config.ModelsWithCachedAgy())
 	adp, err := reg.Get(spec.Engine)
 	if err != nil {
 		return dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: "+validEngineBracketed())

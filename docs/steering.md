@@ -15,7 +15,7 @@ agent-mux steering is unified under `internal/steer`. That package owns both del
 agent-mux --signal <dispatch_id> "Focus on the parser module only"
 ```
 
-Writes a message to the running dispatch's inbox and returns a JSON ack when the engine supports resume-based inbox delivery. The ack confirms the inbox write succeeded; it does not confirm the worker has consumed the message yet. For non-resumable engines such as `agy`, `--signal` returns `steer_unsupported` and does not write to `inbox.md`.
+Writes a message to the running dispatch's inbox and returns a JSON ack when the engine supports resume-based inbox delivery. The ack confirms the inbox write succeeded; it does not confirm the worker has consumed the message yet.
 
 ### Inbox Mechanics
 
@@ -68,7 +68,7 @@ agent-mux steer 01JQXYZ nudge "Please summarize what you have so far"
 
 Sends a wrap-up message. Default message: "Please wrap up your current work and provide a final summary."
 
-On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[NUDGE]` prefix only when the adapter supports resume. For `agy`, this action returns `steer_unsupported`.
+On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[NUDGE]` prefix only when the adapter supports resume.
 
 ### steer redirect
 
@@ -76,7 +76,7 @@ On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer enve
 agent-mux steer 01JQXYZ redirect "focus on the tests, skip the refactor"
 ```
 
-Redirects the worker with new instructions. On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[REDIRECT]` prefix only when the adapter supports resume. For `agy`, this action returns `steer_unsupported`. The instructions argument is required.
+Redirects the worker with new instructions. On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[REDIRECT]` prefix only when the adapter supports resume. The instructions argument is required.
 
 ### Argument Order
 
@@ -114,13 +114,13 @@ If any check fails, or FIFO open/write returns readiness errors such as missing 
 
 ## Agy Steering
 
-`agy` dispatches use plain stdout and do not support resume. agent-mux passes `--sandbox` to the local `agy` CLI and does not create a truthful live nudge/redirect path. The `agy` CLI owns what that sandbox means. Therefore:
+`agy` dispatches use plain stdout and support resume through Antigravity conversation IDs discovered from `<artifact_dir>/agy.log`. agent-mux passes `--sandbox` to the local `agy` CLI and does not create a truthful live nudge/redirect path. The `agy` CLI owns what that sandbox means. Therefore:
 
 - `agent-mux steer <id> abort` works through `SIGTERM` or `control.json`
-- `agent-mux steer <id> nudge` returns `steer_unsupported`
-- `agent-mux steer <id> redirect "..."` returns `steer_unsupported`
-- `agent-mux --signal <id> "..."` returns `steer_unsupported`
-- unsupported signal/nudge/redirect attempts do not write to `inbox.md`
+- `agent-mux steer <id> nudge` writes a `[NUDGE]` inbox message for resume-backed delivery
+- `agent-mux steer <id> redirect "..."` writes a `[REDIRECT]` inbox message for resume-backed delivery
+- `agent-mux --signal <id> "..."` writes a raw inbox message for resume-backed delivery
+- delivery is not a live interrupt; the loop restarts agy with `--conversation <session_id>` once it has a resumable conversation ID
 
 The FIFO payload is one JSON envelope with `action` and `message`. The loop's soft-stdin bridge decodes it, emits `coordinator_inject`, and writes formatted text directly into the live Codex stdin pipe. If a tool or command is active, delivery is deferred until it completes; once `max_steer_wait_seconds` is exceeded, the loop force-proceeds instead of deferring forever.
 

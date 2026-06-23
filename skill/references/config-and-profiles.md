@@ -143,10 +143,24 @@ When frontmatter and CLI leave a field unset:
 
 | Engine | Fallback models |
 |--------|----------------|
-| `codex` | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2-codex` |
+| `codex` | `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2-codex` |
 | `claude` | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
 | `gemini` | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview` |
 | `agy` | `Gemini 3.1 Pro (High)`, `Gemini 3.1 Pro (Low)`, `Gemini 3.5 Flash (High)`, `Gemini 3.5 Flash (Medium)`, `Gemini 3.5 Flash (Low)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, `GPT-OSS 120B (Medium)` |
+
+### Engine capabilities
+
+Discover the current engine matrix:
+
+```bash
+agent-mux config engines
+agent-mux config engines --json
+agent-mux config engines --refresh-models
+```
+
+The JSON entries include active `models`, `model_source`, `model_status`, optional `model_cache_path`, and conservative capability fields: `supports_resume`, `steer_semantics`, `event_stream`, `activity_tracking`, `token_usage`, `cost_usage`, `artifact_scan`, `multimodal_input`, `image_generation`, and `notes`.
+
+For agy, the built-in model list remains deterministic. `--refresh-models` is the only path that runs `agy models`; it writes `~/.agent-mux/cache/agy-models.json`. Normal config and dispatch validation read that cache when present and otherwise use the built-in fallback.
 
 ---
 

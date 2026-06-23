@@ -109,7 +109,7 @@ Engine CLIs must be installed separately -- agent-mux dispatches to them, it doe
 ## Features
 
 - **Profile-based dispatch** -- `-P=<name>` loads engine, model, effort, timeout, skills, and system prompt from a single markdown file. One flag replaces six.
-- **Recovery and signals** -- Start a follow-up dispatch with `--recover=<id>` to include prior context. Live nudge/redirect require a resume-capable engine; non-resumable engines such as agy are abort-only while running.
+- **Recovery and signals** -- Start a follow-up dispatch with `--recover=<id>` to include prior context. Live nudge/redirect require a live FIFO or resume-capable engine; agy uses resume-backed inbox delivery after its Antigravity conversation ID is discovered.
 - **Two-phase timeout** -- Soft timeout fires a wrap-up signal, grace period allows clean exit, hard timeout kills. Artifacts are preserved at every phase.
 - **Async dispatch** -- Fire and forget with `--async`. Collect results later with `wait` or `result`.
 - **Event streaming** -- 15 NDJSON event types on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `timeout_warning`, and more.

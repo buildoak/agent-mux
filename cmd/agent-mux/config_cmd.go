@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/buildoak/agent-mux/internal/config"
@@ -15,6 +16,8 @@ import (
 func runConfigCommand(args []string, stdout io.Writer) int {
 	sub, rest := splitConfigSub(args)
 	switch sub {
+	case "engines":
+		return runConfigEngines(rest, stdout)
 	case "skills":
 		return runConfigSkills(rest, stdout)
 	case "prompts":
@@ -31,7 +34,7 @@ func splitConfigSub(args []string) (string, []string) {
 		return "", nil
 	}
 	switch args[0] {
-	case "skills", "prompts":
+	case "engines", "skills", "prompts":
 		return args[0], args[1:]
 	default:
 		return "", args
@@ -70,9 +73,73 @@ func runConfigRoot(args []string, stdout io.Writer) int {
 		"liveness": map[string]any{
 			"heartbeat_interval_sec": config.HeartbeatIntervalSec(),
 		},
-		"models": config.DefaultModels(),
+		"engines": config.EngineCapabilityMatrix(),
+		"models":  config.ModelsWithCachedAgy(),
 	})
 	return 0
+}
+
+// --- agent-mux config engines ---
+
+func runConfigEngines(args []string, stdout io.Writer) int {
+	var flagOutput bytes.Buffer
+	fs := flag.NewFlagSet("agent-mux config engines", flag.ContinueOnError)
+	fs.SetOutput(&flagOutput)
+
+	var jsonOutput bool
+	var refreshModels bool
+	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON array")
+	fs.BoolVar(&refreshModels, "refresh-models", false, "Refresh agy model cache using `agy models`")
+
+	if err := fs.Parse(normalizeArgs(args)); err != nil {
+		return handleLifecycleParseError(stdout, &flagOutput, err)
+	}
+
+	engines := config.EngineCapabilityMatrix()
+	exitCode := 0
+	if refreshModels {
+		state, err := config.RefreshAgyModelCache()
+		if err != nil {
+			exitCode = 1
+		}
+		engines = config.EngineCapabilityMatrixWithAgyState(state)
+	}
+	if jsonOutput {
+		writeCompactJSON(stdout, engines)
+		return exitCode
+	}
+
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ENGINE\tMODELS\tMODEL_SOURCE\tMODEL_STATUS\tRESUME\tSTEER\tEVENTS\tACTIVITY\tTOKENS\tCOST\tARTIFACTS\tMULTIMODAL\tIMAGE\tNOTES")
+	for _, e := range engines {
+		fmt.Fprintf(
+			tw,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			e.Engine,
+			strings.Join(e.Models, ", "),
+			e.ModelSource,
+			e.ModelStatus,
+			yesNo(e.SupportsResume),
+			e.SteerSemantics,
+			yesNo(e.EventStream),
+			yesNo(e.ActivityTracking),
+			yesNo(e.TokenUsage),
+			yesNo(e.CostUsage),
+			yesNo(e.ArtifactScan),
+			yesNo(e.MultimodalInput),
+			yesNo(e.ImageGeneration),
+			e.Notes,
+		)
+	}
+	_ = tw.Flush()
+	return exitCode
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
 }
 
 // --- agent-mux config skills ---

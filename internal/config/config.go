@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -95,6 +96,124 @@ func DefaultModels() map[string][]string {
 			"GPT-OSS 120B (Medium)",
 		},
 	}
+}
+
+// EngineCapabilities describes the user-visible behavior agent-mux can
+// currently rely on for an engine. It is intentionally conservative: a false
+// value means agent-mux does not expose that capability through its stable
+// dispatch contract, even if the underlying provider may support it elsewhere.
+type EngineCapabilities struct {
+	Engine           string   `json:"engine"`
+	Models           []string `json:"models"`
+	ModelSource      string   `json:"model_source"`
+	ModelStatus      string   `json:"model_status"`
+	ModelCachePath   string   `json:"model_cache_path,omitempty"`
+	SupportsResume   bool     `json:"supports_resume"`
+	SteerSemantics   string   `json:"steer_semantics"`
+	EventStream      bool     `json:"event_stream"`
+	ActivityTracking bool     `json:"activity_tracking"`
+	TokenUsage       bool     `json:"token_usage"`
+	CostUsage        bool     `json:"cost_usage"`
+	ArtifactScan     bool     `json:"artifact_scan"`
+	MultimodalInput  bool     `json:"multimodal_input"`
+	ImageGeneration  bool     `json:"image_generation"`
+	Notes            string   `json:"notes"`
+}
+
+// EngineCapabilityMatrix returns capability metadata for all engines. It may
+// use a valid agy model cache, but it never invokes the agy CLI.
+func EngineCapabilityMatrix() []EngineCapabilities {
+	return EngineCapabilityMatrixWithAgyState(CachedAgyModelState())
+}
+
+// EngineCapabilityMatrixWithAgyState returns capability metadata using the
+// supplied agy model state. It is used by explicit refresh flows to report the
+// just-refreshed source/status without re-reading the cache.
+func EngineCapabilityMatrixWithAgyState(agyState AgyModelState) []EngineCapabilities {
+	models := DefaultModels()
+	if len(agyState.Models) == 0 {
+		agyState = fallbackAgyModelState("fallback")
+	}
+	entries := []EngineCapabilities{
+		{
+			Engine:           "agy",
+			Models:           cloneStrings(agyState.Models),
+			ModelSource:      agyState.Source,
+			ModelStatus:      agyState.Status,
+			ModelCachePath:   agyState.CachePath,
+			SupportsResume:   true,
+			SteerSemantics:   "resume_inbox_or_abort",
+			EventStream:      false,
+			ActivityTracking: false,
+			TokenUsage:       false,
+			CostUsage:        false,
+			ArtifactScan:     true,
+			MultimodalInput:  true,
+			ImageGeneration:  true,
+			Notes:            "Experimental plain-stdout adapter. Resume uses agy conversation IDs discovered from agy.log; multimodal input and image generation are live-smoke verified but not exposed as structured events.",
+		},
+		{
+			Engine:           "claude",
+			Models:           cloneStrings(models["claude"]),
+			ModelSource:      "built_in",
+			ModelStatus:      "ok",
+			SupportsResume:   true,
+			SteerSemantics:   "resume_inbox_or_abort",
+			EventStream:      true,
+			ActivityTracking: true,
+			TokenUsage:       true,
+			CostUsage:        false,
+			ArtifactScan:     true,
+			MultimodalInput:  false,
+			ImageGeneration:  false,
+			Notes:            "Streams structured events and supports resume after session init.",
+		},
+		{
+			Engine:           "codex",
+			Models:           cloneStrings(models["codex"]),
+			ModelSource:      "built_in",
+			ModelStatus:      "ok",
+			SupportsResume:   true,
+			SteerSemantics:   "resume_inbox_or_abort",
+			EventStream:      true,
+			ActivityTracking: true,
+			TokenUsage:       true,
+			CostUsage:        false,
+			ArtifactScan:     true,
+			MultimodalInput:  false,
+			ImageGeneration:  false,
+			Notes:            "Streams NDJSON events and supports resume after thread start.",
+		},
+		{
+			Engine:           "gemini",
+			Models:           cloneStrings(models["gemini"]),
+			ModelSource:      "built_in",
+			ModelStatus:      "ok",
+			SupportsResume:   true,
+			SteerSemantics:   "resume_inbox_or_abort_latest_fallback",
+			EventStream:      true,
+			ActivityTracking: true,
+			TokenUsage:       true,
+			CostUsage:        false,
+			ArtifactScan:     true,
+			MultimodalInput:  false,
+			ImageGeneration:  false,
+			Notes:            "Streams structured events. UUID resume IDs fall back to Gemini CLI latest-session resume semantics.",
+		},
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Engine < entries[j].Engine
+	})
+	return entries
+}
+
+func cloneStrings(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, len(items))
+	copy(out, items)
+	return out
 }
 
 // envInt reads an integer from the named env var, returning defaultVal if unset or unparseable.

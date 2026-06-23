@@ -14,6 +14,7 @@ description: |
 ```bash
 agent-mux config prompts        # live roster with effort defaults
 agent-mux config prompts --json # structured
+agent-mux config engines --json # engine capabilities + model allowlists
 ```
 Selection: scout for reads, lifter for writes, architect for plans, grunt for bulk edits.
 
@@ -68,14 +69,14 @@ agent-mux -P=researcher -E=gemini -m gemini-3.1-pro-preview -C=/repo "Analyze au
 - **Codex**: implementation, debugging, precise edits
 - **Claude**: planning, synthesis, review
 - **Gemini**: analysis, second opinion (models: `gemini-3-flash-preview`, `gemini-3.1-pro-preview`)
-- **agy**: experimental CLI-first model access. Plain stdout, agent-mux passes `agy --sandbox`, no resume, abort-only steering. It does not imply plugins, MCP, browser automation, Google services, or provider service actions.
+- **agy**: experimental CLI-first model access. Plain stdout, agent-mux passes `agy --sandbox`, discovers Antigravity conversation IDs from `agy.log`, and uses inbox + `--conversation` for nudge/redirect resume. It does not imply plugins, MCP, browser automation, Google services, or provider service actions.
 
 Gemini ignores `-e` -- use model selection for depth control.
 
 **2. Steering:**
 - `steer abort <id>` -- SIGTERMs async host when live; otherwise writes control.json for watchdog
-- `steer redirect <id> "new direction"` -- requires live FIFO or a resume-capable engine; `agy` returns `steer_unsupported`
-- `steer nudge <id>` -- requires live FIFO or a resume-capable engine; `agy` returns `steer_unsupported`
+- `steer redirect <id> "new direction"` -- requires live FIFO or a resume-capable engine; `agy` uses inbox + conversation resume
+- `steer nudge <id>` -- requires live FIFO or a resume-capable engine; `agy` uses inbox + conversation resume
 
 **3. Data model (3 paths):**
 - `~/.agent-mux/dispatches/<ULID>/` -- durable (meta.json, result.json)

@@ -1519,7 +1519,7 @@ func validEngineBracketed() string {
 }
 
 func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator, detached bool) (*types.DispatchResult, error) {
-	reg := adapter.NewRegistry(config.DefaultModels())
+	reg := adapter.NewRegistry(config.ModelsWithCachedAgy())
 
 	adp, err := reg.Get(spec.Engine)
 	if err != nil {

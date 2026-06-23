@@ -169,6 +169,7 @@ agent-mux preview [dispatch flags] <prompt>
 
 ```bash
 agent-mux config [--cwd <dir>]
+agent-mux config engines [--json] [--refresh-models]
 agent-mux config prompts [--json]
 agent-mux config skills [--cwd <dir>] [--json]
 ```
@@ -176,8 +177,13 @@ agent-mux config skills [--cwd <dir>] [--json]
 Implemented subcommands are exactly:
 
 - `config`
+- `config engines`
 - `config prompts`
 - `config skills`
+
+`config engines` reports one entry per engine, including model source/status and conservative capability flags: `supports_resume`, `steer_semantics`, `event_stream`, `activity_tracking`, `token_usage`, `cost_usage`, `artifact_scan`, `multimodal_input`, `image_generation`, and `notes`.
+
+`config engines --refresh-models` refreshes only the agy model cache by running `agy models` with a short timeout, then writes `~/.agent-mux/cache/agy-models.json`. Normal `config engines` and dispatch validation read that cache when present and otherwise use the built-in fallback; they do not call `agy models`.
 
 `config prompts` reports one entry per prompt file in `~/.agent-mux/prompts/`, including engine, model, effort, timeout, and description from frontmatter.
 

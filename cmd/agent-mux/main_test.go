@@ -1696,26 +1696,26 @@ func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 	}
 }
 
-func TestSignalUnsupportedForAgyDoesNotWriteInbox(t *testing.T) {
+func TestSignalForAgyWritesInboxForResume(t *testing.T) {
 	dispatchID, artifactDir := prepareSteerDispatchFixtureForEngine(t, "agy", false)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := run([]string{"--signal", dispatchID, "focus on tests"}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 
 	raw := decodeJSONMap(t, stdout.Bytes())
-	errorEnvelope, ok := raw["error"].(map[string]any)
-	if !ok {
-		t.Fatalf("error = %#v, want object", raw["error"])
+	if raw["status"] != "ok" {
+		t.Fatalf("status = %#v, want ok; raw=%#v", raw["status"], raw)
 	}
-	if errorEnvelope["code"] != "steer_unsupported" {
-		t.Fatalf("error.code = %#v, want steer_unsupported", errorEnvelope["code"])
+	messages, err := steer.ReadInbox(artifactDir)
+	if err != nil {
+		t.Fatalf("ReadInbox: %v", err)
 	}
-	if steer.HasMessages(artifactDir) {
-		t.Fatal("inbox has messages after unsupported agy signal")
+	if len(messages) != 1 || messages[0].Message != "focus on tests" {
+		t.Fatalf("messages = %#v, want focus on tests", messages)
 	}
 }
 
@@ -1774,47 +1774,47 @@ func TestSteerNudgeFallsBackToInboxWhenFIFOUnavailable(t *testing.T) {
 	}
 }
 
-func TestSteerNudgeUnsupportedForAgyDoesNotWriteInbox(t *testing.T) {
+func TestSteerNudgeForAgyWritesInboxForResume(t *testing.T) {
 	dispatchID, artifactDir := prepareSteerDispatchFixtureForEngine(t, "agy", false)
 
 	var stdout bytes.Buffer
 	exitCode := runSteerCommand([]string{dispatchID, "nudge", "cannot resume"}, &stdout, ioDiscard{})
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stdout=%q", exitCode, stdout.String())
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout=%q", exitCode, stdout.String())
 	}
 
 	raw := decodeJSONMap(t, stdout.Bytes())
-	errorEnvelope, ok := raw["error"].(map[string]any)
-	if !ok {
-		t.Fatalf("error = %#v, want object", raw["error"])
+	if raw["mechanism"] != "inbox" {
+		t.Fatalf("mechanism = %#v, want inbox", raw["mechanism"])
 	}
-	if errorEnvelope["code"] != "steer_unsupported" {
-		t.Fatalf("error.code = %#v, want steer_unsupported", errorEnvelope["code"])
+	messages, err := steer.ReadInbox(artifactDir)
+	if err != nil {
+		t.Fatalf("ReadInbox: %v", err)
 	}
-	if steer.HasMessages(artifactDir) {
-		t.Fatal("inbox has messages after unsupported agy nudge")
+	if len(messages) != 1 || messages[0].Message != "[NUDGE] cannot resume" {
+		t.Fatalf("messages = %#v, want [NUDGE] cannot resume", messages)
 	}
 }
 
-func TestSteerRedirectUnsupportedForAgyDoesNotWriteInbox(t *testing.T) {
+func TestSteerRedirectForAgyWritesInboxForResume(t *testing.T) {
 	dispatchID, artifactDir := prepareSteerDispatchFixtureForEngine(t, "agy", false)
 
 	var stdout bytes.Buffer
 	exitCode := runSteerCommand([]string{dispatchID, "redirect", "new direction"}, &stdout, ioDiscard{})
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stdout=%q", exitCode, stdout.String())
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout=%q", exitCode, stdout.String())
 	}
 
 	raw := decodeJSONMap(t, stdout.Bytes())
-	errorEnvelope, ok := raw["error"].(map[string]any)
-	if !ok {
-		t.Fatalf("error = %#v, want object", raw["error"])
+	if raw["mechanism"] != "inbox" {
+		t.Fatalf("mechanism = %#v, want inbox", raw["mechanism"])
 	}
-	if errorEnvelope["code"] != "steer_unsupported" {
-		t.Fatalf("error.code = %#v, want steer_unsupported", errorEnvelope["code"])
+	messages, err := steer.ReadInbox(artifactDir)
+	if err != nil {
+		t.Fatalf("ReadInbox: %v", err)
 	}
-	if steer.HasMessages(artifactDir) {
-		t.Fatal("inbox has messages after unsupported agy redirect")
+	if len(messages) != 1 || messages[0].Message != "[REDIRECT] new direction" {
+		t.Fatalf("messages = %#v, want [REDIRECT] new direction", messages)
 	}
 }
 

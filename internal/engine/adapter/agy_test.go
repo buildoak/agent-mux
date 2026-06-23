@@ -1,7 +1,10 @@
 package adapter
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/buildoak/agent-mux/internal/types"
@@ -133,14 +136,66 @@ func TestAgyRuntimePolicy(t *testing.T) {
 	}
 }
 
-func TestAgyNoResume(t *testing.T) {
+func TestAgyResumeArgs(t *testing.T) {
 	a := &AgyAdapter{}
 
-	if a.SupportsResume() {
-		t.Fatal("SupportsResume() = true, want false")
+	if !a.SupportsResume() {
+		t.Fatal("SupportsResume() = false, want true")
 	}
-	if args := a.ResumeArgs(nil, "session", "continue"); args != nil {
-		t.Fatalf("ResumeArgs() = %#v, want nil", args)
+	spec := &types.DispatchSpec{
+		Model:       "Claude Sonnet 4.5",
+		ArtifactDir: "/tmp/dispatch",
+		TimeoutSec:  42,
+		GraceSec:    10,
+		EngineOpts: map[string]any{
+			"add-dir": []string{"/tmp/scripts"},
+		},
+	}
+	args := a.ResumeArgs(spec, "550e8400-e29b-41d4-a716-446655440000", "continue")
+	want := []string{
+		"--sandbox",
+		"--print-timeout", "57s",
+		"--log-file", "/tmp/dispatch/agy.log",
+		"--model", "Claude Sonnet 4.5",
+		"--add-dir", "/tmp/scripts",
+		"--conversation", "550e8400-e29b-41d4-a716-446655440000",
+		"-p", "continue",
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("ResumeArgs() = %#v, want %#v", args, want)
+	}
+}
+
+func TestAgyDiscoverSessionIDFromLog(t *testing.T) {
+	a := &AgyAdapter{}
+	artifactDir := t.TempDir()
+	logPath := filepath.Join(artifactDir, "agy.log")
+	if err := os.WriteFile(logPath, []byte(strings.Join([]string{
+		"Created conversation 11111111-1111-1111-1111-111111111111",
+		"Print mode: conversation=22222222-2222-2222-2222-222222222222",
+		"Streaming conversation 33333333-3333-3333-3333-333333333333",
+	}, "\n")), 0644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	got, err := a.DiscoverSessionID(&types.DispatchSpec{ArtifactDir: artifactDir})
+	if err != nil {
+		t.Fatalf("DiscoverSessionID: %v", err)
+	}
+	if got != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("session_id = %q, want last conversation id", got)
+	}
+}
+
+func TestAgyDiscoverSessionIDMissingLog(t *testing.T) {
+	a := &AgyAdapter{}
+
+	got, err := a.DiscoverSessionID(&types.DispatchSpec{ArtifactDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("DiscoverSessionID: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("session_id = %q, want empty", got)
 	}
 }
 

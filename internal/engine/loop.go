@@ -644,7 +644,21 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		mu.Lock()
 		sid := sessionID
+		statusToolsUsed := toolsUsedCount
+		statusFilesChanged := filesChangedCount
 		mu.Unlock()
+		if sid == "" {
+			discoveredSessionID, err := discoverAdapterSessionID(e.adapter, spec)
+			if err != nil {
+				_ = emitter.EmitError("session_discovery_failed", fmt.Sprintf("Discover resumable session ID: %v", err))
+			} else if discoveredSessionID != "" {
+				sid = discoveredSessionID
+				mu.Lock()
+				sessionID = discoveredSessionID
+				mu.Unlock()
+				persistObservedSession(spec.ArtifactDir, spec.DispatchID, startTime, discoveredSessionID, "session discovered", statusToolsUsed, statusFilesChanged, stdinPipeReady)
+			}
+		}
 		if sid == "" {
 			if alreadyExited {
 				startRestartFailure("resume_session_missing", "Coordinator injection arrived before the harness reported a resumable session ID.", "Ensure the harness emits a session start event before becoming idle or exiting.")
@@ -698,6 +712,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		restarting = false
 		mu.Lock()
 		lastActivity = time.Now()
+		if runtimePolicy.UsesPlainStdout() {
+			runReadyForRestart = true
+		}
 		mu.Unlock()
 		updateActivity("resumed session")
 		return true
@@ -786,6 +803,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			err.Error(),
 			"Check that the binary is installed and accessible.",
 		), nil
+	}
+	if runtimePolicy.UsesPlainStdout() {
+		runReadyForRestart = true
 	}
 
 	watchdogTicker := time.NewTicker(5 * time.Second)
@@ -941,6 +961,18 @@ buildResult:
 	haveFinalResponse := sawResponse
 	mu.Unlock()
 
+	if sid == "" {
+		discoveredSessionID, err := discoverAdapterSessionID(e.adapter, spec)
+		if err != nil {
+			if emitter != nil {
+				_ = emitter.EmitError("session_discovery_failed", fmt.Sprintf("Discover completed session ID: %v", err))
+			}
+		} else if discoveredSessionID != "" {
+			sid = discoveredSessionID
+			_ = dispatch.UpdateDispatchSessionID(spec.ArtifactDir, discoveredSessionID)
+		}
+	}
+
 	if tokens == nil {
 		tokens = &types.TokenUsage{}
 	}
@@ -1030,6 +1062,7 @@ func finalizeCompleted(spec *types.DispatchSpec, annotations types.DispatchAnnot
 		FilesChanged:   len(activity.FilesChanged),
 		StdinPipeReady: false,
 		DispatchID:     spec.DispatchID,
+		SessionID:      metadataSessionID(metadata),
 	})
 	emitResponseTruncated(emitter, result)
 	if emitter != nil {
@@ -1050,6 +1083,7 @@ func finalizeTimedOut(spec *types.DispatchSpec, annotations types.DispatchAnnota
 		FilesChanged:   len(activity.FilesChanged),
 		StdinPipeReady: false,
 		DispatchID:     spec.DispatchID,
+		SessionID:      metadataSessionID(metadata),
 	})
 	emitResponseTruncated(emitter, result)
 	if emitter != nil {
@@ -1072,6 +1106,7 @@ func finalizeFailed(spec *types.DispatchSpec, annotations types.DispatchAnnotati
 		FilesChanged:   len(activity.FilesChanged),
 		StdinPipeReady: false,
 		DispatchID:     spec.DispatchID,
+		SessionID:      metadataSessionID(metadata),
 	})
 	emitResponseTruncated(emitter, result)
 	if emitter != nil {
@@ -1372,6 +1407,25 @@ func persistObservedSession(artifactDir, dispatchID string, startTime time.Time,
 	}
 	_ = dispatch.UpdateDispatchSessionID(artifactDir, sessionID)
 	_ = writeRunningStatus(artifactDir, dispatchID, sessionID, startTime, lastActivity, toolsUsed, filesChanged, stdinPipeReady)
+}
+
+func discoverAdapterSessionID(adapter types.HarnessAdapter, spec *types.DispatchSpec) (string, error) {
+	discoverer, ok := adapter.(types.AdapterSessionDiscoverer)
+	if !ok {
+		return "", nil
+	}
+	sessionID, err := discoverer.DiscoverSessionID(spec)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(sessionID), nil
+}
+
+func metadataSessionID(metadata *types.DispatchMetadata) string {
+	if metadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(metadata.SessionID)
 }
 
 func bytesTrimSpace(line []byte) []byte {

@@ -220,7 +220,7 @@ Delivery order:
 1. `stdin_fifo` only when a Codex run has `status.stdin_pipe_ready=true` and host PID is live
 2. inbox fallback only when the engine supports resume
 
-Current Codex and agy runs keep `stdin_pipe_ready=false`; Codex falls back to inbox/resume, while agy returns `steer_unsupported`.
+Current Codex and agy runs keep `stdin_pipe_ready=false`; both fall back to inbox/resume once a resumable session ID is available. For agy, that session ID is the Antigravity conversation ID discovered from `agy.log`.
 
 Inbox fallback writes `[NUDGE] <message>`.
 

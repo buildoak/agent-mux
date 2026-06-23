@@ -166,6 +166,28 @@ go test -tags axeval -timeout 600s ./tests/axeval/
 go test -tags axeval -timeout 300s -run 'TestAxEval/complete-simple' ./tests/axeval/
 go test -tags axeval -timeout 300s -run TestLifecycleListStatusInspect ./tests/axeval/
 ```
+### Deterministic Agy Contract Tests
+The agy AX contract tests install a fake `agy` binary at the front of `PATH`.
+They do not call a live provider and are safe to run without credentials:
+```bash
+go test -tags axeval -timeout 120s -run 'TestAgyFakeBinary|TestAgyLiveContractRequiresExplicitOptIn' ./tests/axeval/
+```
+These tests cover plain stdout success, empty stdout failure classification
+(`harness_empty_output`), session ID discovery from `agy.log`, and resume
+delivery via `--conversation` after `agent-mux steer nudge`.
+Live agy provider contract checks are deny-by-default and require the explicit
+`AX_EVAL_AGY_LIVE=1` opt-in. The live test refreshes the agy model cache with
+`agent-mux config engines --refresh-models --json`, verifies the selected model
+is listed, runs a live agy dispatch, checks session persistence in `metadata`
+and `status.json`, and then probes native `agy --conversation` resume. The
+default live model is `Gemini 3.5 Flash (Low)`; override with
+`AX_EVAL_AGY_MODEL='<model name>'`.
+
+```bash
+AX_EVAL_AGY_LIVE=1 go test -tags axeval -timeout 300s -run TestAgyLiveContractRequiresExplicitOptIn ./tests/axeval/
+```
+
+The deterministic suite intentionally does not set that variable.
 ### Reports
 ```bash
 AX_EVAL_REPORT_DIR=./eval-reports go test -tags axeval ./tests/axeval/

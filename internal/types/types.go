@@ -205,6 +205,10 @@ type HarnessAdapter interface {
 	ResumeArgs(spec *DispatchSpec, sessionID string, message string) []string
 }
 
+type AdapterSessionDiscoverer interface {
+	DiscoverSessionID(spec *DispatchSpec) (string, error)
+}
+
 type AdapterStdinMode string
 
 const (

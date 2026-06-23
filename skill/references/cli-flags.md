@@ -88,7 +88,8 @@ or similar dispatch flags. Put those fields in the JSON object.
 
 | Invocation | Purpose |
 |------------|---------|
-| `agent-mux config` | resolved config summary (defaults, liveness, models) |
+| `agent-mux config` | resolved config summary (defaults, liveness, models, engine capabilities) |
+| `agent-mux config engines [--json] [--refresh-models]` | engine capability matrix and active model allowlists; `--refresh-models` refreshes only the agy cache |
 | `agent-mux config prompts [--json]` | profile catalog |
 | `agent-mux config skills [--json]` | discovered skills and winning paths |
 
@@ -118,7 +119,7 @@ or similar dispatch flags. Put those fields in the JSON object.
 | `nudge` | `[message]` | Default wrap-up message if omitted |
 | `redirect` | `"<instructions>"` | Required |
 
-`agy` supports `abort` only. `--signal`, `nudge`, and `redirect` return `steer_unsupported` because the adapter has plain stdout, no live FIFO, and no resume-based inbox delivery.
+`agy` supports `abort` through SIGTERM or `control.json`. `--signal`, `nudge`, and `redirect` use resume-backed inbox delivery: they are appended to `inbox.md`, then the loop restarts agy with `--conversation <session_id>` after an Antigravity conversation ID has been discovered from `agy.log`. This is not a live interrupt.
 
 ---
 

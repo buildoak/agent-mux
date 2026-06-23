@@ -153,12 +153,45 @@ Each engine has a fallback model allowlist used when no model list is configured
 
 | Engine | Fallback models |
 | --- | --- |
-| `codex` | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2-codex` |
+| `codex` | `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2-codex` |
 | `claude` | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
 | `gemini` | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview` |
 | `agy` | `Gemini 3.1 Pro (High)`, `Gemini 3.1 Pro (Low)`, `Gemini 3.5 Flash (High)`, `Gemini 3.5 Flash (Medium)`, `Gemini 3.5 Flash (Low)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, `GPT-OSS 120B (Medium)` |
 
 An unrecognized model produces a `model_not_found` error with fuzzy suggestions.
+
+### Engine Capabilities
+
+Use `agent-mux config engines` for the current engine capability matrix and active model allowlists. Add `--json` for machine-readable output.
+
+The JSON entries include:
+
+- `engine`
+- `models`
+- `model_source`
+- `model_status`
+- `model_cache_path`
+- `supports_resume`
+- `steer_semantics`
+- `event_stream`
+- `activity_tracking`
+- `token_usage`
+- `cost_usage`
+- `artifact_scan`
+- `multimodal_input`
+- `image_generation`
+- `notes`
+
+The built-in `agy` fallback remains deterministic. To refresh agy models explicitly:
+
+```bash
+agent-mux config engines --refresh-models
+agent-mux config engines --refresh-models --json
+```
+
+That command runs `agy models` with a short timeout, parses model names, and writes `~/.agent-mux/cache/agy-models.json`. Normal `config engines` and dispatch model validation do not call `agy models`; they use the cache when present and fall back to the built-in list otherwise.
+
+For `agy`, `supports_resume` means resume via Antigravity conversation IDs discovered from `agy.log`. `event_stream` remains false because agy still returns plain stdout; `activity_tracking`, `token_usage`, and `cost_usage` remain false because agent-mux does not receive structured tool/file/usage events from agy.
 
 ## Hooks
 

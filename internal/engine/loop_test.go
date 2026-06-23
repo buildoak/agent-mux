@@ -29,18 +29,20 @@ type resumeCall struct {
 }
 
 type scriptedAdapter struct {
-	mu              sync.Mutex
-	baseBinary      string
-	resumeBinary    string
-	supportsResume  bool
-	initialScript   string
-	initialPrompt   string
-	env             []string
-	envErr          error
-	runtimePolicy   *types.AdapterRuntimePolicy
-	resumeScript    func(sessionID, message string) string
-	resumeCalls     []resumeCall
-	failResumeStart bool
+	mu                  sync.Mutex
+	baseBinary          string
+	resumeBinary        string
+	supportsResume      bool
+	initialScript       string
+	initialPrompt       string
+	env                 []string
+	envErr              error
+	runtimePolicy       *types.AdapterRuntimePolicy
+	resumeScript        func(sessionID, message string) string
+	resumeCalls         []resumeCall
+	failResumeStart     bool
+	discoveredSessionID string
+	discoverErr         error
 }
 
 func newScriptedAdapter(initialScript string) *scriptedAdapter {
@@ -105,6 +107,13 @@ func (a *scriptedAdapter) ResumeArgs(spec *types.DispatchSpec, sessionID, messag
 		a.resumeBinary = "nonexistent-binary-for-resume"
 	}
 	return []string{"-c", a.resumeScript(sessionID, message)}
+}
+
+func (a *scriptedAdapter) DiscoverSessionID(_ *types.DispatchSpec) (string, error) {
+	if a.discoverErr != nil {
+		return "", a.discoverErr
+	}
+	return a.discoveredSessionID, nil
 }
 
 func (a *scriptedAdapter) Calls() []resumeCall {
@@ -818,6 +827,86 @@ func TestLoopEnginePlainStdoutPreservesMultilineRawOutput(t *testing.T) {
 	}
 	if result.Response != want {
 		t.Fatalf("response = %q, want %q", result.Response, want)
+	}
+}
+
+func TestLoopEnginePlainStdoutDiscoversSessionIDForTerminalStatus(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter("printf 'done\\n'")
+	adapter.supportsResume = true
+	adapter.discoveredSessionID = "550e8400-e29b-41d4-a716-446655440000"
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:               types.AdapterStdinEOF,
+		OutputMode:              types.AdapterOutputPlainStdout,
+		RequireNonEmptyResponse: true,
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Metadata == nil || result.Metadata.SessionID != "550e8400-e29b-41d4-a716-446655440000" {
+		t.Fatalf("result metadata = %+v, want discovered session_id", result.Metadata)
+	}
+	status, err := dispatch.ReadStatusJSON(artifactDir)
+	if err != nil {
+		t.Fatalf("ReadStatusJSON: %v", err)
+	}
+	if status.SessionID != "550e8400-e29b-41d4-a716-446655440000" {
+		t.Fatalf("status session_id = %q, want discovered session_id", status.SessionID)
+	}
+	record, err := dispatch.FindDispatchRecordByRef(spec.DispatchID)
+	if err != nil {
+		t.Fatalf("FindRecord: %v", err)
+	}
+	if record == nil || record.SessionID != "550e8400-e29b-41d4-a716-446655440000" {
+		t.Fatalf("record = %+v, want discovered session_id", record)
+	}
+}
+
+func TestLoopEnginePlainStdoutDiscoversSessionIDForResume(t *testing.T) {
+	artifactDir := t.TempDir()
+	readyPath := filepath.Join(artifactDir, "ready")
+	adapter := newScriptedAdapter(strings.Join([]string{
+		fmt.Sprintf("touch %q", readyPath),
+		"trap 'exit 0' TERM",
+		"while :; do sleep 0.1; done",
+	}, "\n"))
+	adapter.discoveredSessionID = "550e8400-e29b-41d4-a716-446655440000"
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:               types.AdapterStdinEOF,
+		OutputMode:              types.AdapterOutputPlainStdout,
+		RequireNonEmptyResponse: true,
+	}
+	adapter.resumeScript = func(sessionID, message string) string {
+		return "printf 'resumed plain stdout\\n'"
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+	result := runDispatchWithInboxMessageAndSpec(t, adapter, spec, readyPath, "resume plain stdout")
+
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "resumed plain stdout\n" {
+		t.Fatalf("response = %q, want resumed plain stdout", result.Response)
+	}
+	calls := adapter.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("resume calls = %d, want 1", len(calls))
+	}
+	if calls[0].sessionID != "550e8400-e29b-41d4-a716-446655440000" || calls[0].message != "resume plain stdout" {
+		t.Fatalf("resume call = %+v, want discovered session/message", calls[0])
 	}
 }
 
