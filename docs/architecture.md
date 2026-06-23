@@ -1,6 +1,6 @@
 # Architecture
 
-agent-mux is a Go dispatch binary for AI coding harnesses. It gives the caller one execution contract while preserving the operational differences between Codex CLI, Claude Code, and Gemini CLI behind adapter boundaries.
+agent-mux is a Go dispatch binary for AI coding harnesses. It gives the caller one execution contract while preserving the operational differences between Codex CLI, Claude Code, Gemini CLI, and experimental agy behind adapter boundaries.
 
 It exists to solve three concrete problems: harness heterogeneity, poor supervision of long-running workers, and fragile artifact recovery when a run times out or dies mid-flight.
 
@@ -36,7 +36,7 @@ Resolution is a single pass: hardcoded defaults, then frontmatter overlay, then 
 
 **Why Go.** The hard part of agent-mux is supervision, not string templating. The engine has to manage subprocess lifecycles, streamed event parsing, timeout escalation, inbox steering, and artifact persistence with clear failure boundaries. Go fits that shape directly: `LoopEngine.Dispatch` coordinates goroutines, `select`, `context.Context`, and process-group control without a runtime dependency chain. The result is a single deployable binary with concurrency as a first-class implementation tool rather than a framework feature.
 
-**Why a single binary with adapters.** Codex CLI, Claude Code, and Gemini CLI differ in flags, auth expectations, and event formats, but their control loop is the same: build args, start a process, parse streaming output, supervise liveness, and assemble a normalized result. `types.HarnessAdapter` captures exactly that seam. `internal/engine` owns lifecycle and restart logic once, while `internal/engine/adapter` owns only engine-specific translation.
+**Why a single binary with adapters.** Codex CLI, Claude Code, Gemini CLI, and agy differ in flags, auth expectations, event formats, and resume semantics, but their control loop is the same: build args, start a process, parse available output, supervise liveness, and assemble a normalized result. `types.HarnessAdapter` captures exactly that seam. `internal/engine` owns lifecycle and restart logic once, while `internal/engine/adapter` owns only engine-specific translation. Agy is the plain-stdout outlier: it has no structured event stream, token/cost telemetry, or live FIFO steering, so the adapter relies on final stdout, artifact scanning, and `agy.log` conversation discovery.
 
 **Why artifact-first.** A dispatch can produce valuable output before it produces a clean final response. agent-mux therefore treats the artifact directory as part of the execution contract, not as post-processing. The prompt preamble points workers at `$AGENT_MUX_ARTIFACT_DIR`, `cmd/agent-mux` registers the dispatch before launch, `LoopEngine.Dispatch` writes `_dispatch_ref.json` and starts `events.jsonl`, and result assembly scans artifacts regardless of terminal state. This keeps partial work observable after timeouts, freezes, or caller interruption. A separate durable store at `~/.agent-mux/dispatches/<dispatch_id>/` (`meta.json` + `result.json`) provides a queryable, home-directory-stable record of every dispatch independent of the artifact directory lifecycle, while the artifact directory carries run-local files such as `status.json`, `inbox.md`, and user-written artifacts.
 
@@ -75,10 +75,10 @@ caller
 | adapter          |
 +------------------+
   |
-  +-------------------+-------------------+
-  |                   |                   |
-  v                   v                   v
-codex binary      claude binary      gemini binary
+  +-------------------+-------------------+-------------------+
+  |                   |                   |                   |
+  v                   v                   v                   v
+codex binary      claude binary      gemini binary      agy binary
 ```
 
 ## Package Map
@@ -92,7 +92,7 @@ codex binary      claude binary      gemini binary
 | `internal/steer` | Unified steering delivery: `Delivery`, inbox helpers, FIFO helpers |
 | `internal/hooks` | Deny and warn pattern evaluation, prompt safety preamble injection |
 | `internal/engine` | `LoopEngine` process lifecycle, event loop, timeout/watchdog logic, resume/restart, soft-stdin bridge |
-| `internal/engine/adapter` | Adapter registry plus `CodexAdapter`, `ClaudeAdapter`, `GeminiAdapter` |
+| `internal/engine/adapter` | Adapter registry plus `CodexAdapter`, `ClaudeAdapter`, `GeminiAdapter`, `AgyAdapter` |
 | `internal/supervisor` | `exec.Cmd` wrapper with process-group startup and signal handling |
 | `internal/event` | `Emitter` NDJSON formatting, heartbeat ticker, dual-sink streaming |
 

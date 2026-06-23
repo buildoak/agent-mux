@@ -69,7 +69,7 @@ agent-mux -P=researcher -E=gemini -m gemini-3.1-pro-preview -C=/repo "Analyze au
 - **Codex**: implementation, debugging, precise edits
 - **Claude**: planning, synthesis, review
 - **Gemini**: analysis, second opinion (models: `gemini-3-flash-preview`, `gemini-3.1-pro-preview`)
-- **agy**: experimental CLI-first model access. Plain stdout, agent-mux passes `agy --sandbox`, discovers Antigravity conversation IDs from `agy.log`, and uses inbox + `--conversation` for nudge/redirect resume. It does not imply plugins, MCP, browser automation, Google services, or provider service actions.
+- **agy**: experimental CLI-first model access. Plain stdout; agent-mux internally invokes the local agy CLI with its fixed `--sandbox`, discovers Antigravity conversation IDs from `agy.log`, and uses inbox + `--conversation` for nudge/redirect resume. Operator-supplied sandbox/permission/reasoning/max-turn/full-access options are rejected. This does not imply plugins, MCP, browser automation, Google services, or provider service actions.
 
 Gemini ignores `-e` -- use model selection for depth control.
 

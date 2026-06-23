@@ -175,12 +175,13 @@ a unique prefix. Both argument orderings work: `steer <id> <action>` and
 | Codex | Inbox + `codex exec resume` | FIFO disabled because child stdin is an EOF reader; `stdin_pipe_ready` is false, so CLI routes to inbox |
 | Claude | Inbox + resume/restart through `ResumeArgs()` | Loop restarts harness when inbox messages are pending |
 | Gemini | Inbox + resume/restart through `ResumeArgs()` | Same resume/restart pattern as Claude |
+| agy | Inbox + `agy --conversation <id>` | Conversation ID is discovered from `<artifact_dir>/agy.log`; no FIFO/live stdin; nudge/redirect are resume-backed restarts, not live interrupts |
 
 > **Note (codex-cli 0.121+):** Codex FIFO delivery is disabled. `steer
 > nudge|redirect` falls back to inbox + `codex exec resume`, which can only be
 > delivered after the current turn reaches a safe boundary or the run exits.
 
-For Claude and Gemini, steering is NOT passive inbox delivery — it actively
+For Claude, Gemini, and agy, steering is NOT passive inbox delivery — it actively
 resumes/restarts the session with the steering message. If a tool is currently
 executing, the restart is deferred until the tool completes (or until
 `engine_opts.max_steer_wait_seconds` is exceeded, whichever comes first).

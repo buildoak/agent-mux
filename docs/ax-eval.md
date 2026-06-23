@@ -201,6 +201,10 @@ and checks final `status.json.session_id`. The multimodal/image gate creates a
 PDF and PNG fixture in the dispatch cwd, asks agy to read them, asks agy to
 generate `generated-banana.png`, and verifies the file exists.
 
+Live agy prerequisites: local `agy` binary installed, authenticated, network/provider access available, and expected provider cost/quota accepted. `AX_EVAL_AGY_LIVE_ASYNC` and `AX_EVAL_AGY_LIVE_MULTIMODAL` do not refresh the model cache themselves; run the base live gate or `agent-mux config engines --refresh-models --json` first when using `AX_EVAL_AGY_MODEL`.
+
+The multimodal/image gate is a smoke test: it verifies the exact sentinel response and that `generated-banana.png` exists and is non-empty. It does not validate visual quality or structured image-generation telemetry.
+
 The deterministic suite intentionally does not set any live agy opt-in variable.
 ### Reports
 ```bash

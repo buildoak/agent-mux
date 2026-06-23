@@ -134,9 +134,11 @@ Heartbeat interval default: `15s`.
 ### Soft timeout flow
 
 1. at `timeout_sec`, emit `timeout_warning`
-2. write a wrap-up message to the inbox telling the worker to write final artifacts to `$AGENT_MUX_ARTIFACT_DIR`
+2. for adapters with soft-timeout wrap-up enabled, write an inbox message asking the worker to summarize and save final artifacts
 3. start the grace timer
 4. if grace expires, stop the worker and return `timed_out`
+
+Agy caveat: agy uses plain stdout and `SoftTimeoutNoWrapup`; agent-mux does not send an agy wrap-up prompt at soft timeout. Use `steer nudge` before timeout if you want a resumed summary, or use `--recover=<id>` after timeout.
 
 ### Worker Diagnostics
 
@@ -150,7 +152,7 @@ Soft steering is unified under `internal/steer`:
 
 - **Codex**: nudge/redirect currently falls back to inbox + resume because the
   loop disables child-stdin soft steering
-- **Claude/Gemini**: inbox delivery triggers session resume/restart via
+- **Claude/Gemini/agy**: inbox delivery triggers session resume/restart via
   `ResumeArgs()` — the loop restarts the harness with the pending inbox
   messages as the resume prompt
 

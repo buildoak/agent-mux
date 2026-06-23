@@ -162,6 +162,8 @@ The JSON entries include active `models`, `model_source`, `model_status`, option
 
 For agy, the built-in model list remains deterministic. `--refresh-models` is the only path that runs `agy models`; it writes `~/.agent-mux/cache/agy-models.json`. Normal config and dispatch validation read that cache when present and otherwise use the built-in fallback.
 
+Operational rule: treat `agent-mux config engines --json` as the active allowlist. A valid agy cache replaces the built-in fallback for validation. If an agy dispatch fails with `model_not_found`, run `agent-mux config engines --refresh-models --json`, inspect `model_source`, `model_status`, and `model_cache_path`, then retry with a listed model.
+
 ---
 
 ## Hooks

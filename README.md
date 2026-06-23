@@ -1,6 +1,6 @@
 # agent-mux
 
-Cross-engine dispatch layer. One CLI, one JSON contract, any LLM engine.
+Cross-engine dispatch layer for built-in harness adapters: codex, claude, gemini, and experimental agy. One CLI, one JSON result contract, adapter boundary for more.
 
 > **Go rewrite.** agent-mux was recently rewritten from TypeScript to Go -- static binary, goroutine-based supervision, no runtime dependencies.
 > The TS version is preserved on the `agent-mux-ts` branch.
@@ -32,18 +32,13 @@ go build -o agent-mux ./cmd/agent-mux
 
 ```bash
 ./agent-mux config prompts
-# NAME                  ENGINE  MODEL             EFFORT  TIMEOUT  DESCRIPTION
-# architect             claude  claude-opus-4-6   high    900      Strategic plans with verification gates
-# auditor               codex   gpt-5.4           xhigh   2700     Adversarial review -- finds bugs, missing tests, unsafe assumptions
-# explorer              codex   gpt-5.4           high    600      Multi-file internal investigation
-# grunt                 codex   gpt-5.4-mini      medium  600      Mechanical execution -- rote changes, fan-out units
-# lifter                codex   gpt-5.4           high    1800     Scoped implementation -- code changes with built-in verification
-# researcher            claude  claude-opus-4-6   high    900      External synthesis with confidence
-# scout                 codex   gpt-5.4-mini      low     180      Quick read-only probe
-# ticket-worker         codex   gpt-5.4-mini      xhigh   -        Ticket execution (standard)
-# ticket-worker-heavy   codex   gpt-5.4           high    -        Ticket execution (complex)
-# writer                codex   gpt-5.4           high    1500     Publishable prose in the user's voice
+./agent-mux config prompts --json
+./agent-mux config engines
+./agent-mux config engines --json
+./agent-mux config engines --refresh-models --json  # explicit agy model-cache refresh
 ```
+
+`config prompts` reflects your local `~/.agent-mux/prompts/` directory. `config engines --json` is the active engine/model/capability source of truth for dispatch validation.
 
 **Profile-based dispatch** (engine, model, effort, timeout, system prompt all resolved from the profile):
 
@@ -97,22 +92,24 @@ You are a lifter. You build what was specified, verify it works, and report back
 
 ## Engines
 
-| Engine | Binary | Best For | Default Model |
-|--------|--------|----------|---------------|
-| `codex` | `codex` | Implementation, debugging, code edits | `gpt-5.4` |
-| `claude` | `claude` | Planning, synthesis, long-form reasoning | `claude-sonnet-4-6` |
-| `gemini` | `gemini` | Second opinion, contrast checks | `gemini-2.5-pro` |
-| `agy` | `agy` | Experimental CLI-first model access | `Gemini 3.1 Pro (High)` |
+| Engine | Resume | Structured events | Activity/tokens | Steering | Multimodal/image |
+|--------|--------|-------------------|-----------------|----------|------------------|
+| `codex` | yes | yes | activity + tokens, no cost | inbox resume / abort | no |
+| `claude` | yes | yes | activity + tokens, no cost | inbox resume / abort | no |
+| `gemini` | yes, UUID may fall back to latest | yes | activity + tokens, no cost | inbox resume / abort | no |
+| `agy` | yes, after `agy.log` conversation ID | no, plain stdout | no structured activity/tokens/cost | inbox + `--conversation`, not live interrupt | smoke-verified, provider/model-dependent |
 
 Engine CLIs must be installed separately -- agent-mux dispatches to them, it does not bundle them.
+
+`agy` is CLI-first experimental support. agent-mux internally invokes the local `agy` CLI with its fixed `--sandbox`, rejects operator-supplied portable sandbox/permission/reasoning/max-turn/full-access options, stores provider diagnostics in private `agy.log`, and does not imply plugins, MCP, browser automation, Google services, or provider service actions.
 
 ## Features
 
 - **Profile-based dispatch** -- `-P=<name>` loads engine, model, effort, timeout, skills, and system prompt from a single markdown file. One flag replaces six.
 - **Recovery and signals** -- Start a follow-up dispatch with `--recover=<id>` to include prior context. Live nudge/redirect require a live FIFO or resume-capable engine; agy uses resume-backed inbox delivery after its Antigravity conversation ID is discovered.
-- **Two-phase timeout** -- Soft timeout fires a wrap-up signal, grace period allows clean exit, hard timeout kills. Artifacts are preserved at every phase.
+- **Two-phase timeout** -- Soft timeout fires a wrap-up signal when the adapter supports it, grace period allows clean exit, hard timeout kills. Agy uses plain stdout and does not receive a soft-timeout wrap-up prompt. Artifacts are preserved at every phase.
 - **Async dispatch** -- Fire and forget with `--async`. Collect results later with `wait` or `result`.
-- **Event streaming** -- 15 NDJSON event types on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `timeout_warning`, and more.
+- **Event streaming** -- Event-stream engines emit NDJSON on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `timeout_warning`, and more. Agy is plain stdout only, so agent-mux reports the final response plus discovered artifacts.
 - **Hooks** -- Pattern-based deny/warn rules evaluated on harness events.
 - **Skill injection** -- Load `SKILL.md` runbooks into the dispatch prompt. Skills carry scripts, references, and setup.
 - **Timeout and diagnostics** -- Global dispatch timeout is the sole hard backstop. Workers are trusted to complete within their timeout. 5-second watchdog cycle updates `status.json` for live observability. Process-group signals ensure grandchildren die with the harness. Forensic tools (`status.json`, `events.jsonl`, `steer nudge`) replace automatic kills for silent-worker diagnosis.
@@ -143,6 +140,7 @@ agent-mux will attempt dispatch if any auth path is available --
 | Doc | What |
 |-----|------|
 | [docs/](docs/) | Full technical reference -- architecture, config, dispatch lifecycle |
+| [docs/agy.md](docs/agy.md) | Agy engine contract, limitations, model cache, steering, and AX gates |
 | [SKILL.md](skill/SKILL.md) | Operational manual for AI agents using agent-mux |
 | [BACKLOG.md](BACKLOG.md) | Open bugs, feature requests, spec gaps, and known limitations |
 | [references/](skill/references/) | Engine comparison, prompting guide, output contract, config guides, installation |

@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **agy engine hardening** — agy dispatches now preflight before preview or launch, reject explicit unsupported portable options, keep provider diagnostics private, use agent-mux as the user-visible timeout owner, and document the v1 one-shot/plain-stdout/no-resume contract.
+- **agy engine hardening** — agy dispatches now preflight before preview or launch, reject explicit unsupported portable options, keep provider diagnostics private, use agent-mux as the user-visible timeout owner, and document the plain-stdout contract with resume via discovered Antigravity conversation IDs, no live interrupt, and no structured event stream.
 
 ## [3.4.1] - 2026-04-19
 

@@ -210,6 +210,8 @@ When `sessionID` matches a UUID pattern, the adapter logs a warning and uses `"l
 ## Agy Adapter
 `AgyAdapter` maps agent-mux dispatch state onto the `agy` CLI. This support is experimental and CLI-first. It does not imply access to plugins, MCP servers, browser automation, Google services, or any provider-specific service actions beyond what the local `agy` binary itself supports.
 
+See [agy.md](agy.md) for the operator-facing agy contract, model cache behavior, steering examples, and live AX gates.
+
 ### Binary
 `Binary()` returns:
 ```text
@@ -240,7 +242,7 @@ Agy output is plain stdout, not an event stream. The supervision loop captures s
 Agy supports resume through conversation IDs discovered in `<artifact_dir>/agy.log`. `SupportsResume()` returns true and `ResumeArgs()` rebuilds a print invocation with `--conversation <id>`. Because agy does not expose structured activity events, nudge and redirect delivery uses resume-based inbox semantics rather than live FIFO injection. `agent-mux steer <id> abort` remains supported through SIGTERM or `control.json`.
 
 ### Multimodal and Image Generation
-The current capability matrix marks agy multimodal input and image generation as supported by the local agy CLI, with the important caveat that agent-mux still treats agy output as plain stdout. Image or multimodal activity is not surfaced as structured tool events, token usage, or cost usage.
+The current capability matrix marks agy multimodal input and image generation as supported because local live smoke tests verified PDF/PNG consumption and creation of a generated PNG through the local agy setup. This is not a universal guarantee for every agy provider, model, account, or quota state. agent-mux still treats agy output as plain stdout: image or multimodal activity is not surfaced as structured tool events, file events, token usage, or cost usage. Ask agy for named file outputs when generated artifacts matter, then verify those files.
 
 ### Model Discovery
 Agy model discovery is deterministic on normal paths and explicit when refreshed. `agent-mux config engines` reports the active agy allowlist from `~/.agent-mux/cache/agy-models.json` when a valid cache exists, otherwise it reports the built-in fallback. Normal config reads and dispatch validation do not invoke `agy`.

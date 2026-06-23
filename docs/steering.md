@@ -112,6 +112,8 @@ On FIFO-capable platforms, `LoopEngine.Dispatch` creates `stdin.pipe` inside the
 
 If any check fails, or FIFO open/write returns readiness errors such as missing path, no reader, or broken pipe, the CLI falls back to inbox delivery only when the adapter supports resume. Without resume support, the CLI returns `steer_unsupported`.
 
+The FIFO payload is one JSON envelope with `action` and `message`. The loop's soft-stdin bridge decodes it, emits `coordinator_inject`, and writes formatted text directly into the live stdin pipe when an adapter truthfully exposes one. If a tool or command is active, delivery is deferred until it completes; once `max_steer_wait_seconds` is exceeded, the loop force-proceeds instead of deferring forever.
+
 ## Agy Steering
 
 `agy` dispatches use plain stdout and support resume through Antigravity conversation IDs discovered from `<artifact_dir>/agy.log`. agent-mux passes `--sandbox` to the local `agy` CLI and does not create a truthful live nudge/redirect path. The `agy` CLI owns what that sandbox means. Therefore:
@@ -121,8 +123,6 @@ If any check fails, or FIFO open/write returns readiness errors such as missing 
 - `agent-mux steer <id> redirect "..."` writes a `[REDIRECT]` inbox message for resume-backed delivery
 - `agent-mux --signal <id> "..."` writes a raw inbox message for resume-backed delivery
 - delivery is not a live interrupt; the loop restarts agy with `--conversation <session_id>` once it has a resumable conversation ID
-
-The FIFO payload is one JSON envelope with `action` and `message`. The loop's soft-stdin bridge decodes it, emits `coordinator_inject`, and writes formatted text directly into the live Codex stdin pipe. If a tool or command is active, delivery is deferred until it completes; once `max_steer_wait_seconds` is exceeded, the loop force-proceeds instead of deferring forever.
 
 ## Live Status
 

@@ -113,6 +113,8 @@ Present when `status` is `failed`.
 | `model` | string | Model used |
 | `profile` | string | Profile name (from `DispatchAnnotations`) |
 | `skills` | string[] | Injected skill names |
+
+Engine caveat: agy does not expose structured activity, token, cache, or cost telemetry through agent-mux. For agy, expect empty activity arrays, zero/omitted token fields, and `cost_usd: 0`. Multimodal and image-generation outputs are verified through final artifact scanning or named files, not through tool/file events.
 | `tokens` | object | Token usage |
 | `turns` | int | Conversation turns |
 | `cost_usd` | float | Estimated cost |

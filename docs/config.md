@@ -193,6 +193,8 @@ That command runs `agy models` with a short timeout, parses model names, and wri
 
 For `agy`, `supports_resume` means resume via Antigravity conversation IDs discovered from `agy.log`. `event_stream` remains false because agy still returns plain stdout; `activity_tracking`, `token_usage`, and `cost_usage` remain false because agent-mux does not receive structured tool/file/usage events from agy.
 
+See [agy.md](agy.md) for the full agy model-cache and steering contract.
+
 ## Hooks
 
 Hooks are configured through `.agent-mux/hooks/` directories (project-local discovery) and operate on harness events. Hook scripts receive JSON on stdin and return exit codes to allow, block, or warn.
@@ -228,6 +230,9 @@ Skills from profile frontmatter are prepended to request skills. Duplicates are 
 agent-mux config                    # summary of hardcoded defaults and env overrides
 agent-mux config prompts            # list all profiles with metadata
 agent-mux config prompts --json     # JSON array of profile catalog
+agent-mux config engines            # active engine capability/model matrix
+agent-mux config engines --json     # JSON array of engine capabilities and active models
+agent-mux config engines --refresh-models --json  # explicitly refresh agy model cache
 agent-mux config skills             # list discoverable skills
 agent-mux config skills --json      # JSON array of skills
 ```
