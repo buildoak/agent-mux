@@ -10,6 +10,7 @@ import (
 )
 
 const defaultAgyPrintTimeoutSec = 300
+const agyPrintTimeoutBackstopGraceSec = 5
 
 type AgyAdapter struct{}
 
@@ -23,6 +24,10 @@ func (a *AgyAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 	timeoutSec := defaultAgyPrintTimeoutSec
 	if spec.TimeoutSec > 0 {
 		timeoutSec = spec.TimeoutSec
+		if spec.GraceSec > 0 {
+			timeoutSec += spec.GraceSec
+		}
+		timeoutSec += agyPrintTimeoutBackstopGraceSec
 	}
 	args = append(args, "--print-timeout", strconv.Itoa(timeoutSec)+"s")
 

@@ -860,6 +860,40 @@ func TestLoopEnginePlainStdoutEmptyCleanExitFails(t *testing.T) {
 	}
 }
 
+func TestLoopEnginePrivateDiagnosticsSuppressesStderrInFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter("echo 'provider secret detail' >&2; exit 7")
+	adapter.supportsResume = false
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:          types.AdapterStdinEOF,
+		OutputMode:         types.AdapterOutputPlainStdout,
+		FailureContextMode: types.AdapterFailureContextPrivateDiagnostics,
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil {
+		t.Fatal("error = nil, want process failure")
+	}
+	if strings.Contains(result.Error.Message, "provider secret detail") || strings.Contains(result.Error.Hint, "provider secret detail") {
+		t.Fatalf("error leaks stderr despite private diagnostics: %+v", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, "Exit code 7") {
+		t.Fatalf("error.message = %q, want exit code without stderr tail", result.Error.Message)
+	}
+}
+
 func TestLoopEngineStdinEOFPolicyDoesNotHangStdinDrain(t *testing.T) {
 	artifactDir := t.TempDir()
 	adapter := newScriptedAdapter(strings.Join([]string{

@@ -213,16 +213,18 @@ agy --sandbox --print-timeout <seconds>s [--log-file <artifact_dir>/agy.log] \
   [--model <model>] [--add-dir <dir> ...] -p "<prompt>"
 ```
 `BuildArgs()` applies these rules:
-- always enables `--sandbox`
+- always passes `--sandbox`; the local `agy` CLI owns the exact isolation semantics
 - never emits a dangerous sandbox-skip or approval-bypass flag
-- sets `--print-timeout` from `spec.TimeoutSec`, falling back to 300s when unset
+- sets `--print-timeout` to `spec.TimeoutSec + spec.GraceSec + 5s` when a dispatch timeout is set, so agent-mux owns the user-visible timeout; falls back to 300s when unset
 - writes provider diagnostics to `<artifact_dir>/agy.log` when an artifact directory exists
 - forwards `--model` when `spec.Model` is set
 - forwards additional directories as repeated `--add-dir`
 - prepends `spec.SystemPrompt` into the prompt body because there is no dedicated system prompt flag
 
+Preflight rejects explicit portable sandbox/permission/reasoning/max-turn/full-access options for agy dispatches. Implicit CLI defaults are ignored by the adapter; supported agy arguments are limited to the local CLI sandbox flag, print-timeout backstop, diagnostics log path, model, add-dir, and prompt.
+
 ### Output and Artifacts
-Agy output is plain stdout, not an event stream. The supervision loop captures stdout verbatim and assembles the final response from that captured stream. Provider diagnostics in `agy.log` are private runtime diagnostics and should not be surfaced as public result artifacts.
+Agy output is plain stdout, not an event stream. The supervision loop captures stdout verbatim and assembles the final response from that captured stream. A clean exit with empty stdout fails with `harness_empty_output`. Provider diagnostics in `agy.log` are private runtime diagnostics and are not appended to user-visible structured errors.
 
 ### Resume and Steering
 Agy does not support resume. `SupportsResume()` returns false and `ResumeArgs()` returns nil. Because there is no live FIFO channel and no resume-based inbox delivery, `agent-mux steer <id> nudge|redirect` fails with `steer_unsupported` for agy dispatches. `agent-mux steer <id> abort` remains supported through SIGTERM or `control.json`.

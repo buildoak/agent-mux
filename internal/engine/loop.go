@@ -962,7 +962,7 @@ buildResult:
 		if dispatchErr != nil {
 			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
 		}
-		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), false)), nil
+		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), false, runtimePolicy.FailureContextMode)), nil
 
 	case "interrupted":
 		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError("interrupted", "Dispatch interrupted by caller cancellation.", "")), nil
@@ -986,6 +986,9 @@ buildResult:
 			)), nil
 		}
 		if softTimedOut {
+			if !runtimePolicy.SupportsSoftTimeoutWrapup() {
+				return finalizeTimedOut(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
+			}
 			return finalizeCompleted(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
 		}
 
@@ -994,7 +997,7 @@ buildResult:
 		}
 
 		if procErr != nil {
-			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), true)), nil
+			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), true, runtimePolicy.FailureContextMode)), nil
 		}
 		return finalizeCompleted(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
 	}
@@ -1141,7 +1144,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func failureFromEventOrProcess(errEvt *types.HarnessEvent, proc *supervisor.Process, stderr string, includeExitPrefix bool) *types.DispatchError {
+func failureFromEventOrProcess(errEvt *types.HarnessEvent, proc *supervisor.Process, stderr string, includeExitPrefix bool, failureContext types.AdapterFailureContextMode) *types.DispatchError {
 	if errEvt != nil {
 		return dispatch.NewDispatchError(errEvt.ErrorCode, errEvt.Text, "")
 	}
@@ -1151,7 +1154,7 @@ func failureFromEventOrProcess(errEvt *types.HarnessEvent, proc *supervisor.Proc
 		base = fmt.Sprintf("Exit code %d.", exitCode)
 	}
 	tail := ""
-	if strings.TrimSpace(stderr) != "" {
+	if failureContext != types.AdapterFailureContextPrivateDiagnostics && strings.TrimSpace(stderr) != "" {
 		lines := strings.Split(stderr, "\n")
 		if len(lines) > 5 {
 			lines = lines[len(lines)-5:]

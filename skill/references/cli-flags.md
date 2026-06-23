@@ -44,7 +44,7 @@ and `agent-mux preview ...`.
 |------|-------|------|---------|-----------|-------|
 | `--sandbox` | | string | `danger-full-access` | Codex | `danger-full-access`, `workspace-write`, `read-only` |
 | `--reasoning` | `-r` | string | empty unless set | Codex | Maps to `-c model_reasoning_effort=<value>` |
-| `--permission-mode` | | string | from `AGENT_MUX_PERMISSION_MODE` when set; otherwise empty | Codex, Claude, Gemini | Codex: takes precedence over sandbox. Claude: passed through. Gemini: maps to approval mode and defaults to `yolo`. Not used by `agy`. |
+| `--permission-mode` | | string | from `AGENT_MUX_PERMISSION_MODE` when set; otherwise empty | Codex, Claude, Gemini | Codex: takes precedence over sandbox. Claude: passed through. Gemini: maps to approval mode and defaults to `yolo`. Explicit values are rejected for `agy`; env defaults are ignored by the agy adapter. |
 | `--max-turns` | | int | `0` | Claude | Maximum conversation turns |
 | `--add-dir` | | string[] | `[]` | All engines | Codex/Claude/agy forward repeated `--add-dir`; Gemini joins as `--include-directories` and also includes `$HOME,/tmp` |
 

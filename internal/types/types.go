@@ -90,6 +90,10 @@ type DispatchSpec struct {
 	// EngineOpts["permission-mode"] for their permission/approval flags.
 	FullAccess bool           `json:"full_access"`
 	EngineOpts map[string]any `json:"engine_opts,omitempty"`
+	// OptionSources records where resolved fields/options came from so engine
+	// preflight can distinguish explicit user intent from harmless defaults.
+	// It is runtime-only and intentionally omitted from JSON persistence.
+	OptionSources map[string]string `json:"-"`
 }
 
 type dispatchSpecJSON struct {

@@ -183,7 +183,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 
 ### L1.1 — engine_not_found
 
-**Original command:** `agent-mux -e openai --cwd /repo "Fix the bug in parser.go"`
+**Original command:** `agent-mux -E openai --cwd /repo "Fix the bug in parser.go"`
 
 **Error JSON:**
 ```json
@@ -191,7 +191,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
   "code": "engine_not_found",
   "message": "Unknown engine name.",
   "hint": "agent-mux only supports the built-in engines agy, claude, codex, and gemini.",
-  "example": "Retry with a valid engine. Example: agent-mux -e codex --cwd /repo \"<prompt>\".",
+  "example": "Retry with a valid engine. Example: agent-mux -E codex --cwd /repo \"<prompt>\".",
   "retryable": true
 }
 ```
@@ -207,7 +207,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 
 ### L1.2 — model_not_found
 
-**Original command:** `agent-mux -e codex -m gpt-4-turbo --cwd /repo "Scan for SQL injection"`
+**Original command:** `agent-mux -E codex -m gpt-4-turbo --cwd /repo "Scan for SQL injection"`
 
 **Error JSON:**
 ```json
@@ -215,7 +215,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
   "code": "model_not_found",
   "message": "Unknown model for engine.",
   "hint": "The selected model is not available for the current engine.",
-  "example": "Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
+  "example": "Retry with a supported model. Example: agent-mux -E codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
   "retryable": true
 }
 ```
@@ -231,7 +231,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 
 ### L1.3 — invalid_args (missing cwd)
 
-**Original command:** `agent-mux -e codex "Fix failing tests"`
+**Original command:** `agent-mux -E codex "Fix failing tests"`
 
 **Error JSON:**
 ```json
@@ -239,7 +239,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
   "code": "invalid_args",
   "message": "Invalid dispatch arguments.",
   "hint": "The dispatch request is missing required fields or contains invalid flag combinations.",
-  "example": "Provide a valid engine, prompt, and working directory. Example: agent-mux -e codex --cwd /repo \"Fix failing test\".",
+  "example": "Provide a valid engine, prompt, and working directory. Example: agent-mux -E codex --cwd /repo \"Fix failing test\".",
   "retryable": true
 }
 ```
@@ -254,7 +254,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 
 ### L1.4 — frozen_killed
 
-**Original command:** `agent-mux -e codex --cwd /repo "Analyze every file in this repository and write comprehensive documentation"`
+**Original command:** `agent-mux -E codex --cwd /repo "Analyze every file in this repository and write comprehensive documentation"`
 
 **Error JSON:**
 ```json
@@ -301,7 +301,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 
 ### L1.6 — max_depth_exceeded (not retryable)
 
-**Original command:** `agent-mux -e codex --cwd /repo "Recursively analyze all modules"`
+**Original command:** `agent-mux -E codex --cwd /repo "Recursively analyze all modules"`
 
 **Error JSON:**
 ```json
@@ -324,7 +324,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 
 ### L1.7 — startup_failed
 
-**Original command:** `agent-mux -e gemini --cwd /repo "Research market trends"`
+**Original command:** `agent-mux -E gemini --cwd /repo "Research market trends"`
 
 **Error JSON:**
 ```json

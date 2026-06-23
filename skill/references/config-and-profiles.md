@@ -32,7 +32,7 @@ system prompt when no explicit system prompt is supplied.
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `engine` | string | no | `codex`, `claude`, or `gemini` |
+| `engine` | string | no | `agy`, `claude`, `codex`, or `gemini` |
 | `model` | string | no | Model name for the engine |
 | `effort` | string | no | `low`, `medium`, `high`, `xhigh`. Gemini ignores this (logs a warning); use model selection for thinking depth |
 | `timeout` | int | no | Timeout in seconds; must be > 0 when set |

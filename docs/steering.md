@@ -114,7 +114,7 @@ If any check fails, or FIFO open/write returns readiness errors such as missing 
 
 ## Agy Steering
 
-`agy` dispatches use plain stdout and do not support resume. agent-mux starts them with the local `agy` CLI sandbox enabled and does not create a truthful live nudge/redirect path. Therefore:
+`agy` dispatches use plain stdout and do not support resume. agent-mux passes `--sandbox` to the local `agy` CLI and does not create a truthful live nudge/redirect path. The `agy` CLI owns what that sandbox means. Therefore:
 
 - `agent-mux steer <id> abort` works through `SIGTERM` or `control.json`
 - `agent-mux steer <id> nudge` returns `steer_unsupported`

@@ -602,6 +602,178 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	}
 }
 
+func TestPreviewPreflightRejectsUnknownEngineBeforePreview(t *testing.T) {
+	isolateHome(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--engine", "bogus",
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty before preview/dispatch", stderr.String())
+	}
+	if strings.Contains(stdout.String(), `"kind":"preview"`) {
+		t.Fatalf("stdout = %q, want failed result instead of preview", stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "engine_not_found" {
+		t.Fatalf("error = %#v, want engine_not_found", result.Error)
+	}
+	if !strings.Contains(result.Error.Hint, "agy") {
+		t.Fatalf("error.hint = %q, want valid engine list with agy", result.Error.Hint)
+	}
+}
+
+func TestPreviewPreflightRejectsAgyUnknownModelBeforePreview(t *testing.T) {
+	isolateHome(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--engine", "agy",
+		"--model", "not-observed",
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty before preview/dispatch", stderr.String())
+	}
+	if strings.Contains(stdout.String(), `"kind":"preview"`) {
+		t.Fatalf("stdout = %q, want failed result instead of preview", stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "model_not_found" {
+		t.Fatalf("error = %#v, want model_not_found", result.Error)
+	}
+	for _, want := range []string{"Gemini 3.1 Pro (High)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B (Medium)"} {
+		if !strings.Contains(result.Error.Hint, want) {
+			t.Fatalf("error.hint = %q, want observed agy model %q", result.Error.Hint, want)
+		}
+	}
+}
+
+func TestDispatchPreflightRejectsGeminiInvalidPermissionBeforeLaunch(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--yes",
+		"--engine", "gemini",
+		"--permission-mode", "sideways",
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if strings.Contains(stderr.String(), `"type":"dispatch_start"`) {
+		t.Fatalf("stderr = %q, want no dispatch_start before preflight failure", stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_args" {
+		t.Fatalf("error = %#v, want invalid_args", result.Error)
+	}
+	if !strings.Contains(strings.ToLower(result.Error.Message), "approval mode") {
+		t.Fatalf("error.message = %q, want approval-mode validation message", result.Error.Message)
+	}
+}
+
+func TestRunAgyRejectsExplicitUnsupportedOptions(t *testing.T) {
+	isolateHome(t)
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "sandbox",
+			args: []string{"--yes", "--engine", "agy", "--sandbox", "workspace-write", "hello"},
+			want: "sandbox",
+		},
+		{
+			name: "permission mode",
+			args: []string{"--yes", "--engine", "agy", "--permission-mode", "yolo", "hello"},
+			want: "permission-mode",
+		},
+		{
+			name: "reasoning",
+			args: []string{"--yes", "--engine", "agy", "--reasoning", "high", "hello"},
+			want: "reasoning",
+		},
+		{
+			name: "max turns",
+			args: []string{"--yes", "--engine", "agy", "--max-turns", "2", "hello"},
+			want: "max-turns",
+		},
+		{
+			name: "full access",
+			args: []string{"--yes", "--engine", "agy", "--no-full", "hello"},
+			want: "full_access",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(tc.args, strings.NewReader(""), &stdout, &stderr)
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+			}
+			if strings.Contains(stderr.String(), `"type":"dispatch_start"`) {
+				t.Fatalf("stderr = %q, want no dispatch_start before preflight failure", stderr.String())
+			}
+			result := decodeResult(t, stdout.Bytes())
+			if result.Error == nil || result.Error.Code != "invalid_args" {
+				t.Fatalf("error = %#v, want invalid_args", result.Error)
+			}
+			if !strings.Contains(result.Error.Message, tc.want) {
+				t.Fatalf("error.message = %q, want option %q", result.Error.Message, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunAgyIgnoresEnvPermissionModeForPreview(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("AGENT_MUX_PERMISSION_MODE", "yolo")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"preview",
+		"--engine", "agy",
+		"hello",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	preview := decodePreviewResult(t, stdout.Bytes())
+	if preview.Kind != "preview" {
+		t.Fatalf("kind = %q, want preview", preview.Kind)
+	}
+	if preview.DispatchSpec.Engine != "agy" {
+		t.Fatalf("dispatch_spec.engine = %q, want agy", preview.DispatchSpec.Engine)
+	}
+}
+
 func TestDispatchTTYConfirmationCancelsBeforeDispatch(t *testing.T) {
 	isolateHome(t)
 
@@ -1352,6 +1524,71 @@ func TestRunAgyUnknownModelShowsObservedDefaults(t *testing.T) {
 		if !strings.Contains(result.Error.Hint, want) {
 			t.Fatalf("error.hint = %q, want observed agy model %q", result.Error.Hint, want)
 		}
+	}
+}
+
+func TestRunAgyRejectsExplicitUnsupportedOptionsFromStdin(t *testing.T) {
+	isolateHome(t)
+
+	input := map[string]any{
+		"dispatch_id":  "stdin-agy-unsupported-option",
+		"engine":       "agy",
+		"prompt":       "hello",
+		"cwd":          t.TempDir(),
+		"artifact_dir": filepath.Join(t.TempDir(), "artifacts") + "/",
+		"engine_opts": map[string]any{
+			"permission-mode": "yolo",
+		},
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--stdin"}, bytes.NewReader(data), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if strings.Contains(stderr.String(), `"type":"dispatch_start"`) {
+		t.Fatalf("stderr = %q, want no dispatch_start before preflight failure", stderr.String())
+	}
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_args" {
+		t.Fatalf("error = %#v, want invalid_args", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, "permission-mode") {
+		t.Fatalf("error.message = %q, want permission-mode", result.Error.Message)
+	}
+}
+
+func TestRunAgyIgnoresEnvPermissionModeFromStdin(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("AGENT_MUX_PERMISSION_MODE", "yolo")
+	t.Setenv("PATH", t.TempDir())
+
+	input := map[string]any{
+		"dispatch_id":  "stdin-agy-env-permission",
+		"engine":       "agy",
+		"prompt":       "hello",
+		"cwd":          t.TempDir(),
+		"artifact_dir": filepath.Join(t.TempDir(), "artifacts") + "/",
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--stdin"}, bytes.NewReader(data), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found after env permission-mode is ignored", result.Error)
 	}
 }
 

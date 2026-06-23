@@ -70,7 +70,7 @@ matters, especially if multiple Gemini sessions overlap.
 ## 7. `-e` and `-E` Are Different Flags
 
 Lowercase `-e` is effort (`low`, `medium`, `high`, `xhigh`). Uppercase `-E` is
-engine (`codex`, `claude`, `gemini`). Lowercase `-m` is model.
+engine (`agy`, `claude`, `codex`, `gemini`). Lowercase `-m` is model.
 
 The slash-path shorthand `codex/gpt-5.4/xhigh` is not parsed by agent-mux. Use
 explicit flags:

@@ -26,7 +26,7 @@ These flags are registered in normal dispatch mode.
 | Flag | Short | Type | Default | Notes |
 | --- | --- | --- | --- | --- |
 | `--profile` | `-P` | string | empty | Profile name -- loads `~/.agent-mux/prompts/<name>.md` |
-| `--engine` | `-E` | string | from profile | `codex`, `claude`, `gemini` |
+| `--engine` | `-E` | string | from profile | `agy`, `claude`, `codex`, `gemini` |
 | `--cwd` | `-C` | string | current dir | Working directory |
 | `--model` | `-m` | string | from profile | Model override |
 | `--effort` | `-e` | string | resolved later | `low`, `medium`, `high`, `xhigh`. Ignored by Gemini (warning logged); use model selection |
@@ -58,8 +58,8 @@ These flags are registered in normal dispatch mode.
 | --- | --- | --- | --- | --- | --- |
 | `--sandbox` | | Codex | string | `danger-full-access` | Sandbox mode |
 | `--reasoning` | `-r` | Codex | string | `medium` | Reasoning effort |
-| `--add-dir` | | Codex | string[] | empty | Repeatable writable directory |
-| `--permission-mode` | | Claude/Gemini | string | empty | Adapter-specific permission or approval mode |
+| `--add-dir` | | All engines | string[] | empty | Codex/Claude/agy forward repeated `--add-dir`; Gemini joins directories |
+| `--permission-mode` | | Codex/Claude/Gemini | string | empty | Adapter-specific permission or approval mode; explicit values are rejected for agy |
 | `--max-turns` | | Claude | int | `0` | Maximum turns |
 
 ## `--stdin` Mode

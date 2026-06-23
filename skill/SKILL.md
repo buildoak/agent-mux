@@ -68,7 +68,7 @@ agent-mux -P=researcher -E=gemini -m gemini-3.1-pro-preview -C=/repo "Analyze au
 - **Codex**: implementation, debugging, precise edits
 - **Claude**: planning, synthesis, review
 - **Gemini**: analysis, second opinion (models: `gemini-3-flash-preview`, `gemini-3.1-pro-preview`)
-- **agy**: experimental CLI-first model access. Plain stdout, sandboxed by default, no resume, abort-only steering. It does not imply plugins, MCP, browser automation, Google services, or provider service actions.
+- **agy**: experimental CLI-first model access. Plain stdout, agent-mux passes `agy --sandbox`, no resume, abort-only steering. It does not imply plugins, MCP, browser automation, Google services, or provider service actions.
 
 Gemini ignores `-e` -- use model selection for depth control.
 
@@ -103,6 +103,7 @@ agent-mux -P=lifter --recover=<id> -C=/repo "Finish remaining parser tests"
 - `--async` does NOT daemonize -- use shell `&`
 - `status: completed` does not mean task success -- check `response`
 - `-e` is effort, `-E` is engine (case matters)
+- agy rejects explicit portable sandbox, permission, reasoning, max-turn, and full-access options; use model/add-dir/prompt only
 - `--recover` resumes with NEW prompt, does not fetch result (use `result <id>`)
 - `-e=high` on xhigh profiles is a downgrade, not a floor
 - `wait` has no `--timeout` — only `--poll` for cadence (e.g., `wait --poll 30s <id>`)

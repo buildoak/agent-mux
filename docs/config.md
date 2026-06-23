@@ -32,7 +32,7 @@ The YAML frontmatter sets dispatch defaults. The markdown body becomes the syste
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `engine` | string | no | `codex`, `claude`, or `gemini` |
+| `engine` | string | no | `agy`, `claude`, `codex`, or `gemini` |
 | `model` | string | no | Model name for the engine |
 | `effort` | string | no | `low`, `medium`, `high`, `xhigh`. Gemini ignores this (logs a warning); use model selection for thinking depth |
 | `timeout` | int | no | Timeout in seconds; must be > 0 when set |
@@ -156,6 +156,7 @@ Each engine has a fallback model allowlist used when no model list is configured
 | `codex` | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2-codex` |
 | `claude` | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
 | `gemini` | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview` |
+| `agy` | `Gemini 3.1 Pro (High)`, `Gemini 3.1 Pro (Low)`, `Gemini 3.5 Flash (High)`, `Gemini 3.5 Flash (Medium)`, `Gemini 3.5 Flash (Low)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, `GPT-OSS 120B (Medium)` |
 
 An unrecognized model produces a `model_not_found` error with fuzzy suggestions.
 

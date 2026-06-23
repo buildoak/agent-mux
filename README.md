@@ -8,7 +8,7 @@ Cross-engine dispatch layer. One CLI, one JSON contract, any LLM engine.
 
 ## What It Does
 
-AI coding harnesses (Codex, Claude Code, Gemini CLI) are powerful but isolated -- each has its own CLI flags, event format, sandbox model, and session lifecycle. agent-mux connects them: any LLM can dispatch work to any other LLM through one JSON contract and prompt-driven worker identity.
+AI coding harnesses (Codex, Claude Code, Gemini CLI, and experimental agy) are powerful but isolated -- each has its own CLI flags, event format, sandbox model, and session lifecycle. agent-mux connects them through one JSON contract and prompt-driven worker identity.
 
 Workers are defined as markdown files with YAML frontmatter. The prompt is the worker. No config files, no role tables, no indirection.
 
@@ -102,13 +102,14 @@ You are a lifter. You build what was specified, verify it works, and report back
 | `codex` | `codex` | Implementation, debugging, code edits | `gpt-5.4` |
 | `claude` | `claude` | Planning, synthesis, long-form reasoning | `claude-sonnet-4-6` |
 | `gemini` | `gemini` | Second opinion, contrast checks | `gemini-2.5-pro` |
+| `agy` | `agy` | Experimental CLI-first model access | `Gemini 3.1 Pro (High)` |
 
 Engine CLIs must be installed separately -- agent-mux dispatches to them, it does not bundle them.
 
 ## Features
 
 - **Profile-based dispatch** -- `-P=<name>` loads engine, model, effort, timeout, skills, and system prompt from a single markdown file. One flag replaces six.
-- **Recovery and signals** -- Continue timed-out work with `--recover`. Steer live dispatches with inbox signals.
+- **Recovery and signals** -- Start a follow-up dispatch with `--recover=<id>` to include prior context. Live nudge/redirect require a resume-capable engine; non-resumable engines such as agy are abort-only while running.
 - **Two-phase timeout** -- Soft timeout fires a wrap-up signal, grace period allows clean exit, hard timeout kills. Artifacts are preserved at every phase.
 - **Async dispatch** -- Fire and forget with `--async`. Collect results later with `wait` or `result`.
 - **Event streaming** -- 15 NDJSON event types on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `timeout_warning`, and more.
@@ -125,6 +126,7 @@ Engine CLIs must be installed separately -- agent-mux dispatches to them, it doe
 | Codex | OAuth device auth via `codex auth` (`~/.codex/auth.json`) | `OPENAI_API_KEY` |
 | Claude | OAuth via `claude` binary login (subscription) | `ANTHROPIC_API_KEY` |
 | Gemini | `gcloud auth` application-default credentials | `GEMINI_API_KEY` |
+| agy | Owned by the local `agy` CLI configuration | No agent-mux-managed fallback |
 
 For personal use, OAuth tokens from your existing subscriptions are the primary
 auth path -- no API keys needed. Set the env var when OAuth is not available.

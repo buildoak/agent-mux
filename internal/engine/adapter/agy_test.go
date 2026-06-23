@@ -22,6 +22,7 @@ func TestAgyBuildArgs(t *testing.T) {
 		Prompt:      "Build the parser",
 		ArtifactDir: "/tmp/dispatch",
 		TimeoutSec:  42,
+		GraceSec:    10,
 		EngineOpts: map[string]any{
 			"add-dir": []any{"/tmp/scripts", "/tmp/helpers"},
 		},
@@ -30,7 +31,7 @@ func TestAgyBuildArgs(t *testing.T) {
 	got := a.BuildArgs(spec)
 	want := []string{
 		"--sandbox",
-		"--print-timeout", "42s",
+		"--print-timeout", "57s",
 		"--log-file", "/tmp/dispatch/agy.log",
 		"--model", "Claude Sonnet 4.5",
 		"--add-dir", "/tmp/scripts",
