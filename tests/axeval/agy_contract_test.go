@@ -10,12 +10,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
 
 const fakeAgySessionID = "550e8400-e29b-41d4-a716-446655440000"
+
+var liveAgyUUIDPattern = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 
 func TestAgyFakeBinaryPlainStdoutAndSessionDiscovery(t *testing.T) {
 	argvLog := installFakeAgy(t)
@@ -183,6 +186,13 @@ func TestAgyFakeBinaryResumeUsesDiscoveredConversation(t *testing.T) {
 	}
 	if sessionID, _ := jsonStringField(waitRaw, "session_id"); sessionID != fakeAgySessionID {
 		t.Fatalf("wait session_id=%q, want %q\nstdout=%s", sessionID, fakeAgySessionID, waitResult.RawStdout)
+	}
+	finalStatus, err := artifactJSONObject(Result{ArtifactDir: artifactDir}, "status.json")
+	if err != nil {
+		t.Fatalf("final status.json: %v", err)
+	}
+	if err := requireExactStringField(finalStatus, "session_id", fakeAgySessionID); err != nil {
+		t.Fatalf("final status session_id: %v\nstatus=%v", err, finalStatus)
 	}
 
 	select {
@@ -387,6 +397,149 @@ func TestAgyLiveContractRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestAgyLiveAsyncSteerRequiresExplicitOptIn(t *testing.T) {
+	if os.Getenv("AX_EVAL_AGY_LIVE_ASYNC") != "1" {
+		t.Skip("live agy async steer test requires AX_EVAL_AGY_LIVE_ASYNC=1")
+	}
+
+	model := liveAgyModel()
+	artifactDir := t.TempDir()
+	cwd := t.TempDir()
+	args := []string{
+		"--async",
+		"--engine", "agy",
+		"--model", model,
+		"--skip-skills",
+		"--yes",
+		"--cwd", cwd,
+		"--artifact-dir", artifactDir,
+		"--timeout", "120",
+		"AX live agy async steer smoke. First run a shell command that sleeps for 45 seconds before producing any final answer. During that wait, a coordinator nudge may arrive. If a nudge asks for exact text, obey it and reply with only that exact text.",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binaryPath, args...)
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start live async agy dispatch: %v", err)
+	}
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- cmd.Wait()
+	}()
+	processWaited := false
+	t.Cleanup(func() {
+		if processWaited {
+			return
+		}
+		select {
+		case <-waitDone:
+		default:
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			<-waitDone
+		}
+	})
+
+	reader := bufio.NewReader(stdoutPipe)
+	ackLine, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read live async ack: %v\nstderr=%s", err, stderr.String())
+	}
+	ackRaw, err := parseJSONObject(bytes.TrimSpace(ackLine), "live agy async ack")
+	if err != nil {
+		t.Fatalf("parse live async ack: %v\nack=%s\nstderr=%s", err, string(ackLine), stderr.String())
+	}
+	dispatchID, ok := jsonStringField(ackRaw, "dispatch_id")
+	if !ok || dispatchID == "" {
+		t.Fatalf("dispatch_id missing from ack: %s", string(ackLine))
+	}
+
+	initialSessionID := waitForAgyLogSessionID(t, filepath.Join(artifactDir, "agy.log"), 45*time.Second)
+	steerResult := dispatchWithFlags(t, binaryPath, []string{"steer", dispatchID, "nudge", "Reply with exactly: AGY_LIVE_ASYNC_STEER_OK"}, 30*time.Second)
+	if steerResult.ExitCode != 0 {
+		t.Fatalf("steer exit=%d\nstdout=%s\nstderr=%s", steerResult.ExitCode, steerResult.RawStdout, steerResult.RawStderr)
+	}
+	waitResult := dispatchWithFlags(t, binaryPath, []string{"wait", "--json", "--poll", "1s", dispatchID}, 2*time.Minute)
+	if waitResult.ExitCode != 0 {
+		t.Fatalf("wait exit=%d\nstdout=%s\nstderr=%s", waitResult.ExitCode, waitResult.RawStdout, waitResult.RawStderr)
+	}
+	waitRaw, err := parseJSONObject(waitResult.RawStdout, "live agy wait stdout")
+	if err != nil {
+		t.Fatalf("parse wait stdout: %v\nstdout=%s", err, waitResult.RawStdout)
+	}
+	if status, _ := jsonStringField(waitRaw, "status"); status != "completed" {
+		t.Fatalf("wait status=%q, want completed\nstdout=%s", status, waitResult.RawStdout)
+	}
+	if response, _ := jsonStringField(waitRaw, "response"); strings.TrimSpace(response) != "AGY_LIVE_ASYNC_STEER_OK" {
+		t.Fatalf("wait response=%q, want AGY_LIVE_ASYNC_STEER_OK\nstdout=%s", response, waitResult.RawStdout)
+	}
+	gotSessionID, _ := jsonStringField(waitRaw, "session_id")
+	if strings.TrimSpace(gotSessionID) == "" {
+		t.Fatalf("wait session_id missing; initial session was %q\nstdout=%s", initialSessionID, waitResult.RawStdout)
+	}
+	finalStatus, err := artifactJSONObject(Result{ArtifactDir: artifactDir}, "status.json")
+	if err != nil {
+		t.Fatalf("final status.json: %v", err)
+	}
+	if err := requireExactStringField(finalStatus, "session_id", gotSessionID); err != nil {
+		t.Fatalf("final status session_id: %v\nstatus=%v", err, finalStatus)
+	}
+
+	select {
+	case err := <-waitDone:
+		processWaited = true
+		if err != nil {
+			t.Fatalf("live async process wait: %v\nstderr=%s", err, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("live async process did not exit after resumed result")
+	}
+}
+
+func TestAgyLiveMultimodalAndImageGenerationRequiresExplicitOptIn(t *testing.T) {
+	if os.Getenv("AX_EVAL_AGY_LIVE_MULTIMODAL") != "1" {
+		t.Skip("live agy multimodal/image generation test requires AX_EVAL_AGY_LIVE_MULTIMODAL=1")
+	}
+
+	model := liveAgyModel()
+	cwd := t.TempDir()
+	writeLivePDF(t, filepath.Join(cwd, "sample.pdf"), "PDF_AX_314")
+	writeLiveRedPNG(t, filepath.Join(cwd, "red.png"))
+
+	tc := TestCase{
+		Engine:       "agy",
+		Model:        model,
+		Prompt:       "Read sample.pdf and inspect red.png in the current working directory. Then use the available image generation capability to create a PNG file named generated-banana.png in the current working directory. Reply with exactly: AGY_MULTIMODAL_IMAGE_OK PDF_AX_314 RED",
+		CWD:          cwd,
+		TimeoutSec:   180,
+		MaxWallClock: 4 * time.Minute,
+		SkipSkills:   true,
+	}
+	result := dispatch(t, binaryPath, tc)
+	if result.Status != "completed" {
+		t.Fatalf("status=%q, want completed\nstdout=%s\nstderr=%s", result.Status, result.RawStdout, result.RawStderr)
+	}
+	if strings.TrimSpace(result.Response) != "AGY_MULTIMODAL_IMAGE_OK PDF_AX_314 RED" {
+		t.Fatalf("response=%q, want multimodal/image sentinel\nstdout=%s", result.Response, result.RawStdout)
+	}
+	generatedPath := filepath.Join(cwd, "generated-banana.png")
+	info, err := os.Stat(generatedPath)
+	if err != nil {
+		t.Fatalf("generated image missing at %s: %v", generatedPath, err)
+	}
+	if info.Size() == 0 {
+		t.Fatalf("generated image at %s is empty", generatedPath)
+	}
+}
+
 func agyModelListed(engines []map[string]any, model string) bool {
 	for _, entry := range engines {
 		if entry["engine"] != "agy" {
@@ -400,4 +553,63 @@ func agyModelListed(engines []map[string]any, model string) bool {
 		}
 	}
 	return false
+}
+
+func liveAgyModel() string {
+	model := strings.TrimSpace(os.Getenv("AX_EVAL_AGY_MODEL"))
+	if model == "" {
+		return "Gemini 3.5 Flash (Low)"
+	}
+	return model
+}
+
+func waitForAgyLogSessionID(t *testing.T, path string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			for _, match := range liveAgyUUIDPattern.FindAllString(string(data), -1) {
+				if strings.TrimSpace(match) != "" {
+					return match
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for agy conversation id in %s", path)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func writeLivePDF(t *testing.T, path string, token string) {
+	t.Helper()
+	pdf := "%PDF-1.4\n" +
+		"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n" +
+		"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n" +
+		"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n" +
+		"4 0 obj << /Length 54 >> stream\nBT /F1 18 Tf 40 90 Td (" + token + ") Tj ET\nendstream endobj\n" +
+		"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n" +
+		"trailer << /Root 1 0 R >>\n%%EOF\n"
+	if err := os.WriteFile(path, []byte(pdf), 0o644); err != nil {
+		t.Fatalf("write PDF fixture: %v", err)
+	}
+}
+
+func writeLiveRedPNG(t *testing.T, path string) {
+	t.Helper()
+	data := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+		0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41,
+		0x54, 0x08, 0x1d, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92,
+		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+		0x44, 0xae, 0x42, 0x60, 0x82,
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write PNG fixture: %v", err)
+	}
 }

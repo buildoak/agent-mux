@@ -187,7 +187,21 @@ default live model is `Gemini 3.5 Flash (Low)`; override with
 AX_EVAL_AGY_LIVE=1 go test -tags axeval -timeout 300s -run TestAgyLiveContractRequiresExplicitOptIn ./tests/axeval/
 ```
 
-The deterministic suite intentionally does not set that variable.
+Two higher-cost live agy gates are separate because they are more provider- and
+tool-behavior-sensitive:
+
+```bash
+AX_EVAL_AGY_LIVE_ASYNC=1 go test -tags axeval -timeout 300s -run TestAgyLiveAsyncSteerRequiresExplicitOptIn ./tests/axeval/
+AX_EVAL_AGY_LIVE_MULTIMODAL=1 go test -tags axeval -timeout 420s -run TestAgyLiveMultimodalAndImageGenerationRequiresExplicitOptIn ./tests/axeval/
+```
+
+The async gate starts a real `agent-mux --async` agy dispatch, waits for a
+conversation ID in `agy.log`, sends `steer nudge`, waits for the resumed result,
+and checks final `status.json.session_id`. The multimodal/image gate creates a
+PDF and PNG fixture in the dispatch cwd, asks agy to read them, asks agy to
+generate `generated-banana.png`, and verifies the file exists.
+
+The deterministic suite intentionally does not set any live agy opt-in variable.
 ### Reports
 ```bash
 AX_EVAL_REPORT_DIR=./eval-reports go test -tags axeval ./tests/axeval/
