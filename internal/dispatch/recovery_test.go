@@ -66,6 +66,57 @@ func TestRecoverDispatch_ValidDir(t *testing.T) {
 	}
 }
 
+func TestRecoverDispatchExcludesPrivateDiagnosticsFromPrompt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dispatchID := "private-recovery"
+	artifactDir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID:  dispatchID,
+		Engine:      "agy",
+		Model:       "agy-provider",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		Prompt:      "recover without private diagnostics",
+	}
+	if err := WritePersistentMeta(spec, types.DispatchAnnotations{}); err != nil {
+		t.Fatalf("WritePersistentMeta: %v", err)
+	}
+	if err := WriteDispatchRef(artifactDir, spec.DispatchID); err != nil {
+		t.Fatalf("WriteDispatchRef: %v", err)
+	}
+
+	publicArtifact := filepath.Join(artifactDir, "worker-notes.md")
+	for _, path := range []string{
+		filepath.Join(artifactDir, "agy.log"),
+		filepath.Join(artifactDir, "raw_stdout.txt"),
+		filepath.Join(artifactDir, "provider-internal.trace"),
+		publicArtifact,
+	} {
+		if err := os.WriteFile(path, []byte("artifact"), 0o644); err != nil {
+			t.Fatalf("write artifact %s: %v", path, err)
+		}
+	}
+
+	ctx, err := RecoverDispatch(dispatchID)
+	if err != nil {
+		t.Fatalf("RecoverDispatch: %v", err)
+	}
+	if len(ctx.Artifacts) != 1 || ctx.Artifacts[0] != publicArtifact {
+		t.Fatalf("Artifacts = %#v, want only %q", ctx.Artifacts, publicArtifact)
+	}
+
+	prompt := BuildRecoveryPrompt(ctx, "")
+	for _, privateName := range []string{"agy.log", "raw_stdout.txt", "provider-internal.trace"} {
+		if strings.Contains(prompt, privateName) {
+			t.Fatalf("recovery prompt leaked %s: %q", privateName, prompt)
+		}
+	}
+	if !strings.Contains(prompt, publicArtifact) {
+		t.Fatalf("recovery prompt missing public artifact %q: %q", publicArtifact, prompt)
+	}
+}
+
 func TestRegisterDispatchSpecPersistsMetadata(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

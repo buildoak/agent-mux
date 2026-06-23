@@ -37,6 +37,7 @@ type scriptedAdapter struct {
 	initialPrompt   string
 	env             []string
 	envErr          error
+	runtimePolicy   *types.AdapterRuntimePolicy
 	resumeScript    func(sessionID, message string) string
 	resumeCalls     []resumeCall
 	failResumeStart bool
@@ -79,6 +80,13 @@ func (a *scriptedAdapter) EnvVars(spec *types.DispatchSpec) ([]string, error) {
 		return nil, nil
 	}
 	return append([]string(nil), a.env...), nil
+}
+
+func (a *scriptedAdapter) RuntimePolicy() types.AdapterRuntimePolicy {
+	if a.runtimePolicy == nil {
+		return types.AdapterRuntimePolicy{}
+	}
+	return *a.runtimePolicy
 }
 
 func (a *scriptedAdapter) SupportsResume() bool {
@@ -784,6 +792,200 @@ func TestLoopEngineBinaryNotFound(t *testing.T) {
 	}
 }
 
+func TestLoopEnginePlainStdoutPreservesMultilineRawOutput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	want := "first line\nsecond line\n\nthird line\n"
+	adapter := newScriptedAdapter("printf 'first line\\nsecond line\\n\\nthird line\\n'")
+	adapter.supportsResume = false
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:               types.AdapterStdinEOF,
+		OutputMode:              types.AdapterOutputPlainStdout,
+		RequireNonEmptyResponse: true,
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != want {
+		t.Fatalf("response = %q, want %q", result.Response, want)
+	}
+}
+
+func TestLoopEnginePlainStdoutEmptyCleanExitFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter("exit 0")
+	adapter.supportsResume = false
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:               types.AdapterStdinEOF,
+		OutputMode:              types.AdapterOutputPlainStdout,
+		RequireNonEmptyResponse: true,
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "harness_empty_output" {
+		t.Fatalf("error = %+v, want harness_empty_output", result.Error)
+	}
+
+	record, err := dispatch.FindDispatchRecordByRef(spec.DispatchID)
+	if err != nil {
+		t.Fatalf("FindRecord: %v", err)
+	}
+	if record == nil {
+		t.Fatal("FindRecord = nil, want record")
+	}
+	if record.Status != "failed" {
+		t.Fatalf("persisted status = %q, want failed", record.Status)
+	}
+}
+
+func TestLoopEngineStdinEOFPolicyDoesNotHangStdinDrain(t *testing.T) {
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"cat >/dev/null",
+		"printf 'READY\\n'",
+	}, "\n"))
+	adapter.supportsResume = false
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:               types.AdapterStdinEOF,
+		OutputMode:              types.AdapterOutputPlainStdout,
+		RequireNonEmptyResponse: true,
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "READY\n" {
+		t.Fatalf("response = %q, want READY with newline", result.Response)
+	}
+}
+
+func TestLoopEngineDoesNotCreateFIFOWithoutWritableStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("FIFO steering is Unix-only")
+	}
+
+	artifactDir := t.TempDir()
+	readyPath := filepath.Join(artifactDir, "ready")
+	adapter := newScriptedAdapter(strings.Join([]string{
+		fmt.Sprintf("touch %q", readyPath),
+		"sleep 0.5",
+		"printf 'done\\n'",
+	}, "\n"))
+	adapter.supportsResume = false
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:               types.AdapterStdinEOF,
+		OutputMode:              types.AdapterOutputPlainStdout,
+		RequireNonEmptyResponse: true,
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	type dispatchOutcome struct {
+		result *types.DispatchResult
+		err    error
+	}
+	outcomeCh := make(chan dispatchOutcome, 1)
+	go func() {
+		result, err := engine.Dispatch(ctx, spec)
+		outcomeCh <- dispatchOutcome{result: result, err: err}
+	}()
+
+	waitForPath(t, readyPath)
+	if _, statErr := os.Stat(steer.Path(artifactDir)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("stdin.pipe stat error = %v, want not exists while process is running", statErr)
+	}
+
+	select {
+	case outcome := <-outcomeCh:
+		if outcome.err != nil {
+			t.Fatalf("Dispatch: %v", outcome.err)
+		}
+		if outcome.result.Status != types.StatusCompleted {
+			t.Fatalf("status = %q, want completed; error = %+v", outcome.result.Status, outcome.result.Error)
+		}
+	case <-ctx.Done():
+		t.Fatal("dispatch timed out")
+	}
+}
+
+func TestLoopEngineSoftTimeoutSkipsWrapupWhenPolicyUnsupported(t *testing.T) {
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"trap 'exit 0' TERM",
+		"sleep 10",
+	}, "\n"))
+	adapter.supportsResume = false
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:             types.AdapterStdinEOF,
+		OutputMode:            types.AdapterOutputPlainStdout,
+		SoftTimeoutWrapupMode: types.AdapterSoftTimeoutNoWrapup,
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+	spec.TimeoutSec = 1
+	spec.GraceSec = 1
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusTimedOut {
+		t.Fatalf("status = %q, want timed_out; error = %+v", result.Status, result.Error)
+	}
+
+	inboxPath := filepath.Join(artifactDir, "inbox.md")
+	data, err := os.ReadFile(inboxPath)
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if strings.Contains(string(data), "Soft timeout reached") {
+		t.Fatalf("inbox contains wrapup prompt despite unsupported policy: %q", string(data))
+	}
+}
+
 func runDispatchWithInboxMessage(t *testing.T, adapter *scriptedAdapter, artifactDir, readyPath, message string) *types.DispatchResult {
 	t.Helper()
 	return runDispatchWithInboxMessageAndSpec(t, adapter, testDispatchSpec(artifactDir), readyPath, message)
@@ -1396,5 +1598,3 @@ func writeSoftSteerFIFO(t *testing.T, artifactDir, action, message string) {
 		t.Fatalf("write FIFO payload: %v", err)
 	}
 }
-
-

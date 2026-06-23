@@ -13,7 +13,7 @@ and `agent-mux preview ...`.
 
 | Flag | Short | Type | Default | Notes |
 |------|-------|------|---------|-------|
-| `--engine` | `-E` | string | from profile | `codex`, `claude`, `gemini` |
+| `--engine` | `-E` | string | from profile | `agy`, `claude`, `codex`, `gemini` |
 | `--profile` | `-P` | string | unset | Profile prompt file from `~/.agent-mux/prompts/<name>.md` |
 | `--cwd` | `-C` | string | current dir | Working directory for the harness |
 | `--model` | `-m` | string | from profile | Model override |
@@ -44,9 +44,9 @@ and `agent-mux preview ...`.
 |------|-------|------|---------|-----------|-------|
 | `--sandbox` | | string | `danger-full-access` | Codex | `danger-full-access`, `workspace-write`, `read-only` |
 | `--reasoning` | `-r` | string | empty unless set | Codex | Maps to `-c model_reasoning_effort=<value>` |
-| `--permission-mode` | | string | from `AGENT_MUX_PERMISSION_MODE` when set; otherwise empty | Codex, Claude, Gemini | Codex: takes precedence over sandbox. Claude: passed through. Gemini: maps to approval mode and defaults to `yolo`. |
+| `--permission-mode` | | string | from `AGENT_MUX_PERMISSION_MODE` when set; otherwise empty | Codex, Claude, Gemini | Codex: takes precedence over sandbox. Claude: passed through. Gemini: maps to approval mode and defaults to `yolo`. Not used by `agy`. |
 | `--max-turns` | | int | `0` | Claude | Maximum conversation turns |
-| `--add-dir` | | string[] | `[]` | All engines | Codex/Claude forward repeated `--add-dir`; Gemini joins as `--include-directories` and also includes `$HOME,/tmp` |
+| `--add-dir` | | string[] | `[]` | All engines | Codex/Claude/agy forward repeated `--add-dir`; Gemini joins as `--include-directories` and also includes `$HOME,/tmp` |
 
 ### --stdin mode
 
@@ -98,7 +98,7 @@ or similar dispatch flags. Put those fields in the JSON object.
 |------------|------|------|---------|-------|
 | `list` | `--limit` | int | 20 | `0` means all |
 | `list` | `--status` | string | unset | `completed`, `failed`, `timed_out` |
-| `list` | `--engine` | string | unset | `codex`, `claude`, `gemini` |
+| `list` | `--engine` | string | unset | `agy`, `claude`, `codex`, `gemini` |
 | `list` | `--json` | bool | `false` | NDJSON output |
 | `status` | `--json` | bool | `false` | JSON output |
 | `result` | `--json` | bool | `false` | Compact lifecycle JSON |
@@ -118,6 +118,8 @@ or similar dispatch flags. Put those fields in the JSON object.
 | `nudge` | `[message]` | Default wrap-up message if omitted |
 | `redirect` | `"<instructions>"` | Required |
 
+`agy` supports `abort` only. `nudge` and `redirect` return `steer_unsupported` because the adapter has plain stdout, no live FIFO, and no resume-based inbox delivery.
+
 ---
 
 ## DispatchSpec JSON Fields
@@ -130,7 +132,7 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 |----------|------|----------|---------|-------|
 | `prompt` | string | yes | - | Task prompt |
 | `cwd` | string | no | shell cwd | Working directory |
-| `engine` | string | no | from profile | `codex`, `claude`, `gemini` |
+| `engine` | string | no | from profile | `agy`, `claude`, `codex`, `gemini` |
 | `model` | string | no | from profile | Model override |
 | `effort` | string | no | from profile | `low`, `medium`, `high`, `xhigh` |
 | `system_prompt` | string | no | unset | Run-level system prompt |
@@ -165,6 +167,8 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 | `add-dir` | string[] | Extra writable/include directories |
 | `heartbeat_interval_sec` | int | Override heartbeat cadence (default 15s) |
 
+`agy` always starts with the local CLI `--sandbox` flag and does not expose a dangerous sandbox-skip flag through agent-mux. `agy` provider diagnostics are written to private runtime logs, not public result artifacts.
+
 ---
 
 ## Persistence and Runtime Paths
@@ -179,7 +183,7 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 | `<artifact_dir>/host.pid` | async host PID |
 | `<artifact_dir>/control.json` | abort requests |
 | `<artifact_dir>/inbox.md` | NDJSON coordinator inbox |
-| `<artifact_dir>/stdin.pipe` | Unix FIFO only when a soft-stdin bridge is active; current Codex runs skip it |
+| `<artifact_dir>/stdin.pipe` | Unix FIFO only when a soft-stdin bridge is active; current Codex and agy runs skip it |
 | `<artifact_dir>/*` | worker-created artifact files |
 
 Default artifact root comes from the secure runtime root chosen by agent-mux.

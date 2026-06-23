@@ -377,7 +377,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 
 	if spec.Engine == "" {
-		return failResult(spec, "invalid_args", "No engine specified.", "Use --engine codex, --engine claude, or --engine gemini.")
+		return failResult(spec, "invalid_args", "No engine specified.", "Use --engine with one of: "+validEngineCSV()+".")
 	}
 
 	if spec.ContextFile != "" {
@@ -999,7 +999,7 @@ func newCLIFlagSet(name string) (*flag.FlagSet, *cliFlags) {
 	flags := newCLIFlags()
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 
-	bindStr(fs, &flags.engine, "Engine: codex, claude, gemini", "", "engine", "E")
+	bindStr(fs, &flags.engine, "Engine: "+validEngineCSV(), "", "engine", "E")
 	bindStr(fs, &flags.profile, "Profile / prompt file", "", "profile", "P")
 	bindStr(fs, &flags.cwd, "Working directory", "", "cwd", "C")
 	bindStr(fs, &flags.model, "Model override (engine-specific)", "", "model", "m")
@@ -1033,7 +1033,7 @@ func newCLIFlagSet(name string) (*flag.FlagSet, *cliFlags) {
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: agent-mux [dispatch] [flags] <prompt>\n\n")
 		fmt.Fprintf(fs.Output(), "Example:\n  agent-mux -P=auditor -E=codex -e=high -C=/repo \"Your prompt here\"\n\n")
-		fmt.Fprintf(fs.Output(), "Engines: codex, claude, gemini\n\n")
+		fmt.Fprintf(fs.Output(), "Engines: %s\n\n", validEngineCSV())
 		fmt.Fprintf(fs.Output(), "Note: use double-dash for long flags (--engine) or short alias (-E).\n")
 		fmt.Fprintf(fs.Output(), "The flag listing below shows Go's single-dash format, but both work.\n\n")
 		fmt.Fprintf(fs.Output(), "Flags:\n")
@@ -1358,6 +1358,18 @@ func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...stri
 	}
 }
 
+func validEngineNames() []string {
+	return adapter.NewRegistry(config.DefaultModels()).ValidEngines()
+}
+
+func validEngineCSV() string {
+	return strings.Join(validEngineNames(), ", ")
+}
+
+func validEngineBracketed() string {
+	return "[" + validEngineCSV() + "]"
+}
+
 func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator, detached bool) (*types.DispatchResult, error) {
 	reg := adapter.NewRegistry(config.DefaultModels())
 
@@ -1366,7 +1378,7 @@ func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations typ
 		return dispatch.BuildFailedResult(
 			spec,
 			"",
-			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: [codex, claude, gemini]"),
+			dispatch.NewDispatchError("engine_not_found", fmt.Sprintf("Engine %q not found.", spec.Engine), "Valid engines: "+validEngineBracketed()),
 			&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 			&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Profile: annotations.Profile, Skills: append([]string(nil), annotations.Skills...), Tokens: &types.TokenUsage{}},
 			0,

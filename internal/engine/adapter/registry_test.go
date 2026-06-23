@@ -17,6 +17,18 @@ func TestRegistryGetCodex(t *testing.T) {
 	}
 }
 
+func TestRegistryGetAgy(t *testing.T) {
+	r := NewRegistry(map[string][]string{})
+
+	adp, err := r.Get("agy")
+	if err != nil {
+		t.Fatalf("Get(agy): %v", err)
+	}
+	if adp == nil {
+		t.Fatal("Get(agy) returned nil adapter")
+	}
+}
+
 func TestRegistryGetClaude(t *testing.T) {
 	r := NewRegistry(map[string][]string{})
 
@@ -56,7 +68,7 @@ func TestRegistryGetUnknown(t *testing.T) {
 	if !strings.Contains(strings.ToLower(msg), "valid") {
 		t.Fatalf("error = %q, want to mention valid engines", msg)
 	}
-	for _, engine := range []string{"claude", "codex", "gemini"} {
+	for _, engine := range []string{"agy", "claude", "codex", "gemini"} {
 		if !strings.Contains(msg, engine) {
 			t.Fatalf("error = %q, want to contain engine %q", msg, engine)
 		}
@@ -67,7 +79,7 @@ func TestRegistryValidEngines(t *testing.T) {
 	r := NewRegistry(map[string][]string{})
 
 	got := r.ValidEngines()
-	want := []string{"claude", "codex", "gemini"}
+	want := []string{"agy", "claude", "codex", "gemini"}
 	if len(got) != len(want) {
 		t.Fatalf("len(ValidEngines) = %d, want %d (%v)", len(got), len(want), got)
 	}

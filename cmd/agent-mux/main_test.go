@@ -178,6 +178,9 @@ func TestHelpFlagReturnsJSON(t *testing.T) {
 	if !strings.Contains(usage, "Literal prompt escape:\n  agent-mux -- help") {
 		t.Fatalf("usage = %q, want literal prompt escape guidance", usage)
 	}
+	if !strings.Contains(usage, "Engine: agy, claude, codex, gemini") {
+		t.Fatalf("usage = %q, want agy listed as an engine", usage)
+	}
 	if strings.Contains(usage, "Usage of agent-mux") {
 		t.Fatalf("usage = %q, want curated help instead of raw flag output", usage)
 	}
@@ -371,6 +374,58 @@ func TestListCommandJSONOutputsNDJSON(t *testing.T) {
 		if record.ID == "" {
 			t.Fatalf("record = %#v, want id", record)
 		}
+	}
+}
+
+func TestListCommandAcceptsAgyEngineFilter(t *testing.T) {
+	isolateHome(t)
+
+	record := testStoreRecord("01KMT4E7AANN1KQEC8MYJRW5H6", "completed")
+	record.Engine = "agy"
+	record.Model = "Gemini 3.1 Pro (High)"
+	writeStoreRecord(t, record, "agy result", true)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"list", "--engine", "agy", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("ndjson lines = %d, want 1; stdout=%q", len(lines), stdout.String())
+	}
+	var got dispatch.DispatchRecord
+	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
+		t.Fatalf("unmarshal record: %v\nline=%q", err, lines[0])
+	}
+	if got.Engine != "agy" {
+		t.Fatalf("engine = %q, want agy", got.Engine)
+	}
+}
+
+func TestListCommandInvalidEngineHintIncludesAgy(t *testing.T) {
+	isolateHome(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"list", "--engine", "bogus"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	errorEnvelope, ok := raw["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %#v, want object", raw["error"])
+	}
+	message, ok := errorEnvelope["message"].(string)
+	if !ok {
+		t.Fatalf("message = %#v, want string", errorEnvelope["message"])
+	}
+	if !strings.Contains(message, "agy") {
+		t.Fatalf("message = %q, want agy in valid engine list", message)
 	}
 }
 
@@ -1233,6 +1288,73 @@ func TestRunPreviewRejectsProfileWithNonPositiveTimeout(t *testing.T) {
 	}
 }
 
+func TestRunUnknownEngineSuggestionIncludesAgy(t *testing.T) {
+	isolateHome(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--yes", "--engine", "bogus", "hello"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "engine_not_found" {
+		t.Fatalf("error = %#v, want engine_not_found", result.Error)
+	}
+	if !strings.Contains(result.Error.Hint, "agy") {
+		t.Fatalf("error.hint = %q, want agy in valid engine list", result.Error.Hint)
+	}
+}
+
+func TestRunAgyDefaultModelIsAccepted(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--yes",
+		"--engine", "agy",
+		"--model", "Gemini 3.1 Pro (High)",
+		"hello",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found after model validation passes", result.Error)
+	}
+}
+
+func TestRunAgyUnknownModelShowsObservedDefaults(t *testing.T) {
+	isolateHome(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--yes",
+		"--engine", "agy",
+		"--model", "not-observed",
+		"hello",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "model_not_found" {
+		t.Fatalf("error = %#v, want model_not_found", result.Error)
+	}
+	for _, want := range []string{"Gemini 3.1 Pro (High)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B (Medium)"} {
+		if !strings.Contains(result.Error.Hint, want) {
+			t.Fatalf("error.hint = %q, want observed agy model %q", result.Error.Hint, want)
+		}
+	}
+}
+
 func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 	isolateHome(t)
 
@@ -1389,6 +1511,71 @@ func TestSteerNudgeFallsBackToInboxWhenFIFOUnavailable(t *testing.T) {
 	}
 	if len(messages) != 1 || messages[0].Message != "[NUDGE] fallback nudge" {
 		t.Fatalf("messages = %#v, want [NUDGE] fallback nudge", messages)
+	}
+}
+
+func TestSteerNudgeUnsupportedForAgyDoesNotWriteInbox(t *testing.T) {
+	dispatchID, artifactDir := prepareSteerDispatchFixtureForEngine(t, "agy", false)
+
+	var stdout bytes.Buffer
+	exitCode := runSteerCommand([]string{dispatchID, "nudge", "cannot resume"}, &stdout, ioDiscard{})
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stdout=%q", exitCode, stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	errorEnvelope, ok := raw["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %#v, want object", raw["error"])
+	}
+	if errorEnvelope["code"] != "steer_unsupported" {
+		t.Fatalf("error.code = %#v, want steer_unsupported", errorEnvelope["code"])
+	}
+	if steer.HasMessages(artifactDir) {
+		t.Fatal("inbox has messages after unsupported agy nudge")
+	}
+}
+
+func TestSteerRedirectUnsupportedForAgyDoesNotWriteInbox(t *testing.T) {
+	dispatchID, artifactDir := prepareSteerDispatchFixtureForEngine(t, "agy", false)
+
+	var stdout bytes.Buffer
+	exitCode := runSteerCommand([]string{dispatchID, "redirect", "new direction"}, &stdout, ioDiscard{})
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stdout=%q", exitCode, stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	errorEnvelope, ok := raw["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %#v, want object", raw["error"])
+	}
+	if errorEnvelope["code"] != "steer_unsupported" {
+		t.Fatalf("error.code = %#v, want steer_unsupported", errorEnvelope["code"])
+	}
+	if steer.HasMessages(artifactDir) {
+		t.Fatal("inbox has messages after unsupported agy redirect")
+	}
+}
+
+func TestSteerAbortStillWorksForAgy(t *testing.T) {
+	dispatchID, artifactDir := prepareSteerDispatchFixtureForEngine(t, "agy", false)
+	if err := os.Remove(filepath.Join(artifactDir, "host.pid")); err != nil {
+		t.Fatalf("remove host.pid: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	exitCode := runSteerCommand([]string{dispatchID, "abort"}, &stdout, ioDiscard{})
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout=%q", exitCode, stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	if raw["mechanism"] != "control_file" {
+		t.Fatalf("mechanism = %#v, want control_file", raw["mechanism"])
+	}
+	if cf := ReadControlFile(artifactDir); cf == nil || !cf.Abort {
+		t.Fatalf("control file = %#v, want abort=true", cf)
 	}
 }
 
@@ -1761,14 +1948,24 @@ func decodeJSONMap(t *testing.T, data []byte) map[string]any {
 func prepareSteerDispatchFixture(t *testing.T, stdinPipeReady bool) (string, string) {
 	t.Helper()
 
+	return prepareSteerDispatchFixtureForEngine(t, "codex", stdinPipeReady)
+}
+
+func prepareSteerDispatchFixtureForEngine(t *testing.T, engine string, stdinPipeReady bool) (string, string) {
+	t.Helper()
+
 	isolateHome(t)
 
 	dispatchID := fmt.Sprintf("01STEER%018d", time.Now().UnixNano()%1_000_000_000_000_000_000)
 	artifactDir := t.TempDir()
+	model := "gpt-5.4"
+	if engine == "agy" {
+		model = "Gemini 3.1 Pro (High)"
+	}
 	spec := &types.DispatchSpec{
 		DispatchID:  dispatchID,
-		Engine:      "codex",
-		Model:       "gpt-5.4",
+		Engine:      engine,
+		Model:       model,
 		Prompt:      "steer test",
 		Cwd:         artifactDir,
 		ArtifactDir: artifactDir,

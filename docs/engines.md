@@ -1,5 +1,5 @@
 # Engines
-agent-mux runs one supervision loop against three different harness CLIs.
+agent-mux runs one supervision loop against multiple harness CLIs.
 This document covers the adapter boundary that makes that possible: how each engine is invoked, how its events are parsed, and where behavior intentionally differs.
 The scope here is only the engine layer. For dispatch assembly, config merge rules, and the broader system shape, use the cross-references at the end.
 
@@ -28,6 +28,7 @@ Implementation notes:
 - `CodexAdapter` is effectively stateless.
 - `ClaudeAdapter` keeps a `sync.Mutex`-protected `toolInputs` map so `tool_result` events can be correlated back to the earlier `tool_use`.
 - `GeminiAdapter` keeps a `pendingFiles` map so a later `write_file` result can be attributed to the original path.
+- `AgyAdapter` is intentionally minimal: plain stdout in, final text out, no resume channel.
 
 ## Side-by-Side Summary
 | Engine | Binary | Best for | Key flags | Resume support | Tool calling | Event streaming format |
@@ -35,7 +36,8 @@ Implementation notes:
 | Codex | `codex` | Implementation, debugging, edits | `--json`, `-s` / `--dangerously-bypass-approvals-and-sandbox`, `-c model_reasoning_effort=...`, `--add-dir` | Yes, after `thread.started` | Full | `codex exec --json` NDJSON |
 | Claude | `claude` | Planning, synthesis, review | `-p`, `--output-format stream-json`, `--verbose`, `--permission-mode`, `--system-prompt`, `--max-turns` | Yes, after `system` `init` | Full | `stream-json` |
 | Gemini | `gemini` | Second opinion, contrast check | `-p`, `-o stream-json`, `-m`, `--approval-mode`, `--include-directories` | Yes, after `init` | Functional; `read_file`, `write_file`, `replace`, `shell` tracked | `stream-json`, with non-JSON stdout surfaced as raw passthrough |
-All three adapters plug into the same supervision loop:
+| Agy | `agy` | Experimental CLI-first model access | `--sandbox`, `--print-timeout`, `--log-file`, `--model`, `--add-dir`, `-p` | No | Not surfaced as structured tool events | Plain stdout |
+All adapters plug into the same supervision loop:
 - process spawn and process-group shutdown
 - stdout event parsing into normalized harness events
 - artifact-first result assembly
@@ -196,6 +198,35 @@ gemini --resume <session_id> -p "<message>"
 ```
 When `sessionID` matches a UUID pattern, the adapter logs a warning and uses `"latest"` instead — Gemini CLI `--resume` only accepts numeric indices or `"latest"`.
 
+## Agy Adapter
+`AgyAdapter` maps agent-mux dispatch state onto the `agy` CLI. This support is experimental and CLI-first. It does not imply access to plugins, MCP servers, browser automation, Google services, or any provider-specific service actions beyond what the local `agy` binary itself supports.
+
+### Binary
+`Binary()` returns:
+```text
+agy
+```
+### Command Construction
+Initial invocation shape:
+```bash
+agy --sandbox --print-timeout <seconds>s [--log-file <artifact_dir>/agy.log] \
+  [--model <model>] [--add-dir <dir> ...] -p "<prompt>"
+```
+`BuildArgs()` applies these rules:
+- always enables `--sandbox`
+- never emits a dangerous sandbox-skip or approval-bypass flag
+- sets `--print-timeout` from `spec.TimeoutSec`, falling back to 300s when unset
+- writes provider diagnostics to `<artifact_dir>/agy.log` when an artifact directory exists
+- forwards `--model` when `spec.Model` is set
+- forwards additional directories as repeated `--add-dir`
+- prepends `spec.SystemPrompt` into the prompt body because there is no dedicated system prompt flag
+
+### Output and Artifacts
+Agy output is plain stdout, not an event stream. The supervision loop captures stdout verbatim and assembles the final response from that captured stream. Provider diagnostics in `agy.log` are private runtime diagnostics and should not be surfaced as public result artifacts.
+
+### Resume and Steering
+Agy does not support resume. `SupportsResume()` returns false and `ResumeArgs()` returns nil. Because there is no live FIFO channel and no resume-based inbox delivery, `agent-mux steer <id> nudge|redirect` fails with `steer_unsupported` for agy dispatches. `agent-mux steer <id> abort` remains supported through SIGTERM or `control.json`.
+
 ## Model Validation
 Model validation happens before dispatch, after adapter lookup.
 Flow:
@@ -206,9 +237,10 @@ Flow:
 Fallback model sets are currently:
 | Engine | Fallback models |
 | --- | --- |
-| `codex` | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2-codex` |
+| `codex` | `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2-codex` |
 | `claude` | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
 | `gemini` | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview` |
+| `agy` | `Gemini 3.1 Pro (High)`, `Gemini 3.1 Pro (Low)`, `Gemini 3.5 Flash (High)`, `Gemini 3.5 Flash (Medium)`, `Gemini 3.5 Flash (Low)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, `GPT-OSS 120B (Medium)` |
 On a miss, the error path uses `dispatch.FuzzyMatchModel()`. That function runs a case-insensitive Levenshtein comparison across the valid models for the chosen engine and returns the best match when distance is `<= 3`.
 The resulting error message includes:
 - the requested engine
@@ -224,6 +256,7 @@ Authentication is owned by the underlying harness CLIs, but agent-mux documents 
 | Codex | `OPENAI_API_KEY` | OAuth device auth via `codex auth` using `~/.codex/auth.json` |
 | Claude | `ANTHROPIC_API_KEY` | Device OAuth subscription login exists, but should not be used for automation |
 | Gemini | `GEMINI_API_KEY` | No documented fallback in this repo |
+| Agy | Owned by local `agy` CLI configuration | No agent-mux-managed fallback |
 Operational notes:
 - agent-mux does not inject provider credentials itself; it expects the harness environment to already be usable
 - Codex and Claude can still dispatch when their CLI has a valid non-key auth path available

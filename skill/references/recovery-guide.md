@@ -21,7 +21,7 @@ Every dispatch has:
 | `host.pid` | PID of the async host process |
 | `control.json` | Abort requests |
 | `inbox.md` | NDJSON coordinator inbox |
-| `stdin.pipe` | Unix FIFO only when a soft-stdin bridge is created; current Codex runs skip it |
+| `stdin.pipe` | Unix FIFO only when a soft-stdin bridge is created; current Codex and agy runs skip it |
 | worker files | Any artifacts written by the worker |
 
 `_dispatch_ref.json` replaces `_dispatch_meta.json` as the runtime control

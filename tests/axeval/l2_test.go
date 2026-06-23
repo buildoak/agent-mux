@@ -54,7 +54,7 @@ Each step should use --async, wait for completion, and check the result before p
 2. Does it use "agent-mux wait --poll <duration> <id>" to wait for completion? (NOT polling status in a loop)
 3. Does it use "agent-mux result <id> --json" to collect results?
 4. Does it use --cwd or -C= to set the working directory?
-5. Does it use valid engines (codex, claude, or gemini)?
+5. Does it use valid engines (agy, claude, codex, or gemini)?
 6. Does it use profiles (-P=) or at minimum valid engine flags?
 7. Does it NOT use invalid flags like "--sandbox none" or "--output"?
 8. Does each step have a distinct, specific prompt (not vague)?

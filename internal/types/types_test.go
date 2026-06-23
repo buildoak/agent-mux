@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+type runtimePolicyTestAdapter struct {
+	resume bool
+	policy AdapterRuntimePolicy
+}
+
+func (a runtimePolicyTestAdapter) Binary() string { return "test" }
+
+func (a runtimePolicyTestAdapter) BuildArgs(*DispatchSpec) []string { return nil }
+
+func (a runtimePolicyTestAdapter) EnvVars(*DispatchSpec) ([]string, error) { return nil, nil }
+
+func (a runtimePolicyTestAdapter) ParseEvent(string) (*HarnessEvent, error) { return nil, nil }
+
+func (a runtimePolicyTestAdapter) SupportsResume() bool { return a.resume }
+
+func (a runtimePolicyTestAdapter) ResumeArgs(*DispatchSpec, string, string) []string { return nil }
+
+func (a runtimePolicyTestAdapter) RuntimePolicy() AdapterRuntimePolicy { return a.policy }
+
 func TestDispatchResultCompleted(t *testing.T) {
 	r := &DispatchResult{
 		SchemaVersion:     1,
@@ -58,6 +77,72 @@ func TestDispatchResultCompleted(t *testing.T) {
 	}
 	if decoded.Partial {
 		t.Errorf("partial should be false for completed")
+	}
+}
+
+func TestResolveAdapterRuntimePolicyDefaults(t *testing.T) {
+	policy := ResolveAdapterRuntimePolicy("claude", runtimePolicyTestAdapter{resume: true})
+
+	if policy.StdinMode != AdapterStdinWritablePipe {
+		t.Fatalf("stdin mode = %q, want %q", policy.StdinMode, AdapterStdinWritablePipe)
+	}
+	if policy.OutputMode != AdapterOutputEventStream {
+		t.Fatalf("output mode = %q, want %q", policy.OutputMode, AdapterOutputEventStream)
+	}
+	if policy.SoftTimeoutWrapupMode != AdapterSoftTimeoutInboxResume {
+		t.Fatalf("soft timeout wrapup = %q, want %q", policy.SoftTimeoutWrapupMode, AdapterSoftTimeoutInboxResume)
+	}
+	if policy.FailureContextMode != AdapterFailureContextStderrTail {
+		t.Fatalf("failure context = %q, want %q", policy.FailureContextMode, AdapterFailureContextStderrTail)
+	}
+}
+
+func TestResolveAdapterRuntimePolicyCodexKeepsStdinEOFDefault(t *testing.T) {
+	policy := ResolveAdapterRuntimePolicy("codex", runtimePolicyTestAdapter{resume: true})
+
+	if policy.StdinMode != AdapterStdinEOF {
+		t.Fatalf("stdin mode = %q, want %q", policy.StdinMode, AdapterStdinEOF)
+	}
+	if policy.SoftTimeoutWrapupMode != AdapterSoftTimeoutInboxResume {
+		t.Fatalf("soft timeout wrapup = %q, want %q", policy.SoftTimeoutWrapupMode, AdapterSoftTimeoutInboxResume)
+	}
+}
+
+func TestResolveAdapterRuntimePolicyAdapterOverride(t *testing.T) {
+	policy := ResolveAdapterRuntimePolicy("agy", runtimePolicyTestAdapter{
+		resume: false,
+		policy: AdapterRuntimePolicy{
+			StdinMode:               AdapterStdinEOF,
+			OutputMode:              AdapterOutputPlainStdout,
+			RequireNonEmptyResponse: true,
+			SoftTimeoutWrapupMode:   AdapterSoftTimeoutNoWrapup,
+			FailureContextMode:      AdapterFailureContextPrivateDiagnostics,
+		},
+	})
+
+	if policy.StdinMode != AdapterStdinEOF {
+		t.Fatalf("stdin mode = %q, want %q", policy.StdinMode, AdapterStdinEOF)
+	}
+	if policy.OutputMode != AdapterOutputPlainStdout {
+		t.Fatalf("output mode = %q, want %q", policy.OutputMode, AdapterOutputPlainStdout)
+	}
+	if !policy.RequireNonEmptyResponse {
+		t.Fatal("RequireNonEmptyResponse = false, want true")
+	}
+	if policy.SoftTimeoutWrapupMode != AdapterSoftTimeoutNoWrapup {
+		t.Fatalf("soft timeout wrapup = %q, want %q", policy.SoftTimeoutWrapupMode, AdapterSoftTimeoutNoWrapup)
+	}
+	if policy.FailureContextMode != AdapterFailureContextPrivateDiagnostics {
+		t.Fatalf("failure context = %q, want %q", policy.FailureContextMode, AdapterFailureContextPrivateDiagnostics)
+	}
+	if policy.HasWritableStdin() {
+		t.Fatal("HasWritableStdin() = true, want false")
+	}
+	if !policy.UsesPlainStdout() {
+		t.Fatal("UsesPlainStdout() = false, want true")
+	}
+	if policy.SupportsSoftTimeoutWrapup() {
+		t.Fatal("SupportsSoftTimeoutWrapup() = true, want false")
 	}
 }
 

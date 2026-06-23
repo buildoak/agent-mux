@@ -190,14 +190,14 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 {
   "code": "engine_not_found",
   "message": "Unknown engine name.",
-  "hint": "agent-mux only supports the built-in engines codex, claude, and gemini.",
+  "hint": "agent-mux only supports the built-in engines agy, claude, codex, and gemini.",
   "example": "Retry with a valid engine. Example: agent-mux -e codex --cwd /repo \"<prompt>\".",
   "retryable": true
 }
 ```
 
 **Checklist (5 items):**
-- [ ] Uses a valid engine (`codex`, `claude`, or `gemini`)
+- [ ] Uses a valid engine (`agy`, `claude`, `codex`, or `gemini`)
 - [ ] Preserves the original prompt intent ("Fix the bug in parser.go")
 - [ ] Includes `--cwd`
 - [ ] Command is syntactically valid
@@ -387,7 +387,7 @@ Each step should use --async, wait for completion, and check the result before p
 - [ ] Uses `agent-mux wait --poll <duration> <id>` to wait (NOT polling `status` in a loop)
 - [ ] Uses `agent-mux result <id> --json` to collect results
 - [ ] Uses `--cwd` or `-C=` to set working directory
-- [ ] Uses valid engines (`codex`, `claude`, or `gemini`)
+- [ ] Uses valid engines (`agy`, `claude`, `codex`, or `gemini`)
 - [ ] Uses profiles (`-P=`) or at minimum valid engine flags
 - [ ] Does NOT use invalid flags (`--sandbox none`, `--output`, or other non-existent flags)
 - [ ] Each step has a distinct, specific prompt (not vague)

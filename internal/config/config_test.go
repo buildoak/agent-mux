@@ -71,6 +71,25 @@ func TestDefaultModels(t *testing.T) {
 	if len(models["gemini"]) == 0 {
 		t.Fatal("DefaultModels() missing gemini models")
 	}
+	agyModels := models["agy"]
+	wantAgyModels := []string{
+		"Gemini 3.1 Pro (High)",
+		"Gemini 3.1 Pro (Low)",
+		"Gemini 3.5 Flash (High)",
+		"Gemini 3.5 Flash (Medium)",
+		"Gemini 3.5 Flash (Low)",
+		"Claude Sonnet 4.6 (Thinking)",
+		"Claude Opus 4.6 (Thinking)",
+		"GPT-OSS 120B (Medium)",
+	}
+	if len(agyModels) != len(wantAgyModels) {
+		t.Fatalf("DefaultModels()[agy] = %v, want %v", agyModels, wantAgyModels)
+	}
+	for i, want := range wantAgyModels {
+		if agyModels[i] != want {
+			t.Fatalf("DefaultModels()[agy][%d] = %q, want %q", i, agyModels[i], want)
+		}
+	}
 }
 
 func TestValidationError(t *testing.T) {

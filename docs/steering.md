@@ -5,7 +5,7 @@ agent-mux steering is unified under `internal/steer`. That package owns both del
 - `Delivery.InboxDir`: the dispatch artifact directory, where durable inbox messages live in `inbox.md`
 - `Delivery.FIFOPath`: the optional `stdin.pipe` named pipe used for live Codex soft steering on FIFO-capable platforms
 
-`--signal` and inbox fallback use the durable inbox path. `steer nudge` and `steer redirect` try the FIFO first when a live Codex run is ready; otherwise they fall back to the same inbox/resume path.
+`--signal` writes directly to the durable inbox path. `steer nudge` and `steer redirect` try the FIFO first when a live run has a ready FIFO channel; otherwise they fall back to inbox/resume only when the engine adapter supports resume. Engines with neither a live FIFO nor resume support return `steer_unsupported` before writing to `inbox.md`.
 
 ## Signal System
 
@@ -43,7 +43,7 @@ When queued inbox messages are ready and the adapter supports resume, `LoopEngin
 
 The harness owns conversation state. agent-mux only manages delivery and process lifecycle.
 
-For inbox fallback from `steer nudge` and `steer redirect`, the CLI writes `[NUDGE]` or `[REDIRECT]` prefixes into the inbox. The engine reformats those into the same coordinator phrasing used for live FIFO injection before resuming.
+For inbox fallback from `steer nudge` and `steer redirect`, the CLI writes `[NUDGE]` or `[REDIRECT]` prefixes into the inbox only for resume-capable adapters. The engine reformats those into the same coordinator phrasing used for live FIFO injection before resuming.
 
 ## Steer Commands
 
@@ -68,7 +68,7 @@ agent-mux steer 01JQXYZ nudge "Please summarize what you have so far"
 
 Sends a wrap-up message. Default message: "Please wrap up your current work and provide a final summary."
 
-On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[NUDGE]` prefix.
+On a live run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[NUDGE]` prefix only when the adapter supports resume. For `agy`, this action returns `steer_unsupported`.
 
 ### steer redirect
 
@@ -76,7 +76,7 @@ On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer enve
 agent-mux steer 01JQXYZ redirect "focus on the tests, skip the refactor"
 ```
 
-Redirects the worker with new instructions. On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[REDIRECT]` prefix. The instructions argument is required.
+Redirects the worker with new instructions. On a live run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[REDIRECT]` prefix only when the adapter supports resume. For `agy`, this action returns `steer_unsupported`. The instructions argument is required.
 
 ### Argument Order
 
@@ -110,7 +110,16 @@ On FIFO-capable platforms, `LoopEngine.Dispatch` creates `stdin.pipe` inside the
 - `status.json` reports `stdin_pipe_ready: true`
 - `host.pid` exists and is still alive
 
-If any check fails, or FIFO open/write returns readiness errors such as missing path, no reader, or broken pipe, the CLI falls back to inbox delivery.
+If any check fails, or FIFO open/write returns readiness errors such as missing path, no reader, or broken pipe, the CLI falls back to inbox delivery only when the adapter supports resume. Without resume support, the CLI returns `steer_unsupported`.
+
+## Agy Steering
+
+`agy` dispatches use plain stdout and do not support resume. agent-mux starts them with the local `agy` CLI sandbox enabled and does not create a truthful live nudge/redirect path. Therefore:
+
+- `agent-mux steer <id> abort` works through `SIGTERM` or `control.json`
+- `agent-mux steer <id> nudge` returns `steer_unsupported`
+- `agent-mux steer <id> redirect "..."` returns `steer_unsupported`
+- unsupported nudge/redirect attempts do not write to `inbox.md`
 
 The FIFO payload is one JSON envelope with `action` and `message`. The loop's soft-stdin bridge decodes it, emits `coordinator_inject`, and writes formatted text directly into the live Codex stdin pipe. If a tool or command is active, delivery is deferred until it completes; once `max_steer_wait_seconds` is exceeded, the loop force-proceeds instead of deferring forever.
 
@@ -142,7 +151,7 @@ All steer commands output a JSON ack:
 `mechanism` reports how the steer action was delivered:
 
 - `stdin_fifo`: live Codex soft steering through `stdin.pipe`
-- `inbox`: inbox fallback for non-Codex, unsupported platforms, not-ready runs, or failed FIFO delivery
+- `inbox`: resume-based inbox fallback for adapters that support resume
 - `sigterm`: `steer abort` delivered through `SIGTERM`
 - `control_file`: `steer abort` fallback through `control.json`
 

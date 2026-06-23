@@ -8,9 +8,9 @@ import (
 type DispatchStatus string
 
 const (
-	StatusCompleted    DispatchStatus = "completed"
-	StatusTimedOut     DispatchStatus = "timed_out"
-	StatusFailed       DispatchStatus = "failed"
+	StatusCompleted DispatchStatus = "completed"
+	StatusTimedOut  DispatchStatus = "timed_out"
+	StatusFailed    DispatchStatus = "failed"
 )
 
 type DispatchResult struct {
@@ -199,4 +199,88 @@ type HarnessAdapter interface {
 	ParseEvent(line string) (*HarnessEvent, error)
 	SupportsResume() bool
 	ResumeArgs(spec *DispatchSpec, sessionID string, message string) []string
+}
+
+type AdapterStdinMode string
+
+const (
+	AdapterStdinWritablePipe AdapterStdinMode = "writable_pipe"
+	AdapterStdinEOF          AdapterStdinMode = "eof"
+)
+
+type AdapterOutputMode string
+
+const (
+	AdapterOutputEventStream AdapterOutputMode = "event_stream"
+	AdapterOutputPlainStdout AdapterOutputMode = "plain_stdout"
+)
+
+type AdapterSoftTimeoutWrapupMode string
+
+const (
+	AdapterSoftTimeoutNoWrapup    AdapterSoftTimeoutWrapupMode = "none"
+	AdapterSoftTimeoutInboxResume AdapterSoftTimeoutWrapupMode = "inbox_resume"
+)
+
+type AdapterFailureContextMode string
+
+const (
+	AdapterFailureContextStderrTail         AdapterFailureContextMode = "stderr_tail"
+	AdapterFailureContextPrivateDiagnostics AdapterFailureContextMode = "private_diagnostics"
+)
+
+type AdapterRuntimePolicy struct {
+	StdinMode               AdapterStdinMode
+	OutputMode              AdapterOutputMode
+	RequireNonEmptyResponse bool
+	SoftTimeoutWrapupMode   AdapterSoftTimeoutWrapupMode
+	FailureContextMode      AdapterFailureContextMode
+}
+
+type AdapterRuntimePolicyProvider interface {
+	RuntimePolicy() AdapterRuntimePolicy
+}
+
+func ResolveAdapterRuntimePolicy(engine string, adapter HarnessAdapter) AdapterRuntimePolicy {
+	policy := AdapterRuntimePolicy{}
+	if provider, ok := adapter.(AdapterRuntimePolicyProvider); ok {
+		policy = provider.RuntimePolicy()
+	}
+	return policy.WithDefaults(engine, adapter != nil && adapter.SupportsResume())
+}
+
+func (p AdapterRuntimePolicy) WithDefaults(engine string, supportsResume bool) AdapterRuntimePolicy {
+	if p.StdinMode == "" {
+		if engine == "codex" {
+			p.StdinMode = AdapterStdinEOF
+		} else {
+			p.StdinMode = AdapterStdinWritablePipe
+		}
+	}
+	if p.OutputMode == "" {
+		p.OutputMode = AdapterOutputEventStream
+	}
+	if p.SoftTimeoutWrapupMode == "" {
+		if supportsResume {
+			p.SoftTimeoutWrapupMode = AdapterSoftTimeoutInboxResume
+		} else {
+			p.SoftTimeoutWrapupMode = AdapterSoftTimeoutNoWrapup
+		}
+	}
+	if p.FailureContextMode == "" {
+		p.FailureContextMode = AdapterFailureContextStderrTail
+	}
+	return p
+}
+
+func (p AdapterRuntimePolicy) HasWritableStdin() bool {
+	return p.StdinMode == AdapterStdinWritablePipe
+}
+
+func (p AdapterRuntimePolicy) UsesPlainStdout() bool {
+	return p.OutputMode == AdapterOutputPlainStdout
+}
+
+func (p AdapterRuntimePolicy) SupportsSoftTimeoutWrapup() bool {
+	return p.SoftTimeoutWrapupMode != AdapterSoftTimeoutNoWrapup
 }

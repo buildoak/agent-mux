@@ -138,7 +138,7 @@ persisted.
 | `last_activity` | string | Most recent activity summary |
 | `tools_used` | int | Tool-call count seen so far |
 | `files_changed` | int | File-write count seen so far |
-| `stdin_pipe_ready` | bool | true only when a soft-stdin bridge is active; current Codex runs keep it false |
+| `stdin_pipe_ready` | bool | true only when a soft-stdin bridge is active; current Codex and agy runs keep it false |
 | `ts` | string | RFC3339 timestamp |
 | `dispatch_id` | string | Dispatch ID |
 | `session_id` | string | Harness session ID (available once engine emits init event) |

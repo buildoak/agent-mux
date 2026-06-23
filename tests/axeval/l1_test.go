@@ -39,10 +39,10 @@ func buildErrorScenarios() []errorScenario {
 			ErrorCode:       "engine_not_found",
 			OriginalCommand: `agent-mux -e openai --cwd /repo "Fix the bug in parser.go"`,
 			ErrorJSON: mustMarshalError("engine_not_found", "Unknown engine name.",
-				"agent-mux only supports the built-in engines codex, claude, and gemini.",
+				"agent-mux only supports the built-in engines agy, claude, codex, and gemini.",
 				"Retry with a valid engine. Example: agent-mux -e codex --cwd /repo \"<prompt>\".",
 				true),
-			ChecklistItems: `1. Does the corrected command use a valid engine (codex, claude, or gemini)?
+			ChecklistItems: `1. Does the corrected command use a valid engine (agy, claude, codex, or gemini)?
 2. Does the corrected command preserve the original prompt intent?
 3. Does the corrected command include --cwd?
 4. Is the corrected command syntactically valid?
