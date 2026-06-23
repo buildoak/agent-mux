@@ -247,6 +247,15 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 			return 1
 		}
 		msg := positional[0]
+		supported, engineName, supportErr := supportsInboxSteer(resolved.ArtifactDir)
+		if supportErr != nil {
+			emitResult(stdout, buildSignalErrorAck(flags.signal, "steer_unsupported", supportErr.Error(), "Use `agent-mux steer <id> abort` to stop it, or wait for completion and rerun with updated instructions."))
+			return 1
+		}
+		if !supported {
+			emitResult(stdout, buildSignalErrorAck(flags.signal, "steer_unsupported", fmt.Sprintf("engine %q does not support resume-based inbox delivery", engineName), "Use `agent-mux steer <id> abort` to stop it, or wait for completion and rerun with updated instructions."))
+			return 1
+		}
 		if err := steer.WriteInbox(resolved.ArtifactDir, msg); err != nil {
 			emitResult(stdout, buildSignalErrorAck(flags.signal, "config_error", err.Error(), "Ensure the inbox path is writable and retry."))
 			return 1

@@ -27,7 +27,7 @@ and `agent-mux preview ...`.
 | `--skip-skills` | | bool | `false` | Skip skill injection while keeping profile resolution |
 | `--artifact-dir` | | string | auto | Override artifact directory |
 | `--recover` | | string | unset | Continue from a prior dispatch ID |
-| `--signal` | | string | unset | Dispatch ID to send a message to; message is the first positional arg |
+| `--signal` | | string | unset | Dispatch ID to send a message to a resume-capable engine; message is the first positional arg |
 | `--stream` | `-S` | bool | `false` | Stream full NDJSON events to stderr |
 | `--async` | | bool | `false` | Emit ack early; process continues in current process, so use shell `&` for true backgrounding |
 | `--full` | `-f` | bool | `true` | Codex full-access mode |
@@ -118,7 +118,7 @@ or similar dispatch flags. Put those fields in the JSON object.
 | `nudge` | `[message]` | Default wrap-up message if omitted |
 | `redirect` | `"<instructions>"` | Required |
 
-`agy` supports `abort` only. `nudge` and `redirect` return `steer_unsupported` because the adapter has plain stdout, no live FIFO, and no resume-based inbox delivery.
+`agy` supports `abort` only. `--signal`, `nudge`, and `redirect` return `steer_unsupported` because the adapter has plain stdout, no live FIFO, and no resume-based inbox delivery.
 
 ---
 

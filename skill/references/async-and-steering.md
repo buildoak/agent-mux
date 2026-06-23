@@ -217,10 +217,10 @@ agent-mux steer 01K... nudge "Summarize what you have so far"
 
 Delivery order:
 
-1. `stdin_fifo` only when `status.stdin_pipe_ready=true` and host PID is live
-2. inbox fallback for everything else
+1. `stdin_fifo` only when a Codex run has `status.stdin_pipe_ready=true` and host PID is live
+2. inbox fallback only when the engine supports resume
 
-Current Codex runs keep `stdin_pipe_ready=false`, so nudge uses inbox.
+Current Codex and agy runs keep `stdin_pipe_ready=false`; Codex falls back to inbox/resume, while agy returns `steer_unsupported`.
 
 Inbox fallback writes `[NUDGE] <message>`.
 
@@ -246,8 +246,8 @@ Typical JSON response:
 
 | Mechanism | When used |
 |-----------|-----------|
-| `stdin_fifo` | Live runs with `stdin_pipe_ready=true`; current Codex does not enable it |
-| `inbox` | Fallback path for `nudge` and `redirect`; triggers resume/restart for Codex, Claude, and Gemini |
+| `stdin_fifo` | Live Codex runs with `stdin_pipe_ready=true`; current Codex does not enable it |
+| `inbox` | Fallback path for `signal`, `nudge`, and `redirect` only when the engine supports resume |
 | `sigterm` | `abort` when host PID is alive |
 | `control_file` | `abort` fallback |
 
@@ -255,7 +255,7 @@ Typical JSON response:
 
 ## Signal Flag
 
-`--signal` is a convenience write to the inbox:
+`--signal` is a convenience write to the inbox for resume-capable engines:
 
 ```bash
 agent-mux --signal 01K... "Focus on auth paths only" 2>/dev/null

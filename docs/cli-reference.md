@@ -38,7 +38,7 @@ These flags are registered in normal dispatch mode.
 | `--context-file` | | string | empty | Context file path |
 | `--artifact-dir` | | string | auto | Runtime artifact directory |
 | `--recover` | | string | empty | Previous dispatch ID to continue |
-| `--signal` | | string | empty | Deliver a message to a running dispatch |
+| `--signal` | | string | empty | Deliver a message to a running resume-capable dispatch |
 | `--full` | `-f` | bool | `true` | Full access mode |
 | `--no-full` | | bool | `false` | Disable full access |
 | `--max-depth` | | int | `2` | Recursive dispatch limit |
@@ -197,7 +197,7 @@ Implemented subcommands are exactly:
 | `agent-mux wait <id>` | lifecycle wait |
 | `agent-mux steer <id> <action> ...` | steering |
 | `agent-mux config ...` | config introspection |
-| `agent-mux --signal <id> "<message>"` | inbox signal path |
+| `agent-mux --signal <id> "<message>"` | inbox signal path for resume-capable engines |
 | `agent-mux --stdin < spec.json` | stdin dispatch |
 | `agent-mux --version` | version output |
 | `agent-mux -- help` | literal prompt `help` |

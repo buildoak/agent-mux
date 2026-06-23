@@ -377,7 +377,7 @@ artifact dir via `_dispatch_ref.json`.
 
 ## Signal Ack
 
-`agent-mux --signal <id> "message"` returns:
+`agent-mux --signal <id> "message"` returns this acknowledgement when the target engine supports resume-based inbox delivery:
 
 ```json
 {

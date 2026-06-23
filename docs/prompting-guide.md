@@ -194,11 +194,11 @@ Re-explain the entire project and restate the old run from scratch.
 
 ## Signal Phrasing
 
-`--signal` always writes to the steering inbox. Keep the message to one crisp sentence.
+`--signal` writes to the steering inbox only for resume-capable engines. Keep the message to one crisp sentence.
 
 The ack confirms the inbox write, not delivery. Consumption waits for an event boundary or inbox poll tick, and on resume-capable adapters the next injection becomes a resumed turn.
 
-For stronger mid-flight steering, use `steer redirect`. On live Codex runs on FIFO-capable platforms it prefers `stdin.pipe`; otherwise it falls back to the same inbox/resume path.
+For stronger mid-flight steering, use `steer redirect`. On live Codex runs on FIFO-capable platforms it prefers `stdin.pipe`; otherwise it falls back to the same inbox/resume path when the engine supports resume.
 
 Good:
 

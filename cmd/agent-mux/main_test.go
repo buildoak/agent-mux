@@ -1459,6 +1459,29 @@ func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 	}
 }
 
+func TestSignalUnsupportedForAgyDoesNotWriteInbox(t *testing.T) {
+	dispatchID, artifactDir := prepareSteerDispatchFixtureForEngine(t, "agy", false)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--signal", dispatchID, "focus on tests"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	errorEnvelope, ok := raw["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %#v, want object", raw["error"])
+	}
+	if errorEnvelope["code"] != "steer_unsupported" {
+		t.Fatalf("error.code = %#v, want steer_unsupported", errorEnvelope["code"])
+	}
+	if steer.HasMessages(artifactDir) {
+		t.Fatal("inbox has messages after unsupported agy signal")
+	}
+}
+
 func TestSteerNudgeUsesFIFOWhenReady(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("FIFO steering is Unix-only")
