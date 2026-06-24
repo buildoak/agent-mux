@@ -199,6 +199,95 @@ func TestAgyDiscoverSessionIDMissingLog(t *testing.T) {
 	}
 }
 
+func TestAgyDiagnoseFailureClassifiesPrivateTranscript429(t *testing.T) {
+	a := &AgyAdapter{}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	artifactDir := t.TempDir()
+	conversationID := "550e8400-e29b-41d4-a716-446655440000"
+	rawSecret := "private prompt: ship the unreleased roadmap"
+	transcriptPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain", conversationID, ".system_generated", "logs", "transcript_full.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("mkdir transcript dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "agy.log"), []byte("Created conversation "+conversationID+"\n"), 0o644); err != nil {
+		t.Fatalf("write agy log: %v", err)
+	}
+	transcript := strings.Join([]string{
+		`{"source":"USER","type":"TEXT","text":"` + rawSecret + `"}`,
+		`{"source":"SYSTEM","type":"ERROR_MESSAGE","error_code":429,"error":"` + rawSecret + `"}`,
+	}, "\n")
+	if err := os.WriteFile(transcriptPath, []byte(transcript), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	diagnosis := a.DiagnoseFailure(types.AdapterFailureDiagnosticContext{
+		Spec:                  &types.DispatchSpec{ArtifactDir: artifactDir},
+		EmptyRequiredResponse: true,
+	})
+	if diagnosis == nil {
+		t.Fatal("diagnosis = nil, want provider_rate_limited")
+	}
+	if diagnosis.Code != "provider_rate_limited" {
+		t.Fatalf("code = %q, want provider_rate_limited", diagnosis.Code)
+	}
+	public := diagnosis.Code + diagnosis.Message + diagnosis.Suggestion
+	for _, forbidden := range []string{rawSecret, conversationID, transcriptPath, "transcript_full.jsonl"} {
+		if strings.Contains(public, forbidden) {
+			t.Fatalf("diagnosis leaked private diagnostic content %q in %+v", forbidden, diagnosis)
+		}
+	}
+}
+
+func TestAgyDiagnoseFailureFallsBackWithoutPrivate429(t *testing.T) {
+	a := &AgyAdapter{}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	artifactDir := t.TempDir()
+	conversationID := "550e8400-e29b-41d4-a716-446655440000"
+	transcriptPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain", conversationID, ".system_generated", "logs", "transcript_full.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("mkdir transcript dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "agy.log"), []byte("Created conversation "+conversationID+"\n"), 0o644); err != nil {
+		t.Fatalf("write agy log: %v", err)
+	}
+	if err := os.WriteFile(transcriptPath, []byte(`{"source":"SYSTEM","type":"ERROR_MESSAGE","error_code":500,"error":"provider exploded"}`), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	diagnosis := a.DiagnoseFailure(types.AdapterFailureDiagnosticContext{
+		Spec:                  &types.DispatchSpec{ArtifactDir: artifactDir},
+		EmptyRequiredResponse: true,
+	})
+	if diagnosis != nil {
+		t.Fatalf("diagnosis = %+v, want nil", diagnosis)
+	}
+}
+
+func TestAgyDiagnoseFailureClassifiesPrivateOverloadText(t *testing.T) {
+	a := &AgyAdapter{}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	artifactDir := t.TempDir()
+	conversationID := "550e8400-e29b-41d4-a716-446655440000"
+	logPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain", conversationID, ".system_generated", "logs", "worker.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir diagnostic dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "agy.log"), []byte("Streaming conversation "+conversationID+"\n"), 0o644); err != nil {
+		t.Fatalf("write agy log: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("The model API is currently overloaded; private detail omitted."), 0o644); err != nil {
+		t.Fatalf("write private log: %v", err)
+	}
+
+	diagnosis := a.DiagnoseFailure(types.AdapterFailureDiagnosticContext{Spec: &types.DispatchSpec{ArtifactDir: artifactDir}})
+	if diagnosis == nil || diagnosis.Code != "provider_rate_limited" {
+		t.Fatalf("diagnosis = %+v, want provider_rate_limited", diagnosis)
+	}
+}
+
 func TestAgyParseEventConservativePlainStdout(t *testing.T) {
 	a := &AgyAdapter{}
 

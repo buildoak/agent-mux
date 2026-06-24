@@ -209,6 +209,29 @@ type AdapterSessionDiscoverer interface {
 	DiscoverSessionID(spec *DispatchSpec) (string, error)
 }
 
+// AdapterFailureDiagnosticContext is passed to optional adapters that can
+// classify private provider diagnostics after the harness process ends.
+// Implementations must return only sanitized public error metadata.
+type AdapterFailureDiagnosticContext struct {
+	Spec                  *DispatchSpec
+	TerminalState         string
+	Response              string
+	Stderr                string
+	ExitCode              int
+	ProcessFailed         bool
+	EmptyRequiredResponse bool
+}
+
+type AdapterFailureDiagnosis struct {
+	Code       string
+	Message    string
+	Suggestion string
+}
+
+type AdapterFailureDiagnoser interface {
+	DiagnoseFailure(ctx AdapterFailureDiagnosticContext) *AdapterFailureDiagnosis
+}
+
 type AdapterStdinMode string
 
 const (

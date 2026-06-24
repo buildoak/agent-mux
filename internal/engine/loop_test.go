@@ -45,6 +45,13 @@ type scriptedAdapter struct {
 	discoverErr         error
 }
 
+type diagnosticScriptedAdapter struct {
+	*scriptedAdapter
+	mu        sync.Mutex
+	diagnosis *types.AdapterFailureDiagnosis
+	calls     []types.AdapterFailureDiagnosticContext
+}
+
 func newScriptedAdapter(initialScript string) *scriptedAdapter {
 	return &scriptedAdapter{
 		baseBinary:     "bash",
@@ -54,6 +61,28 @@ func newScriptedAdapter(initialScript string) *scriptedAdapter {
 			return "exit 0"
 		},
 	}
+}
+
+func newDiagnosticScriptedAdapter(initialScript string, diagnosis *types.AdapterFailureDiagnosis) *diagnosticScriptedAdapter {
+	return &diagnosticScriptedAdapter{
+		scriptedAdapter: newScriptedAdapter(initialScript),
+		diagnosis:       diagnosis,
+	}
+}
+
+func (a *diagnosticScriptedAdapter) DiagnoseFailure(ctx types.AdapterFailureDiagnosticContext) *types.AdapterFailureDiagnosis {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls = append(a.calls, ctx)
+	return a.diagnosis
+}
+
+func (a *diagnosticScriptedAdapter) DiagnosticCalls() []types.AdapterFailureDiagnosticContext {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]types.AdapterFailureDiagnosticContext, len(a.calls))
+	copy(out, a.calls)
+	return out
 }
 
 func (a *scriptedAdapter) Binary() string {
@@ -946,6 +975,150 @@ func TestLoopEnginePlainStdoutEmptyCleanExitFails(t *testing.T) {
 	}
 	if record.Status != "failed" {
 		t.Fatalf("persisted status = %q, want failed", record.Status)
+	}
+}
+
+func TestLoopEnginePlainStdoutDiagnosticOverridesEmptyOutput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	adapter := newDiagnosticScriptedAdapter("exit 0", &types.AdapterFailureDiagnosis{Code: "provider_rate_limited"})
+	adapter.supportsResume = false
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:               types.AdapterStdinEOF,
+		OutputMode:              types.AdapterOutputPlainStdout,
+		RequireNonEmptyResponse: true,
+		FailureContextMode:      types.AdapterFailureContextPrivateDiagnostics,
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "provider_rate_limited" {
+		t.Fatalf("error = %+v, want provider_rate_limited", result.Error)
+	}
+	if !result.Error.Retryable {
+		t.Fatalf("retryable = false, want true")
+	}
+	calls := adapter.DiagnosticCalls()
+	if len(calls) != 1 {
+		t.Fatalf("diagnostic calls = %d, want 1", len(calls))
+	}
+	if !calls[0].EmptyRequiredResponse || calls[0].ProcessFailed {
+		t.Fatalf("diagnostic ctx = %+v, want empty required response without process failure", calls[0])
+	}
+}
+
+func TestLoopEngineAgyAdapterClassifiesPrivateTranscript429(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	binDir := t.TempDir()
+	agyPath := filepath.Join(binDir, "agy")
+	fakeAgy := `#!/bin/sh
+log_file=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--log-file" ]; then
+    shift
+    log_file="$1"
+  fi
+  shift
+done
+if [ -n "$log_file" ]; then
+  mkdir -p "$(dirname "$log_file")"
+  printf '%s\n' "Created conversation 550e8400-e29b-41d4-a716-446655440000" > "$log_file"
+fi
+exit 0
+`
+	if err := os.WriteFile(agyPath, []byte(fakeAgy), 0o755); err != nil {
+		t.Fatalf("write fake agy: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	conversationID := "550e8400-e29b-41d4-a716-446655440000"
+	transcriptPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain", conversationID, ".system_generated", "logs", "transcript_full.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("mkdir private transcript dir: %v", err)
+	}
+	privateText := "private prompt should not escape"
+	transcript := strings.Join([]string{
+		`{"source":"USER","type":"TEXT","text":"` + privateText + `"}`,
+		`{"source":"SYSTEM","type":"ERROR_MESSAGE","error_code":429,"error":"` + privateText + `"}`,
+	}, "\n")
+	if err := os.WriteFile(transcriptPath, []byte(transcript), 0o644); err != nil {
+		t.Fatalf("write private transcript: %v", err)
+	}
+
+	artifactDir := t.TempDir()
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+	spec.Prompt = "trigger provider limit"
+
+	engine := NewLoopEngine(&adapter.AgyAdapter{}, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "provider_rate_limited" {
+		t.Fatalf("error = %+v, want provider_rate_limited", result.Error)
+	}
+	if !result.Error.Retryable {
+		t.Fatal("retryable = false, want true")
+	}
+	public := result.Error.Code + result.Error.Message + result.Error.Hint + result.Error.Example + result.Response
+	for _, forbidden := range []string{privateText, conversationID, transcriptPath, "transcript_full.jsonl"} {
+		if strings.Contains(public, forbidden) {
+			t.Fatalf("public result leaked private diagnostic content %q in %+v", forbidden, result.Error)
+		}
+	}
+}
+
+func TestLoopEngineDiagnosticOverridesProcessFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	adapter := newDiagnosticScriptedAdapter("printf 'partial work\\n'; exit 7", &types.AdapterFailureDiagnosis{Code: "provider_rate_limited"})
+	adapter.supportsResume = false
+	adapter.runtimePolicy = &types.AdapterRuntimePolicy{
+		StdinMode:          types.AdapterStdinEOF,
+		OutputMode:         types.AdapterOutputPlainStdout,
+		FailureContextMode: types.AdapterFailureContextPrivateDiagnostics,
+	}
+
+	spec := testDispatchSpec(artifactDir)
+	spec.Engine = "agy"
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Response != "partial work\n" {
+		t.Fatalf("response = %q, want preserved partial stdout", result.Response)
+	}
+	if result.Error == nil || result.Error.Code != "provider_rate_limited" {
+		t.Fatalf("error = %+v, want provider_rate_limited", result.Error)
+	}
+	calls := adapter.DiagnosticCalls()
+	if len(calls) != 1 {
+		t.Fatalf("diagnostic calls = %d, want 1", len(calls))
+	}
+	if !calls[0].ProcessFailed || calls[0].ExitCode != 7 {
+		t.Fatalf("diagnostic ctx = %+v, want process failure exit 7", calls[0])
 	}
 }
 

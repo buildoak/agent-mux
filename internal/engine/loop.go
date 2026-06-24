@@ -994,6 +994,11 @@ buildResult:
 		if dispatchErr != nil {
 			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
 		}
+		if errEvt == nil {
+			if diagnosticErr := adapterFailureDiagnosis(e.adapter, adapterFailureContext(spec, state, response, currentStderr, currentRun, true, false)); diagnosticErr != nil {
+				return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, diagnosticErr), nil
+			}
+		}
 		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), false, runtimePolicy.FailureContextMode)), nil
 
 	case "interrupted":
@@ -1003,7 +1008,12 @@ buildResult:
 		if dispatchErr != nil {
 			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
 		}
-		if runtimePolicy.RequireNonEmptyResponse && strings.TrimSpace(response) == "" {
+		emptyRequiredResponse := runtimePolicy.RequireNonEmptyResponse && strings.TrimSpace(response) == ""
+		processFailed := procErr != nil
+		if emptyRequiredResponse {
+			if diagnosticErr := adapterFailureDiagnosis(e.adapter, adapterFailureContext(spec, state, response, currentStderr, currentRun, processFailed, true)); diagnosticErr != nil {
+				return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, diagnosticErr), nil
+			}
 			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError(
 				"harness_empty_output",
 				"Harness exited successfully but produced no stdout response.",
@@ -1029,6 +1039,11 @@ buildResult:
 		}
 
 		if procErr != nil {
+			if errEvt == nil {
+				if diagnosticErr := adapterFailureDiagnosis(e.adapter, adapterFailureContext(spec, state, response, currentStderr, currentRun, true, false)); diagnosticErr != nil {
+					return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, diagnosticErr), nil
+				}
+			}
 			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), true, runtimePolicy.FailureContextMode)), nil
 		}
 		return finalizeCompleted(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
@@ -1215,6 +1230,38 @@ func failureFromEventOrProcess(errEvt *types.HarnessEvent, proc *supervisor.Proc
 		code = "killed_by_user"
 	}
 	return dispatch.NewDispatchError(code, base, "")
+}
+
+func adapterFailureContext(spec *types.DispatchSpec, terminalState string, response string, stderr *strings.Builder, run *runHandle, processFailed bool, emptyRequiredResponse bool) types.AdapterFailureDiagnosticContext {
+	stderrText := ""
+	if stderr != nil {
+		stderrText = stderr.String()
+	}
+	exitCode := 0
+	if run != nil && run.proc != nil {
+		exitCode = run.proc.ExitCode()
+	}
+	return types.AdapterFailureDiagnosticContext{
+		Spec:                  spec,
+		TerminalState:         terminalState,
+		Response:              response,
+		Stderr:                stderrText,
+		ExitCode:              exitCode,
+		ProcessFailed:         processFailed,
+		EmptyRequiredResponse: emptyRequiredResponse,
+	}
+}
+
+func adapterFailureDiagnosis(adapter types.HarnessAdapter, ctx types.AdapterFailureDiagnosticContext) *types.DispatchError {
+	diagnoser, ok := adapter.(types.AdapterFailureDiagnoser)
+	if !ok {
+		return nil
+	}
+	diagnosis := diagnoser.DiagnoseFailure(ctx)
+	if diagnosis == nil || strings.TrimSpace(diagnosis.Code) == "" {
+		return nil
+	}
+	return dispatch.NewDispatchError(strings.TrimSpace(diagnosis.Code), diagnosis.Message, diagnosis.Suggestion)
 }
 
 func appendUnique(slice []string, item string) []string {

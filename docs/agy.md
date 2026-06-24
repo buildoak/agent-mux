@@ -78,7 +78,8 @@ Agy is plain stdout, not an event stream.
 
 - Final stdout becomes the normalized response.
 - A clean exit with empty stdout fails as `harness_empty_output`.
-- `agy.log` remains private diagnostics and is not appended to user-visible structured errors.
+- Private Antigravity diagnostics may classify a provider 429/overload as `provider_rate_limited`.
+- `agy.log` and Antigravity transcripts remain private diagnostics and are not appended to user-visible structured errors.
 - No structured tool calls, file reads, file writes, token usage, cache usage, or cost telemetry are exposed to agent-mux.
 - Generated files are discovered by final artifact scanning or by checking the dispatch cwd, not by `file_write` events.
 

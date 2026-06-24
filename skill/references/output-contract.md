@@ -465,6 +465,7 @@ Default stderr mode is quiet; use `--stream` for the full event stream.
 | `output_parse_error` | no | Failed to parse streaming harness output |
 | `parse_error` | no | Malformed final harness output |
 | `process_killed` | yes | Generic killed-process fallback |
+| `provider_rate_limited` | yes | Provider reported HTTP 429/rate limiting/overload in private diagnostics |
 | `prompt_denied` | no | `pre_dispatch` hook blocked launch |
 | `recovery_failed` | no | Previous dispatch state could not be recovered |
 | `resume_session_missing` | no | No resumable session ID available |

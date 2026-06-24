@@ -236,7 +236,7 @@ agy --sandbox --print-timeout <seconds>s [--log-file <artifact_dir>/agy.log] \
 Preflight rejects explicit portable sandbox/permission/reasoning/max-turn/full-access options for agy dispatches. Implicit CLI defaults are ignored by the adapter; supported agy arguments are limited to the local CLI sandbox flag, print-timeout backstop, diagnostics log path, model, add-dir, resume conversation ID, and prompt.
 
 ### Output and Artifacts
-Agy output is plain stdout, not an event stream. The supervision loop captures stdout verbatim and assembles the final response from that captured stream. A clean exit with empty stdout fails with `harness_empty_output`. Provider diagnostics in `agy.log` are private runtime diagnostics and are not appended to user-visible structured errors.
+Agy output is plain stdout, not an event stream. The supervision loop captures stdout verbatim and assembles the final response from that captured stream. A clean exit with empty stdout fails with `harness_empty_output` unless private Antigravity diagnostics classify a provider 429/overload as `provider_rate_limited`. Provider diagnostics in `agy.log` and Antigravity transcripts remain private runtime diagnostics and are not appended to user-visible structured errors.
 
 ### Resume and Steering
 Agy supports resume through conversation IDs discovered in `<artifact_dir>/agy.log`. `SupportsResume()` returns true and `ResumeArgs()` rebuilds a print invocation with `--conversation <id>`. Because agy does not expose structured activity events, nudge and redirect delivery uses resume-based inbox semantics rather than live FIFO injection. `agent-mux steer <id> abort` remains supported through SIGTERM or `control.json`.

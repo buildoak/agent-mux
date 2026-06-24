@@ -262,6 +262,12 @@ var ErrorCatalog = map[string]ErrorInfo{
 		Example:   "Inspect the private provider log and stderr capture, fix the underlying harness error, then retry the same dispatch.",
 		Retryable: true,
 	},
+	"provider_rate_limited": {
+		Message:   "Provider rate limit or overload was reported.",
+		Hint:      "The provider reported HTTP 429, rate limiting, or overload in private diagnostics. Wait for cooldown, reduce agy concurrency, or switch model/provider before retrying.",
+		Example:   "Retry after backoff with lower concurrency. Example: run agy batches sequentially or with max concurrency 1-2, then increase only after canaries succeed.",
+		Retryable: true,
+	},
 	"output_capture_failed": {
 		Message:   "Failed to capture harness output.",
 		Hint:      "agent-mux could not persist or read the provider output stream, so the final worker response may be incomplete or unavailable.",

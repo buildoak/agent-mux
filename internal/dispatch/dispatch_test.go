@@ -280,6 +280,7 @@ func TestNewDispatchErrorAgyCatalogEntries(t *testing.T) {
 	}{
 		{"harness_empty_output", true, "provider process failed"},
 		{"harness_failed", true, "non-zero exit"},
+		{"provider_rate_limited", true, "HTTP 429"},
 		{"output_capture_failed", false, "persist or read"},
 		{"steer_unsupported", false, "does not support live steering"},
 	}
