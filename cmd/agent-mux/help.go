@@ -25,7 +25,7 @@ Quickstart:
 Key flags:
   -E, --engine       Engine: {{VALID_ENGINES}}
   -P, --profile      Profile / prompt file
-  -e, --effort       Effort: low, medium, high (default when omitted)
+  -e, --effort       Effort: low, medium, high, xhigh (default when omitted)
   -m, --model        Model override (engine-specific)
   -C, --cwd          Working directory
   -r, --reasoning    Reasoning effort: low, medium (default), high

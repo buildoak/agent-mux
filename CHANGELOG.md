@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **Effort help text** — `agent-mux help` and flag metadata now list `xhigh` alongside `low`, `medium`, and `high`.
+
 ## [3.5.0] - 2026-06-23
 
 ### Added

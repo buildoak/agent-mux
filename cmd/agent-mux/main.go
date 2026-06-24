@@ -1109,7 +1109,7 @@ func newCLIFlagSet(name string) (*flag.FlagSet, *cliFlags) {
 	bindStr(fs, &flags.profile, "Profile / prompt file", "", "profile", "P")
 	bindStr(fs, &flags.cwd, "Working directory", "", "cwd", "C")
 	bindStr(fs, &flags.model, "Model override (engine-specific)", "", "model", "m")
-	bindStr(fs, &flags.effort, "Effort: low, medium, high", flags.effort, "effort", "e")
+	bindStr(fs, &flags.effort, "Effort: low, medium, high, xhigh", flags.effort, "effort", "e")
 	fs.IntVar(&flags.timeout, "timeout", 0, "Timeout seconds")
 	fs.IntVar(&flags.timeout, "t", 0, "Timeout seconds")
 	bindStr(fs, &flags.systemPrompt, "System prompt", "", "system-prompt", "s")
